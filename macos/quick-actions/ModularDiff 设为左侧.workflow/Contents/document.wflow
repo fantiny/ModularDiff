@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMApplicationBuild</key>
+	<string>533</string>
+	<key>AMApplicationVersion</key>
+	<string>2.10</string>
+	<key>AMDocumentVersion</key>
+	<string>2</string>
+	<key>actions</key>
+	<array>
+		<dict>
+			<key>action</key>
+			<dict>
+				<key>AMAccepts</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Optional</key>
+					<true/>
+					<key>Types</key>
+					<array/>
+				</dict>
+				<key>AMActionVersion</key>
+				<string>2.0.3</string>
+				<key>AMProvides</key>
+				<dict>
+					<key>Container</key>
+					<string>List</string>
+					<key>Types</key>
+					<array/>
+				</dict>
+				<key>ActionBundlePath</key>
+				<string>/System/Library/Automator/Run Shell Script.action</string>
+				<key>ActionName</key>
+				<string>Run Shell Script</string>
+				<key>ActionParameters</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<string>STATE_DIR="$HOME/Library/Application Support/ModularDiff"
+mkdir -p "$STATE_DIR"
+if [ $# -ne 1 ]; then
+  osascript -e 'display notification "请只选择一个文件/文件夹" with title "ModularDiff"'
+  exit 0
+fi
+printf '%s' "$1" &gt; "$STATE_DIR/pending-left"
+NAME=$(basename "$1" | sed 's/["\\]//g')
+osascript -e "display notification \"左侧已设为: $NAME,请右键另一侧文件夹选『用 ModularDiff 比较』\" with title \"ModularDiff\""
+</string>
+					<key>CheckedForUserDefaultShell</key>
+					<true/>
+					<key>inputMethod</key>
+					<integer>1</integer>
+					<key>shell</key>
+					<string>/bin/zsh</string>
+					<key>source</key>
+					<string>STATE_DIR="$HOME/Library/Application Support/ModularDiff"
+mkdir -p "$STATE_DIR"
+if [ $# -ne 1 ]; then
+  osascript -e 'display notification "请只选择一个文件/文件夹" with title "ModularDiff"'
+  exit 0
+fi
+printf '%s' "$1" &gt; "$STATE_DIR/pending-left"
+NAME=$(basename "$1" | sed 's/["\\]//g')
+osascript -e "display notification \"左侧已设为: $NAME,请右键另一侧文件夹选『用 ModularDiff 比较』\" with title \"ModularDiff\""
+</string>
+				</dict>
+				<key>BundleIdentifier</key>
+				<string>com.apple.RunShellScript</string>
+				<key>CFBundleVersion</key>
+				<string>2.0.3</string>
+				<key>CanShowSelectedItemsWhenRun</key>
+				<false/>
+				<key>CanShowWhenRun</key>
+				<true/>
+				<key>Category</key>
+				<array>
+					<string>AMCategoryUtilities</string>
+				</array>
+				<key>Class Name</key>
+				<string>AMShellScriptAction</string>
+				<key>IgnoresInput</key>
+				<false/>
+				<key>conversionLabel</key>
+				<integer>0</integer>
+				<key>is-visible</key>
+				<integer>1</integer>
+			</dict>
+		</dict>
+	</array>
+	<key>connectors</key>
+	<dict/>
+	<key>workflowMetaData</key>
+	<dict>
+		<key>applicationBundleID</key>
+		<string>com.apple.finder</string>
+		<key>inputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject</string>
+		<key>outputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>presentationMode</key>
+		<integer>15</integer>
+	</dict>
+</dict>
+</plist>
