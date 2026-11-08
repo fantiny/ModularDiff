@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+artifacts/
+.tools/
+*.user
+# internal dev docs, not published
+docs/

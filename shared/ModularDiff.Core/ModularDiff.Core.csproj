@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup><ProjectReference Include="../ModularDiff.Contracts/ModularDiff.Contracts.csproj" /></ItemGroup>
+</Project>

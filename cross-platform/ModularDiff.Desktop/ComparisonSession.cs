@@ -1,0 +1,60 @@
+using ModularDiff.Contracts;
+using ModularDiff.Core;
+namespace ModularDiff.Desktop;
+// UI-neutral session: all document operations are supplied by the existing plugins.
+public sealed class ComparisonSession(PluginCatalog plugins)
+{
+    public IEditBuffer? Left { get; private set; }
+    public IEditBuffer? Right { get; private set; }
+    public BufferComparison? Comparison { get; private set; }
+    public TextPresentation? Presentation { get; private set; }
+    public string Algorithm { get; set; } = "myers";
+    public bool Dirty => Left?.IsDirty == true || Right?.IsDirty == true;
+    private T Plugin<T>() where T : class, IPlugin => plugins.GetAll<T>().FirstOrDefault() ?? throw new InvalidOperationException($"缺少插件 {typeof(T).Name}");
+    public async Task LoadAsync(string left, string right)
+    {
+        var storage = Plugin<ITextStorage>();
+        var snapshots = await Task.WhenAll(storage.LoadAsync(left, true), storage.LoadAsync(right, true));
+        var factory = Plugin<IEditBufferFactory>();
+        var a = factory.Create(snapshots[0]); var b = factory.Create(snapshots[1]);
+        Left = a; Right = b; Recompare();
+    }
+    public void Clear() { Left = Right = null; Comparison = null; Presentation = null; }
+    public void Recompare()
+    {
+        if (Left is null || Right is null) return;
+        Comparison = null; Presentation = null;
+        Comparison = Plugin<IBufferComparison>().Compare(Left.Snapshot(), Right.Snapshot(), Algorithm, new(), plugins);
+        Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines);
+    }
+    public void Edit(bool left, string text)
+    {
+        var buffer = (left ? Left : Right) ?? throw new InvalidOperationException("请先打开文本文件。");
+        // Store only the changed span, preserving useful undo steps for large documents.
+        string old = buffer.Text; if (old == text) return;
+        int start = 0, end = 0;
+        while (start < old.Length && start < text.Length && old[start] == text[start]) start++;
+        while (end < old.Length - start && end < text.Length - start && old[^(end + 1)] == text[^(end + 1)]) end++;
+        buffer.Apply(new(start, old.Length - start - end, text.Substring(start, text.Length - start - end)));
+        Comparison = null; Presentation = null;
+    }
+    public void Merge(int hunk, MergeDirection direction)
+    {
+        Recompare();
+        if (Comparison is null || Left is null || Right is null) return;
+        var edit = Plugin<IBlockMerge>().Plan(Comparison, Left.Snapshot(), Right.Snapshot(), hunk, direction);
+        (direction == MergeDirection.LeftToRight ? Right : Left).Apply(edit); Recompare();
+    }
+    public void History(bool left, bool redo)
+    {
+        var buffer = left ? Left : Right; if (buffer is null) return;
+        if (redo) buffer.Redo(); else buffer.Undo(); Recompare();
+    }
+    public async Task SaveAsync(bool left)
+    {
+        var buffer = left ? Left : Right; if (buffer is null || !buffer.IsDirty) return;
+        var snapshot = buffer.Snapshot();
+        var stamp = await Plugin<ITextStorage>().SaveAsync(snapshot);
+        buffer.AcceptSave(snapshot, stamp);
+    }
+}

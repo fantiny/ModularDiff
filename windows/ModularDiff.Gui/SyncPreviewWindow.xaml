@@ -1,0 +1,18 @@
+<Window x:Class="ModularDiff.Gui.SyncPreviewWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="同步预览" Width="1100" Height="620" MinWidth="850" MinHeight="400" WindowStartupLocation="CenterOwner" Background="#F1F3F7" FontFamily="Segoe UI, Microsoft YaHei UI" FontSize="12" PreviewKeyDown="PreviewKey">
+ <Grid x:Name="PreviewRoot" Margin="8" Background="#F1F3F7"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Margin="0,0,0,6"><StackPanel DockPanel.Dock="Left" Orientation="Horizontal"><Button x:Name="ExecuteButton" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets" Content="&#xE768;" ToolTip="执行预览中选择的复制操作（覆盖目标文件；跳过项不写入）" Click="ExecuteClick"/><Button x:Name="StopButton" Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets" Content="&#xE71A;" ToolTip="取消剩余同步；已完成的复制保留" IsEnabled="False" Click="StopClick"/><Button Style="{StaticResource IconButton}" FontFamily="Segoe MDL2 Assets" Content="&#xE711;" ToolTip="关闭预览；未执行时不修改文件" Click="CloseClick"/></StackPanel><TextBlock x:Name="Summary" VerticalAlignment="Center" Margin="10,0"/></DockPanel>
+  <TextBlock x:Name="Roots" Grid.Row="1" TextTrimming="CharacterEllipsis" Foreground="#64748B" Margin="3,2,3,6"/>
+  <TextBlock x:Name="Scope" Grid.Row="2" TextTrimming="CharacterEllipsis" Foreground="#64748B" Margin="3,0,3,6"/>
+  <DataGrid x:Name="ItemsGrid" Grid.Row="3" IsReadOnly="False" SelectionMode="Single" RowHeight="30" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserSortColumns="True">
+   <DataGrid.Columns>
+    <DataGridTemplateColumn Header="操作" Width="155"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox IsEnabled="{Binding CanChoose}" ItemsSource="{Binding Choices}" DisplayMemberPath="Label" SelectedValuePath="Action" SelectedValue="{Binding Action, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0" MinWidth="130" ToolTip="选择该文件的复制方向；跳过不会写入"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+    <DataGridTextColumn Header="相对路径" Binding="{Binding RelativePath}" Width="2*" IsReadOnly="True"/>
+    <DataGridTextColumn Header="左侧" Binding="{Binding LeftInfo}" Width="190" IsReadOnly="True"/>
+    <DataGridTextColumn Header="右侧" Binding="{Binding RightInfo}" Width="190" IsReadOnly="True"/>
+    <DataGridTextColumn Header="状态 / 执行结果" Binding="{Binding State}" Width="2*" IsReadOnly="True"/>
+   </DataGrid.Columns>
+   <DataGrid.RowStyle><Style TargetType="DataGridRow"><Setter Property="ToolTip" Value="{Binding State}"/></Style></DataGrid.RowStyle>
+  </DataGrid>
+  <ProgressBar x:Name="Progress" Grid.Row="4" Height="3" Margin="0,5,0,0"/>
+ </Grid>
+</Window>
