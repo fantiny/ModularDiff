@@ -1,6 +1,7 @@
 using Avalonia.Styling;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using Avalonia.Themes.Fluent;
 namespace ModularDiff.Desktop;
 internal static class Program
@@ -13,7 +14,68 @@ public sealed class App : Application
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            // 单实例多窗口：Finder/服务重复调用时把参数转发给已运行实例,由它开新窗口(macOS 的 open --args 不会送达已运行应用)。
+            desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnLastWindowClose;
+            if (SingleInstance.TryForward(desktop.Args ?? [])) { Environment.Exit(0); return; }
+            SingleInstance.Start(args => Dispatcher.UIThread.Post(() => new MainWindow(args).Show()));
             desktop.MainWindow = new MainWindow(desktop.Args ?? []);
+        }
         base.OnFrameworkInitializationCompleted();
+    }
+}
+internal static class SingleInstance
+{
+    private static string SocketPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "ipc.sock");
+    public static bool TryForward(string[] args)
+    {
+        if (!args.Contains("--left") && !args.Contains("--right")) return false;
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return false;
+        try
+        {
+            using var client = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+            var pending = client.BeginConnect(new System.Net.Sockets.UnixDomainSocketEndPoint(SocketPath), null, null);
+            if (!pending.AsyncWaitHandle.WaitOne(700)) return false;
+            client.EndConnect(pending);
+            client.Send(System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(args)));
+            return true;
+        }
+        catch { return false; }
+    }
+    public static void Start(Action<string[]> onArgs)
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SocketPath)!);
+            try { File.Delete(SocketPath); } catch { }
+            var server = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.Unix, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Unspecified);
+            server.Bind(new System.Net.Sockets.UnixDomainSocketEndPoint(SocketPath));
+            server.Listen(4);
+            _ = Task.Run(async () =>
+            {
+                while (true)
+                {
+                    System.Net.Sockets.Socket socket;
+                    try { socket = await server.AcceptAsync(); } catch { return; }
+                    _ = Handle(socket, onArgs);
+                }
+            });
+        }
+        catch { }
+    }
+    private static async Task Handle(System.Net.Sockets.Socket socket, Action<string[]> onArgs)
+    {
+        try
+        {
+            using (socket)
+            {
+                var buffer = new byte[65536]; using var stream = new MemoryStream();
+                int read; while ((read = await socket.ReceiveAsync(buffer)) > 0) { stream.Write(buffer, 0, read); if (stream.Length > 1 << 20) break; }
+                var args = System.Text.Json.JsonSerializer.Deserialize<string[]>(stream.ToArray()) ?? [];
+                if (args.Length > 0) onArgs(args);
+            }
+        }
+        catch { }
     }
 }

@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using System.Security.Cryptography;
 using ModularDiff.Contracts;
 using ModularDiff.Core;
 
@@ -18,9 +19,11 @@ public sealed class MainWindow : Window
     private readonly TextBlock _status = new() { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap };
     private readonly ListBox _rows = new(), _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TabControl _tabs = new();
+    private readonly TabItem _diffTab = new() { Header = "差异对齐" };
     private readonly ComboBox _algorithm = new() { Width = 130 };
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
@@ -53,10 +56,10 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("⇤", "目录：预览所选文件右到左同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.RightToLeft))));
         _toolbar.Children.Add(Button("◷", "同步历史与撤销恢复", () => Run(History)));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
-        var diffTab = new TabItem { Header = "差异对齐", Content = _rows };
+        _diffTab.Content = _rows;
         var editTab = new TabItem { Header = "左右编辑", Content = Columns(EditPanel(true), EditPanel(false)) };
         var folderTab = new TabItem { Header = "目录比较", Content = _files };
-        _tabs.ItemsSource = new[] { diffTab, editTab, folderTab };
+        _tabs.ItemsSource = new[] { _diffTab, editTab, folderTab };
         _rows.ItemTemplate = new FuncDataTemplate<AlignedRow>((row, _) =>
         {
             if (row is null) return new TextBlock();
@@ -153,12 +156,31 @@ public sealed class MainWindow : Window
         {
             _directory = null; _files.ItemsSource = null;
             var file = result.Files.Single();
-            if (file.IsBinary || file.Status == FileStatus.Error) { _status.Text = $"{file.Status}：{file.Note ?? "二进制文件，不能进行文本编辑"}"; return; }
+            if (file.IsBinary || file.Status == FileStatus.Error)
+            {
+                _rows.ItemsSource = null; _diffTab.Content = _binaryInfo; _tabs.SelectedIndex = 0;
+                _binaryInfo.Text = await BinarySummaryAsync(left, right);
+                _status.Text = $"{file.Status}：{file.Note ?? "二进制文件"} · 摘要见「差异对齐」页";
+                return;
+            }
             await OpenFile(left, right);
         }
         if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings);
     }
-    private async Task OpenFile(string left, string right) { await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    private async Task OpenFile(string left, string right) { _diffTab.Content = _rows; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    private static async Task<string> BinarySummaryAsync(string left, string right)
+    {
+        static async Task<(long Size, DateTime Time, string Hash)> Info(string path)
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists) return (0, default, "（缺失）");
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return (file.Length, file.LastWriteTime, Convert.ToHexString(await SHA256.HashDataAsync(stream))[..16]);
+        }
+        var (lSize, lTime, lHash) = await Info(left);
+        var (rSize, rTime, rHash) = await Info(right);
+        return $"二进制文件，不做文本差异（下方为 SHA-256 前 128 位摘要）\n\n左侧  {left}\n    {lSize:N0} 字节 · {lTime:yyyy-MM-dd HH:mm} · {lHash}\n\n右侧  {right}\n    {rSize:N0} 字节 · {rTime:yyyy-MM-dd HH:mm} · {rHash}\n\n结论：{(lSize == rSize && lHash == rHash ? "两文件内容完全相同" : "两文件内容不同")}";
+    }
     private void Edited(bool left)
     {
         if (_loading) return;

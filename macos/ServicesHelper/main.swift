@@ -1,4 +1,5 @@
 import Cocoa
+import Darwin
 
 // ModularDiff Finder 服务提供器:以 App 声明式服务(NSServices)注册右键菜单,
 // macOS 26/27 上只有 App 声明的服务才会出现在右键菜单底部一级(workflow 服务只能进子菜单)。
@@ -14,9 +15,42 @@ final class ModularDiffServices: NSObject {
         return urls.map(\.path)
     }
     private func launch(_ arguments: [String]) {
+        // 先把参数转发给已运行的 ModularDiff 实例(由它开新窗口);没有实例时才启动新进程。
+        if forward(arguments) { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = arguments
         NSWorkspace.shared.openApplication(at: Self.appURL, configuration: configuration)
+    }
+    /// 通过 Unix domain socket 转发参数(协议:JSON 字符串数组,与 SingleInstance 一致)。
+    private func forward(_ arguments: [String]) -> Bool {
+        let path = NSHomeDirectory() + "/Library/Application Support/ModularDiff/ipc.sock"
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8CString.prefix(MemoryLayout.size(ofValue: address.sun_path) - 1)).map { UInt8(bitPattern: $0) }
+        bytes.withUnsafeBufferPointer { source in
+            withUnsafeMutableBytes(of: &address.sun_path) { destination in
+                destination.copyBytes(from: source)
+            }
+        }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0, let payload = try? JSONEncoder().encode(arguments) else { return false }
+        var sent = 0
+        while sent < payload.count {
+            let n = payload.withUnsafeBytes { pointer in
+                send(fd, pointer.baseAddress!.advanced(by: sent), payload.count - sent, 0)
+            }
+            guard n > 0 else { return false }
+            sent += n
+        }
+        shutdown(fd, SHUT_WR)
+        return true
     }
     private func pendingLeft() -> String? {
         guard let text = try? String(contentsOf: Self.stateURL, encoding: .utf8) else { return nil }
