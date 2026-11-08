@@ -5,3 +5,4 @@ artifacts/
 *.user
 # internal dev docs, not published
 docs/
+.DS_Store

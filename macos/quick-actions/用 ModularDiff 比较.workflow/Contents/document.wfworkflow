@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMAccepts</key>
+	<dict>
+		<key>Container</key>
+		<string>Substitutes</string>
+		<key>Types</key>
+		<array>
+			<string>com.apple.cocoa.path</string>
+		</array>
+	</dict>
+	<key>AMApplication</key>
+	<array>
+		<string>com.apple.finder</string>
+	</array>
+	<key>AMCanShowWhenRun</key>
+	<false/>
+	<key>AMCategory</key>
+	<string>AMCategoryUtilities</string>
+	<key>AMComment</key>
+	<string>比较两个文件/文件夹;若已设左侧,单个选择即与左侧比较</string>
+	<key>AMKeywords</key>
+	<array>
+		<string>compare</string>
+		<string>diff</string>
+		<string>ModularDiff</string>
+		<string>比较</string>
+	</array>
+	<key>AMName</key>
+	<string>用 ModularDiff 比较</string>
+	<key>AMProvides</key>
+	<dict>
+		<key>Container</key>
+		<string>List</string>
+		<key>Types</key>
+		<array/>
+	</dict>
+	<key>WFWorkflowActions</key>
+	<array>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>com.apple.RunShellScript</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>command</key>
+				<string>APP="$HOME/Applications/ModularDiff.app"
+STATE="$HOME/Library/Application Support/ModularDiff/pending-left"
+notify() { osascript -e "display notification \"$1\" with title \"ModularDiff\""; }
+if [ ! -d "$APP" ]; then notify "未找到 ~/Applications/ModularDiff.app"; exit 0; fi
+if [ $# -eq 2 ]; then
+  rm -f "$STATE" 2&gt;/dev/null
+  open -a "$APP" --args --left "$1" --right "$2" --auto-compare
+elif [ $# -eq 1 ]; then
+  if [ -f "$STATE" ]; then
+    LEFT=$(cat "$STATE")
+    if [ "$LEFT" = "$1" ]; then
+      notify "左侧已设为此文件夹,请右键另一个文件夹进行比较"
+    else
+      rm -f "$STATE"
+      open -a "$APP" --args --left "$LEFT" --right "$1" --auto-compare
+    fi
+  else
+    open -a "$APP" --args --left "$1"
+  fi
+else
+  notify "请选择 1 个或 2 个文件/文件夹"
+fi
+</string>
+				<key>input</key>
+				<string>Argument</string>
+				<key>shell</key>
+				<string>/bin/zsh</string>
+			</dict>
+		</dict>
+	</array>
+	<key>WFWorkflowBuildVersion</key>
+	<string>523.2</string>
+	<key>WFWorkflowClientReleaseVersion</key>
+	<string>15.0</string>
+	<key>WFWorkflowClientVersion</key>
+	<string>Automator 1.5</string>
+	<key>WFWorkflowHasShortcutInputVariables</key>
+	<false/>
+	<key>WFWorkflowInputContentItemClasses</key>
+	<array>
+		<string>com.apple.cocoa.path</string>
+	</array>
+	<key>WFWorkflowTypes</key>
+	<array>
+		<string>Quick Action</string>
+	</array>
+</dict>
+</plist>
