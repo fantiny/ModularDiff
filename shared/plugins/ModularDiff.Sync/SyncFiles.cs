@@ -9,10 +9,19 @@ internal static class SyncFiles
     private static StringComparison Comparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     public static (string Left, string Right) Roots(string left, string right)
     {
-        left = Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)); right = Path.TrimEndingDirectorySeparator(Path.GetFullPath(right));
+        left = Canonical(left); right = Canonical(right);
         if (Comparer.Equals(left, right) || Inside(left, right) || Inside(right, left)) throw new IOException("同步根目录不能相同或互相包含。");
-        foreach (string root in new[] { left, right }) { NoLinks(root); if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root); }
+        foreach (string root in new[] { left, right }) if (!Directory.Exists(root)) throw new DirectoryNotFoundException(root);
         return (left, right);
+    }
+    private static string Canonical(string path)
+    {
+        path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        // 解析根级别的符号链接(macOS 的 /var、/tmp 等系统链接是合法路径,只把根规范化到真实位置,
+        // 树内部的链接仍由 Resolve 逐段拒绝,防止越出同步根)。
+        try { return File.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName ?? path; }
+        catch (IOException) { return path; }
+        catch (UnauthorizedAccessException) { return path; }
     }
     private static bool Inside(string root, string path) => path.StartsWith(Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar, Comparison);
     public static string Resolve(string root, string relative)
@@ -22,21 +31,18 @@ internal static class SyncFiles
             throw new IOException("无效的相对路径：" + relative);
         string full = Path.GetFullPath(Path.Combine(root, relative));
         if (!Inside(root, full)) throw new IOException("路径超出同步根目录。");
-        NoLinks(full); return full;
+        for (string? current = full; current is not null && !Comparer.Equals(current, root); current = Path.GetDirectoryName(current))
+            NoLinks(current);
+        return full;
     }
     public static void NoLinks(string path)
     {
-        for (string? current = path; current is not null; current = Path.GetDirectoryName(current))
+        try
         {
-            try
-            {
-                var attributes = File.GetAttributes(current);
-                if ((attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("不支持符号链接或目录联接：" + current);
-                if (current != path && (attributes & FileAttributes.Directory) == 0) throw new IOException("父路径不是目录：" + current);
-            }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) throw new IOException("不支持符号链接或目录联接：" + path);
         }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
     }
     public static async Task<SyncStamp> Stamp(string path, CancellationToken token)
     {

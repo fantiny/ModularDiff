@@ -28,10 +28,16 @@ public sealed class MainWindow : Window
         Title = "ModularDiff · 跨平台版"; Width = 1250; Height = 820; MinWidth = 850; MinHeight = 550;
         string? Arg(string key) { int i = Array.IndexOf(args, key); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
         _plugins = PluginCatalog.Load(Arg("--plugins") ?? DefaultPluginRoot());
-        static string DefaultPluginRoot() => new[] { "../plugins", "../PlugIns", "../Resources/plugins" }
-            .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)))
-            .FirstOrDefault(Directory.Exists)
-            ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "plugins"));
+        static string DefaultPluginRoot()
+        {
+            var candidates = new[] { "../plugins", "../Resources/plugins", "../PlugIns" }
+                .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)))
+                .ToArray();
+            return candidates.FirstOrDefault(d => Directory.Exists(d)
+                    && Directory.EnumerateFiles(d, "plugin.json", SearchOption.AllDirectories).Any())
+                ?? candidates.FirstOrDefault(Directory.Exists)
+                ?? candidates[0];
+        }
         _session = new(_plugins);
         _leftPath.Text = Arg("--left"); _rightPath.Text = Arg("--right");
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = "myers";
