@@ -32,6 +32,22 @@ using (var frame = window.CaptureRenderedFrame())
 }
 window.Close();
 Directory.Delete(uiRoot, recursive: true);
+// 注意:在无 Avalonia 调度泵的环境里 await 真异步 IO 会死锁,故同步等待脱离 UI 上下文的后台任务。
+Task.Run(async () =>
+{
+    string eolRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-eol-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(eolRoot);
+    try
+    {
+        string eolLeft = Path.Combine(eolRoot, "a.txt"), eolRight = Path.Combine(eolRoot, "b.txt");
+        await File.WriteAllTextAsync(eolLeft, "same\r\nrest\r\n"); await File.WriteAllTextAsync(eolRight, "same\nrest\n");
+        var eolSession = new ComparisonSession(plugins); await eolSession.LoadAsync(eolLeft, eolRight);
+        Check(eolSession.Presentation!.Hunks.Count > 0, "EOL-only differences reported by default");
+        eolSession.Options = new(IgnoreLineEndings: true); eolSession.Recompare();
+        Check(eolSession.Presentation!.Hunks.Count == 0, "ignore-EOL option collapses EOL-only hunks");
+    }
+    finally { Directory.Delete(eolRoot, recursive: true); }
+}).GetAwaiter().GetResult();
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

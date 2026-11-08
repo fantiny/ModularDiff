@@ -9,6 +9,7 @@ public sealed class ComparisonSession(PluginCatalog plugins)
     public BufferComparison? Comparison { get; private set; }
     public TextPresentation? Presentation { get; private set; }
     public string Algorithm { get; set; } = "myers";
+    public ComparisonOptions Options { get; set; } = new();
     public bool Dirty => Left?.IsDirty == true || Right?.IsDirty == true;
     private T Plugin<T>() where T : class, IPlugin => plugins.GetAll<T>().FirstOrDefault() ?? throw new InvalidOperationException($"缺少插件 {typeof(T).Name}");
     public async Task LoadAsync(string left, string right)
@@ -24,7 +25,7 @@ public sealed class ComparisonSession(PluginCatalog plugins)
     {
         if (Left is null || Right is null) return;
         Comparison = null; Presentation = null;
-        Comparison = Plugin<IBufferComparison>().Compare(Left.Snapshot(), Right.Snapshot(), Algorithm, new(), plugins);
+        Comparison = Plugin<IBufferComparison>().Compare(Left.Snapshot(), Right.Snapshot(), Algorithm, Options, plugins);
         Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines);
     }
     public void Edit(bool left, string text)

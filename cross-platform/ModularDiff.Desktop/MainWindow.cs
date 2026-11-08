@@ -21,6 +21,10 @@ public sealed class MainWindow : Window
     private readonly TabControl _tabs = new();
     private readonly TabItem _diffTab = new() { Header = "差异对齐" };
     private readonly ComboBox _algorithm = new() { Width = 130 };
+    private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreEol = new() { Content = "↵", MinWidth = 32, Padding = new Thickness(8, 4) };
+    private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreWhitespace = new() { Content = "␣", MinWidth = 32, Padding = new Thickness(8, 4) };
+    private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreCase = new() { Content = "Aa", MinWidth = 32, Padding = new Thickness(8, 4) };
+    private static int _windowCount;
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
@@ -29,6 +33,8 @@ public sealed class MainWindow : Window
     public MainWindow(string[] args)
     {
         Title = "ModularDiff · 跨平台版"; Width = 1250; Height = 820; MinWidth = 850; MinHeight = 550;
+        int cascade = System.Threading.Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移,避免完全叠加难发现
+        Position = new PixelPoint(70 + (cascade % 12) * 36, 46 + (cascade % 12) * 30);
         string? Arg(string key) { int i = Array.IndexOf(args, key); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
         _plugins = PluginCatalog.Load(Arg("--plugins") ?? DefaultPluginRoot());
         static string DefaultPluginRoot()
@@ -48,6 +54,9 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("▶", "比较左右路径", () => Run(Compare)));
         _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
+        ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
+        _toolbar.Children.Add(_ignoreEol); _toolbar.Children.Add(_ignoreWhitespace); _toolbar.Children.Add(_ignoreCase);
+        _ignoreEol.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreWhitespace.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreCase.IsCheckedChanged += (_, _) => ApplyOptions();
         _toolbar.Children.Add(Button("↑", "上一个差异块", () => Navigate(-1)));
         _toolbar.Children.Add(Button("↓", "下一个差异块", () => Navigate(1)));
         _toolbar.Children.Add(Button("→", "选中差异块：左复制到右（保存后写入磁盘）", () => Merge(MergeDirection.LeftToRight)));
@@ -92,7 +101,7 @@ public sealed class MainWindow : Window
             catch (Exception ex) { _status.Text = "保存失败，窗口保持打开：" + ex.Message; }
             finally { _closePending = false; }
         };
-        Closed += (_, _) => { _debounce.Stop(); _plugins.Dispose(); };
+        Closed += (_, _) => { _debounce.Stop(); _plugins.Dispose(); System.Threading.Interlocked.Decrement(ref _windowCount); };
         if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics); _toolbar.IsEnabled = false; }
         else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
@@ -106,7 +115,11 @@ public sealed class MainWindow : Window
             : row.IsDifferent ? (left ? (row.Right is null ? "#B3FFF0F0" : "#B3FFF0E9") : (row.Left is null ? "#B3ECF7EF" : "#B3FFF0E9"))
             : "Transparent";
         var number = new TextBlock { Text = cell is null ? "" : cell.LineNumber.ToString(), Foreground = Brush.Parse("#8793A4"), FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 12, TextAlignment = TextAlignment.Right, MinWidth = 40, Margin = new Thickness(6, 1, 8, 1), VerticalAlignment = VerticalAlignment.Center };
-        var text = new TextBlock { Text = cell?.Text ?? "", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Margin = new Thickness(0, 1, 8, 1) };
+        var text = new TextBlock { FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Margin = new Thickness(0, 1, 8, 1) };
+        text.Inlines = new Avalonia.Controls.Documents.InlineCollection();
+        text.Inlines.Add(new Avalonia.Controls.Documents.Run(cell?.Text ?? ""));
+        if (cell is { Ending: "CRLF" or "CR" })   // 行尾差异可视化：非 LF 行尾加灰色标记
+            text.Inlines.Add(new Avalonia.Controls.Documents.Run(cell.Ending == "CRLF" ? "  ⏎CRLF" : "  ⏎CR") { Foreground = Brush.Parse("#8793A4"), FontSize = 11 });
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") }; line.Children.Add(number); Grid.SetColumn(text, 1); line.Children.Add(text);
         return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
     }
@@ -142,13 +155,19 @@ public sealed class MainWindow : Window
         try { await operation(); } catch (Exception ex) { _status.Text = "操作失败：" + ex.Message; }
         finally { _busy = false; _toolbar.IsEnabled = true; _tabs.IsEnabled = true; _leftPath.IsEnabled = _rightPath.IsEnabled = true; }
     }
+    private void ApplyOptions()
+    {
+        _session.Options = new((bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!);
+        if (_session.Left is null) return;
+        _rows.ItemsSource = null; _debounce.Stop(); _debounce.Start();
+    }
     private async Task Compare()
     {
         if (!await Leave()) return;
         string left = Path.GetFullPath(_leftPath.Text ?? ""), right = Path.GetFullPath(_rightPath.Text ?? "");
         if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");
         _status.Text = "比较中…";
-        var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm)));
+        var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options)));
         _session.Clear(); RefreshEditors();
         if (Directory.Exists(left) && Directory.Exists(right))
         { _directory = result; _files.ItemsSource = result.Files; _tabs.SelectedIndex = 2; _status.Text = $"{result.Files.Count} 个文件 · {result.Files.Count(f => f.Status != FileStatus.Equal)} 个差异/错误 · 双击打开"; }
