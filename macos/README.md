@@ -29,8 +29,11 @@ ModularDiff.app/Contents/
 ```zsh
 cd macos/FinderSync
 swiftc -O -suppress-warnings main.swift FinderSync.swift \
-  -framework FinderSync -framework Cocoa -o ModularDiffFinderSync
+  -framework FinderSync -framework Cocoa \
+  -module-name ModularDiffFinderSync -o ModularDiffFinderSync
 # 然后组装 <App>/Contents/PlugIns/ModularDiffFinderSync.appex/Contents/{MacOS,Info.plist}
+# 注:菜单类用 @objc(FinderSync) 显式命名,-module-name 不影响 Info.plist 中的
+# NSExtensionPrincipalClass 解析;显式指定可得到与发布版一致的反汇编。
 ```
 
 ## 注册限制(重要)
