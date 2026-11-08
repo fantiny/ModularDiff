@@ -7,7 +7,20 @@ namespace ModularDiff.Gui;
 internal static class ExplorerIntegration
 {
     private const string StateKey = @"Software\ModularDiff\Explorer";
+    private const string Clsid = "{144097CE-5032-445B-9864-8F38CB314AF5}"; // keep in sync with ShellExt Com.ClsidMenu
+    private const string HandlerName = "ModularDiff";
     private const string ClassicKey = @"Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32";
+    private static readonly string[] HandlerTargets =
+        [@"Software\Classes\*\shellex\ContextMenuHandlers", @"Software\Classes\Directory\shellex\ContextMenuHandlers"];
+    // Static verbs from earlier builds; still removed so upgrades come clean.
+    private static readonly string[] LegacyVerbKeys =
+    [
+        @"Software\Classes\*\shell\ModularDiffCompare", @"Software\Classes\*\shell\ModularDiffSelectLeft",
+        @"Software\Classes\*\shell\ModularDiffCompareTo", @"Software\Classes\*\shell\ModularDiff",
+        @"Software\Classes\Directory\shell\ModularDiffCompare", @"Software\Classes\Directory\shell\ModularDiffSelectLeft",
+        @"Software\Classes\Directory\shell\ModularDiffCompareTo", @"Software\Classes\Directory\shell\ModularDiff",
+    ];
+
     public static bool SupportsClassicMenu => OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
     public static bool IsClassicMenuConfigured()
     {
@@ -35,66 +48,56 @@ internal static class ExplorerIntegration
         }
         Notify();
     }
+
     public static (bool Any, bool Current) RegistrationStatus()
     {
         bool any = false, current = true;
-        foreach (string target in Targets)
+        string? server = Registry.CurrentUser.OpenSubKey(@"Software\Classes\CLSID\" + Clsid + @"\InprocServer32")?.GetValue("") as string;
+        any |= server is not null;
+        current &= string.Equals(server, HandlerDllPath(), StringComparison.OrdinalIgnoreCase);
+        foreach (string target in HandlerTargets)
         {
-            using var menu = Registry.CurrentUser.OpenSubKey(target);
-            any |= menu is not null;
-            foreach (var (id, verb) in new[] { ("01Left", "--shell-left"), ("02Compare", "--shell-right") })
-            {
-                using var command = menu?.OpenSubKey(@"shell\" + id + @"\command");
-                current &= string.Equals(command?.GetValue("") as string,
-                    "\"" + Environment.ProcessPath + "\" " + verb + " \"%1\"", StringComparison.OrdinalIgnoreCase);
-            }
+            string? registered = Registry.CurrentUser.OpenSubKey(target + @"\" + HandlerName)?.GetValue("") as string;
+            any |= registered is not null;
+            current &= string.Equals(registered, Clsid, StringComparison.OrdinalIgnoreCase);
         }
+        string? exe = Registry.CurrentUser.OpenSubKey(StateKey)?.GetValue("GuiExePath") as string;
+        any |= exe is not null;
+        current &= string.Equals(exe, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase);
+        foreach (string legacy in LegacyVerbKeys) any |= Registry.CurrentUser.OpenSubKey(legacy) is not null;
         return (any, current);
     }
-    private static readonly string[] Targets = [@"Software\Classes\*\shell\ModularDiff", @"Software\Classes\Directory\shell\ModularDiff"];
-    [DllImport("shell32.dll")] private static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+
     public static void Install()
     {
         string exe = Environment.ProcessPath ?? throw new IOException("无法确定 EXE 路径。");
         if (!string.Equals(Path.GetFileName(exe), "ModularDiff.Gui.exe", StringComparison.OrdinalIgnoreCase)) throw new IOException("请使用发布版 ModularDiff.Gui.exe 安装右键菜单。");
-        foreach (string target in Targets)
+        string dll = HandlerDllPath();
+        if (!File.Exists(dll)) throw new IOException("未找到右键菜单组件 ModularDiff.ShellExt.dll，请重新构建（build.ps1）。");
+        using (Registry.CurrentUser.CreateSubKey(@"Software\Classes\CLSID\" + Clsid + @"\InprocServer32"))
         {
-            using var menu = Registry.CurrentUser.CreateSubKey(target);
-            menu.SetValue("MUIVerb", "ModularDiff"); menu.SetValue("Icon", "\"" + exe + "\""); menu.SetValue("SubCommands", "");
-            Add(menu, "01Left", "设为左侧 (Left)", exe, "--shell-left");
-            Add(menu, "02Compare", "设为右侧并比较 (Right)", exe, "--shell-right");
+            Registry.SetValue(@"HKEY_CURRENT_USER\Software\Classes\CLSID\" + Clsid + @"\InprocServer32", "", dll);
+            Registry.SetValue(@"HKEY_CURRENT_USER\Software\Classes\CLSID\" + Clsid + @"\InprocServer32", "ThreadingModel", "Apartment");
         }
+        foreach (string target in HandlerTargets)
+            Registry.SetValue(@"HKEY_CURRENT_USER\" + target + @"\" + HandlerName, "", Clsid);
+        Registry.SetValue(@"HKEY_CURRENT_USER\" + StateKey, "GuiExePath", exe);
+        foreach (string legacy in LegacyVerbKeys) Registry.CurrentUser.DeleteSubKeyTree(legacy, false);
         Notify();
     }
-    private static void Add(RegistryKey parent, string id, string title, string exe, string verb)
-    {
-        using var item = parent.CreateSubKey(@"shell\" + id); item.SetValue("MUIVerb", title); item.SetValue("MultiSelectModel", "Single");
-        using var command = item.CreateSubKey("command"); command.SetValue("", "\"" + exe + "\" " + verb + " \"%1\"");
-    }
+
     public static void Uninstall()
     {
-        foreach (string target in Targets) Registry.CurrentUser.DeleteSubKeyTree(target, false);
-        Registry.CurrentUser.DeleteSubKeyTree(StateKey, false); Notify();
+        foreach (string target in HandlerTargets)
+            Registry.CurrentUser.DeleteSubKeyTree(target + @"\" + HandlerName, false);
+        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\CLSID\" + Clsid, false);
+        foreach (string legacy in LegacyVerbKeys) Registry.CurrentUser.DeleteSubKeyTree(legacy, false);
+        Registry.CurrentUser.DeleteSubKeyTree(StateKey, false);
+        Notify();
     }
-    public static void SelectLeft(string path)
-    {
-        path = ValidPath(path);
-        using var state = Registry.CurrentUser.CreateSubKey(StateKey); state.SetValue("Left", path);
-    }
-    public static string[] CompareRight(string path)
-    {
-        string right = ValidPath(path);
-        using var state = Registry.CurrentUser.OpenSubKey(StateKey);
-        string left = state?.GetValue("Left") as string ?? throw new IOException("请先右键第一个文件或目录，选择 ModularDiff → 设为左侧 (Left)。");
-        left = ValidPath(left);
-        if (Directory.Exists(left) != Directory.Exists(right)) throw new IOException("左右必须同为文件或同为目录，请重新选择左侧。");
-        return ["--left", left, "--right", right, "--auto-compare"];
-    }
-    private static string ValidPath(string path)
-    {
-        string full = Path.GetFullPath(path);
-        if (!File.Exists(full) && !Directory.Exists(full)) throw new IOException("所选路径不存在或无法访问：" + full);
-        return full;
-    }
+
+    private static string HandlerDllPath() => Path.Combine(AppContext.BaseDirectory, "ModularDiff.ShellExt.dll");
+
+    [DllImport("shell32.dll")] private static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
     private static void Notify() => SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero);
 }

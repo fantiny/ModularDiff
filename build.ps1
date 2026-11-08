@@ -17,6 +17,7 @@ try {
     }
     Invoke-Dotnet @('build', 'shared/ModularDiff.Cli/ModularDiff.Cli.csproj', '-c', $Configuration, '-o', 'artifacts/cli', '--nologo')
     Invoke-Dotnet @('build', 'windows/ModularDiff.Gui/ModularDiff.Gui.csproj', '-c', $Configuration, '-o', 'artifacts/gui', '--nologo')
+    Invoke-Dotnet @('publish', 'windows/ModularDiff.ShellExt/ModularDiff.ShellExt.csproj', '-c', $Configuration, '-r', 'win-x64', '-p:PublishAot=true', '-o', (Join-Path $repoRoot 'artifacts/gui'), '--nologo')
     if (-not $SkipTests) {
         Invoke-Dotnet @('run', '--project', 'tests/ModularDiff.Tests/ModularDiff.Tests.csproj', '-c', $Configuration, '--', (Join-Path $repoRoot 'artifacts/plugins'))
     }

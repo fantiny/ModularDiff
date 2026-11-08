@@ -12,7 +12,7 @@
 - **编辑与合并**：左右两侧均可编辑，支持块级双向复制、每侧独立的撤销 / 重做、保存前 SHA-256 冲突检测，外部修改不会被告警前覆盖。
 - **目录同步**：带预览的批量复制、覆盖前自动备份、持久化操作记录与历史恢复，支持双向补齐和逐项冲突决策。
 - **插件隔离加载**：每个插件包使用独立的 AssemblyLoadContext 与依赖解析，宿主只依赖契约程序集。
-- **资源管理器集成**（Windows，可选）：右键"设为左侧 / 设为右侧并比较"两步启动比较。
+- **资源管理器集成**（Windows，可选）：`ModularDiff Compare / Select Left / Compare to '<名称>'` 系列右键命令，随选中数量与记忆的左侧动态出现（与 Beyond Compare 同类的原生 COM 菜单扩展）。
 
 ## 系统要求
 
@@ -62,7 +62,8 @@ shared/                           两个 GUI 共用的实现
   ModularDiff.Cli/                跨平台命令行宿主
   plugins/                        算法、比较、编辑、合并、同步、备份、格式与展示插件
 windows/
-  ModularDiff.Gui/                WPF 界面、Windows 对话框、Explorer 右键菜单
+  ModularDiff.Gui/                WPF 界面、Windows 对话框、右键菜单注册
+  ModularDiff.ShellExt/           Explorer 右键菜单 COM 扩展（NativeAOT 原生 DLL）
 cross-platform/
   ModularDiff.Desktop/            Avalonia 界面与编辑会话
   ModularDiff.Desktop.Tests/      Headless 界面与集成测试
@@ -139,7 +140,14 @@ dotnet build ./examples/ModularDiff.Algorithms.Position -c Release -o ./artifact
 
 ## 资源管理器右键比较（Windows）
 
-安装后（GUI 齿轮面板或 `--shell-install`）右键菜单提供 ModularDiff → 设为左侧 / 设为右侧并比较：第一次选左侧记住路径，第二次选右侧自动启动比较。注册在 HKCU 下，无需管理员权限；移动程序目录后重新安装即可。使用经典 Shell verbs，不加载进 Explorer 进程。
+安装后（GUI 齿轮面板或 `--shell-install`）右键菜单出现 `ModularDiff …` 系列命令，由一个 NativeAOT 原生 COM 菜单扩展（`ModularDiff.ShellExt.dll`，与 Beyond Compare / TortoiseGit 的 shellex 同类，无 .NET runtime 依赖）按当前选择动态生成，前置分隔线独立成组：
+
+- **同时选中两个文件 / 目录**：仅显示 `ModularDiff Compare`，一键比较这两项（不同后缀、不同编码均可——按内容自动选择文本或二进制比较方式）。
+- **选中单项（未记忆左侧）**：仅显示 `ModularDiff Select Left`。
+- **选中单项（已记忆左侧）**：显示 `ModularDiff Compare to '<左侧名称>'` 与 `ModularDiff Select Left`；前者直接与记忆的左侧比较，后者重设左侧。
+- 混合文件 / 目录、多于两项或重复路径时不显示任何命令。
+
+左侧路径由 `Select Left` 记忆并持久保存，路径失效时自动忽略。注册在 HKCU 下，无需管理员权限；移动程序目录后重新安装即可。更新扩展 DLL 后需重启资源管理器（任务管理器 → 重新启动 Windows 资源管理器）才会加载新版本。
 
 ## 跨平台版本
 

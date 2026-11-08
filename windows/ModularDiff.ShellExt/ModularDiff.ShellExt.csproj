@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Publish with: dotnet publish -c Release -r win-x64 -p:PublishAot=true (Explorer loads the native DLL in-proc).
+         Registry/Win32 calls are Windows-only by design; only MenuPlan is referenced from cross-platform tests. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+</Project>

@@ -1,4 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../../shared/ModularDiff.Core/ModularDiff.Core.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../shared/ModularDiff.Core/ModularDiff.Core.csproj" /><ProjectReference Include="../../windows/ModularDiff.ShellExt/ModularDiff.ShellExt.csproj" /></ItemGroup>
 </Project>
