@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key><string>ModularDiff Services</string>
+	<key>CFBundleDisplayName</key><string>ModularDiff Services</string>
+	<key>CFBundleIdentifier</key><string>com.modulardiff.services</string>
+	<key>CFBundleVersion</key><string>1.0.0</string>
+	<key>CFBundleShortVersionString</key><string>1.0.0</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleExecutable</key><string>ModularDiffServices</string>
+	<key>LSMinimumSystemVersion</key><string>12.0</string>
+	<key>LSUIElement</key><true/>
+	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key><dict><key>default</key><string>用 ModularDiff 比较</string></dict>
+			<key>NSMessage</key><string>compare</string>
+			<key>NSPortName</key><string>ModularDiffServices</string>
+			<key>NSRequiredContext</key><dict><key>NSApplicationIdentifier</key><string>com.apple.finder</string></dict>
+			<key>NSSendFileTypes</key><array><string>public.item</string></array>
+			<key>NSServiceDescription</key><string>比较选中的两个文件/文件夹;单个选择与已设置的左侧比较</string>
+		</dict>
+		<dict>
+			<key>NSMenuItem</key><dict><key>default</key><string>ModularDiff 设为左侧</string></dict>
+			<key>NSMessage</key><string>setLeft</string>
+			<key>NSPortName</key><string>ModularDiffServices</string>
+			<key>NSRequiredContext</key><dict><key>NSApplicationIdentifier</key><string>com.apple.finder</string></dict>
+			<key>NSSendFileTypes</key><array><string>public.item</string></array>
+			<key>NSServiceDescription</key><string>记住此文件/文件夹作为比较左侧</string>
+		</dict>
+	</array>
+</dict>
+</plist>

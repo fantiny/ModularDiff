@@ -60,8 +60,9 @@ public sealed class MainWindow : Window
         _rows.ItemTemplate = new FuncDataTemplate<AlignedRow>((row, _) =>
         {
             if (row is null) return new TextBlock();
-            var grid = Columns(Cell(row.Left), Cell(row.Right), false);
-            return new Border { Background = row.IsDifferent ? Brush.Parse("#FFF0CF") : Brushes.Transparent, Child = grid, Padding = new Thickness(2) };
+            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+            grid.Children.Add(Cell(row, true)); var right = Cell(row, false); Grid.SetColumn(right, 1); grid.Children.Add(right);
+            return new Border { Child = grid };
         });
         _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
             file is null ? new TextBlock() : Columns(
@@ -94,7 +95,18 @@ public sealed class MainWindow : Window
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
     private static TextBox Editor() => new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 14, IsReadOnly = true, IsUndoEnabled = false };
-    private static Control Cell(TextCell? cell) => new TextBlock { Text = cell is null ? "" : $"{cell.LineNumber,5}  {cell.Text}", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Margin = new Thickness(4, 1) };
+    private static Control Cell(AlignedRow row, bool left)
+    {
+        TextCell? cell = left ? row.Left : row.Right;
+        // 与 WPF DiffPane 一致的着色:幽灵行灰底,左侧删除/右侧插入/修改各自着色(半透明,选中高亮可透出)。
+        string background = cell is null ? "#C8F2F4F7"
+            : row.IsDifferent ? (left ? (row.Right is null ? "#B3FFF0F0" : "#B3FFF0E9") : (row.Left is null ? "#B3ECF7EF" : "#B3FFF0E9"))
+            : "Transparent";
+        var number = new TextBlock { Text = cell is null ? "" : cell.LineNumber.ToString(), Foreground = Brush.Parse("#8793A4"), FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 12, TextAlignment = TextAlignment.Right, MinWidth = 40, Margin = new Thickness(6, 1, 8, 1), VerticalAlignment = VerticalAlignment.Center };
+        var text = new TextBlock { Text = cell?.Text ?? "", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Margin = new Thickness(0, 1, 8, 1) };
+        var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") }; line.Children.Add(number); Grid.SetColumn(text, 1); line.Children.Add(text);
+        return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
+    }
     private static Grid Columns(Control left, Control right, bool resize = true)
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,6,*") }; grid.Children.Add(left); Grid.SetColumn(right, 2); grid.Children.Add(right);

@@ -9,7 +9,7 @@ internal static class Program
 }
 public sealed class App : Application
 {
-    public override void Initialize() { RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light; Styles.Add(new FluentTheme()); var rowStyle = new Avalonia.Styling.Style(x => x.OfType<Avalonia.Controls.ListBoxItem>()); rowStyle.Setters.Add(new Avalonia.Styling.Setter(Avalonia.Controls.ContentControl.HorizontalContentAlignmentProperty, Avalonia.Layout.HorizontalAlignment.Stretch)); rowStyle.Setters.Add(new Setter(Avalonia.Layout.Layoutable.MinHeightProperty, 22d)); rowStyle.Setters.Add(new Setter(Avalonia.Controls.Primitives.TemplatedControl.PaddingProperty, new Thickness(0))); Styles.Add(rowStyle); }
+        public override void Initialize() { RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light; Styles.Add(new FluentTheme()); var rowStyle = new Avalonia.Styling.Style(x => x.OfType<Avalonia.Controls.ListBoxItem>()); rowStyle.Setters.Add(new Avalonia.Styling.Setter(Avalonia.Controls.ContentControl.HorizontalContentAlignmentProperty, Avalonia.Layout.HorizontalAlignment.Stretch)); rowStyle.Setters.Add(new Setter(Avalonia.Layout.Layoutable.MinHeightProperty, 22d)); rowStyle.Setters.Add(new Setter(Avalonia.Controls.Primitives.TemplatedControl.PaddingProperty, new Thickness(0))); Styles.Add(rowStyle); var selectedStyle = new Avalonia.Styling.Style(x => x.OfType<Avalonia.Controls.ListBoxItem>().Class(":selected")); selectedStyle.Setters.Add(new Setter(Avalonia.Controls.ListBoxItem.BackgroundProperty, Avalonia.Media.Brush.Parse("#D9E8FF"))); Styles.Add(selectedStyle); }
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
