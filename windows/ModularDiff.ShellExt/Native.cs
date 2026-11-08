@@ -116,6 +116,10 @@ internal static unsafe class Native
     public static extern void ReleaseStgMedium(StgMedium* medium);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern bool InsertMenuItemW(nint hMenu, uint item, bool byPosition, MenuItemInfo* itemInfo);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(nint hwnd, string text, string caption, uint type);
+    public const uint CMIC_MASK_FLAG_NO_UI = 0x00000400;
+    public const uint MB_ICONINFORMATION = 0x00000040;
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern int lstrlenW(char* lpString);
     [DllImport("kernel32.dll")]

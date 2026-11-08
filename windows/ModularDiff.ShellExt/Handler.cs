@@ -172,6 +172,11 @@ internal static unsafe class Handler
 
     private static string? ReadState(string name) => Registry.GetValue(@"HKEY_CURRENT_USER\" + StateKey, name, null) as string;
     private static void WriteState(string name, string value) => Registry.SetValue(@"HKEY_CURRENT_USER\" + StateKey, name, value);
+    private static void DeleteState(string name)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(StateKey, writable: true);
+        key?.DeleteValue(name, throwOnMissingValue: false);
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int QueryContextMenu(void* self, nint hMenu, uint indexMenu, uint idFirst, uint idLast, uint flags)
@@ -222,9 +227,37 @@ internal static unsafe class Handler
             Native.SHChangeNotify(0x08000000, 0, null, null); // refresh context menus everywhere
             return Native.S_OK;
         }
-        SelectionPath left = entry.Action == MenuAction.Compare ? state.Selection[0] : state.Left!;
-        SelectionPath right = entry.Action == MenuAction.Compare ? state.Selection[1] : state.Selection[0];
+        // The menu was built when the files existed; revalidate now so a deleted left side or
+        // selection reports clearly instead of launching a comparison that cannot run.
+        SelectionPath left, right;
+        if (entry.Action == MenuAction.Compare)
+        {
+            (left, right) = (state.Selection[0], state.Selection[1]);
+            if (!StillExists(left.Path) || !StillExists(right.Path))
+                return NotifyMissing(info, "所选的文件或目录已不存在，请重新选择。");
+        }
+        else
+        {
+            if (state.Left is not { } remembered || !StillExists(remembered.Path))
+            {
+                DeleteState("Left"); // stale memory: clear it so the menu goes back to Select Left
+                Native.SHChangeNotify(0x08000000, 0, null, null);
+                return NotifyMissing(info, "记忆的左侧已不存在，已自动清除；请重新右键选择左侧。");
+            }
+            (left, right) = (remembered, state.Selection[0]);
+            if (!StillExists(right.Path))
+                return NotifyMissing(info, "所选的文件或目录已不存在，请重新选择。");
+        }
         return Launch(state.GuiExePath, left.Path, right.Path) ? Native.S_OK : Native.E_FAIL;
+    }
+
+    private static bool StillExists(string path) => Native.GetFileAttributesW(path) != Native.INVALID_FILE_ATTRIBUTES;
+
+    private static int NotifyMissing(Native.CmInvokeCommandInfo* info, string message)
+    {
+        if ((info->fMask & Native.CMIC_MASK_FLAG_NO_UI) == 0)
+            Native.MessageBoxW(info->hwnd, message, "ModularDiff", Native.MB_ICONINFORMATION);
+        return Native.S_OK;
     }
 
     private static int VerbIndex(State state, Native.CmInvokeCommandInfo* info)
