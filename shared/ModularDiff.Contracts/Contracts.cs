@@ -24,6 +24,12 @@ public interface IDiffAlgorithm : IPlugin
     AlgorithmResult Compare(IReadOnlyList<string> left, IReadOnlyList<string> right,
         IPluginResolver plugins, CancellationToken cancellationToken = default);
 }
+// 行拆分插件:差异对齐页右键"换行"按各自领域规则把一行拆成多行(如 CSS 多属性行拆成每属性一行)。
+public interface ILineSplitter : IPlugin
+{
+    bool CanSplit(string fileName, string line);
+    IReadOnlyList<string> Split(string line);
+}
 
 public sealed record ComparisonOptions(
     bool IgnoreCase = false, bool IgnoreWhitespace = false, bool IgnoreLineEndings = false,

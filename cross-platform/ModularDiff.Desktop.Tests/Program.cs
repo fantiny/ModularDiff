@@ -14,8 +14,8 @@ void Check(bool ok, string message) { if (!ok) throw new Exception(message); Con
 Check(plugins.Diagnostics.Count == 0, "plugin load");
 string uiRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ui-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(uiRoot);
-File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n");
-File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n");
+File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n");
+File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n--bg:#0b0d10;--panel:#11151a;\n");
 var window = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(uiRoot, "left.cs"), "--right", Path.Combine(uiRoot, "right.cs"), "--auto-compare"]);
 window.Show();
 Check(window.Content is Grid && window.IsVisible, "Avalonia window initializes on headless platform");
@@ -35,6 +35,8 @@ var rowsList = ((Grid)window.Content!).Children.OfType<TabControl>().Single().It
 window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
 var cellEditor = (rowsList.ContainerFromIndex(0) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
 Check(cellEditor is not null, "inline cell editor realized");
+var cssRow = (rowsList.ContainerFromIndex(rowsList.ItemCount - 1) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
+Check(cssRow?.ContextMenu is { ItemCount: > 0 }, "css line offers split context menu");
 cellEditor!.Text += " // edited";
 Dispatcher.UIThread.RunJobs();
 Check(((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "inline cell edit marks session dirty");

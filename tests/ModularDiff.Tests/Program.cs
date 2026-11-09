@@ -25,6 +25,7 @@ try
     await SyncTests.Run(catalog, temp, Test);
     await SafetyTests.Run(catalog, temp, Test);
     await MenuPlanTests.Run(Test);
+    await LineSplitTests.Run(catalog, Test);
 
     foreach (var id in new[] { "myers", "patience" })
     {

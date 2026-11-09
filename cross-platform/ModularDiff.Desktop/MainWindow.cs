@@ -121,9 +121,44 @@ public sealed class MainWindow : Window
         var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         editor.TextChanged += (_, _) => CellEdited(row, left, editor);
         editor.GotFocus += (_, _) => _rows.SelectedItem = row;   // 聚焦单元格即选中所在行,供差异块合并等操作使用
+        var splitters = _plugins.GetAll<ILineSplitter>()
+            .Where(s => cell is not null && s.CanSplit((left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "", cell.Text))
+            .ToArray();
+        if (splitters.Length > 0)
+        {
+            var menu = new ContextMenu();
+            foreach (var splitter in splitters)
+            {
+                var item = new MenuItem { Header = "换行 · " + splitter.DisplayName };
+                item.Click += (_, _) => ApplySplit(row, left, splitter);
+                menu.Items.Add(item);
+            }
+            editor.ContextMenu = menu;
+        }
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         line.Children.Add(number); Grid.SetColumn(editor, 1); line.Children.Add(editor); Grid.SetColumn(ending, 2); line.Children.Add(ending);
         return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
+    }
+    private void ApplySplit(AlignedRow row, bool left, ILineSplitter splitter)
+    {
+        if (_loading || _session.Left is null || _session.Right is null) return;
+        var cell = left ? row.Left : row.Right;
+        if (cell is null) return;
+        try
+        {
+            string[] lines = (left ? _session.Left : _session.Right).Text.Split('\n');
+            int index = cell.LineNumber - 1;
+            if (index < 0 || index >= lines.Length) return;
+            string raw = lines[index];
+            string suffix = raw.EndsWith('\r') ? "\r" : "";   // 行尾风格(CRLF)沿用原行
+            var parts = splitter.Split(suffix.Length > 0 ? raw[..^1] : raw);
+            if (parts.Count < 2) return;
+            lines[index] = string.Join("\n" + suffix, parts) + suffix;
+            _session.Edit(left, string.Join("\n", lines));
+            _debounce.Stop();   // 与就地编辑一致:点 ▶ 手动重对齐
+            RefreshDirty();
+        }
+        catch (Exception ex) { _status.Text = ex.Message; }
     }
     private void CellEdited(AlignedRow row, bool left, TextBox editor)
     {
