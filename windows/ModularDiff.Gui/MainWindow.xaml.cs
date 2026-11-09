@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -29,12 +30,15 @@ public partial class MainWindow : Window
     private bool _ready, _busy, _syncText, _syncFolderScroll, _syncFolderSelection;
     private int _presentationVersion, _currentHunk = -1;
     private double _codeFontSize = 14;
+    private static int _windowCount;
     private sealed record ModuleChoice(string? Id, string DisplayName);
 
     public MainWindow(string[] arguments)
     {
         _arguments = arguments;
         InitializeComponent();
+        int cascade = Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移，避免完全叠加难发现
+        Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
         _plugins = PluginCatalog.Load(Arg("--plugins") ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "plugins")));
         _engine = new(_plugins);
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
@@ -68,6 +72,7 @@ public partial class MainWindow : Window
         else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) => await CompareAsync();
     }
     private string? Arg(string name) { int i = Array.IndexOf(_arguments, name); return i >= 0 && i + 1 < _arguments.Length ? _arguments[i + 1] : null; }
+    private void NewWindowClick(object sender, RoutedEventArgs e) => new MainWindow([]).Show();
     private void BrowseFile(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog { Title = "选择比较文件" };
@@ -391,6 +396,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         { e.Handled = true; if (TextView.Visibility == Visibility.Visible) { FindBox.Focus(); FindBox.SelectAll(); } else { FolderSearch.Focus(); FolderSearch.SelectAll(); } }
         else if (e.Key == Key.F3) { e.Handled = true; if (TextView.Visibility == Visibility.Visible) await FindNext(); }
+        else if (e.Key == Key.N && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { e.Handled = true; NewWindowClick(sender, e); }
         else if (e.Key == Key.Escape) { SettingsToggle.IsChecked = false; CancelClick(sender, e); }
         else if (e.SystemKey == Key.Left && _folderResult is not null) { SetView(false); e.Handled = true; }
         else if (e.SystemKey is Key.Up or Key.Down && TextView.Visibility == Visibility.Visible) { e.Handled = true; await NavigateFile(e.SystemKey == Key.Up ? -1 : 1); }

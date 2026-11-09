@@ -57,6 +57,12 @@ public partial class MainWindow
             Require(_leftBuffer.Text == cssLeft, "Format undo must restore in one step");
             var splitter = _plugins.GetAll<ILineSplitter>().FirstOrDefault(s => s.CanSplit(LeftPath.Text, "a { color: red; background: blue }"))
                 ?? throw new InvalidOperationException("css splitter missing");
+            // Multi-line selection (as produced by number-column Shift clicks) feeds the batch range.
+            var firstLine = RightCode.Line(1) ?? throw new InvalidOperationException("right line 1");
+            var secondLine = RightCode.Line(2) ?? throw new InvalidOperationException("right line 2");
+            RightCode.SetCaret(firstLine.Offset);
+            RightCode.SetCaret(secondLine.Offset + secondLine.Length, extend: true);
+            Require(RightCode.SelectedSourceLines().SequenceEqual(new[] { 1, 2 }), "Selection range lines");
             ApplySplit(RightCode, splitter, [1]); await _editTask;
             Require(_rightBuffer!.Text.Split('\n').Length > 3 && _rightBuffer.Text.Contains("color: blue"), "Split output");
             HistoryRequested(RightCode, false); await _editTask;

@@ -37,12 +37,15 @@ public sealed partial class DiffPane
         RefreshBufferCache();
         return sourceLine >= 1 && sourceLine <= _documentLines.Count ? _documentLines[sourceLine - 1] : null;
     }
-    /// <summary>Source lines covered by the current selection (text selection in edit mode).</summary>
+    /// <summary>Source lines covered by the current selection (text selection in edit mode).
+    /// The virtual EOF caret row does not count as a line.</summary>
     public IReadOnlyList<int> SelectedSourceLines()
     {
         RefreshBufferCache();
         if (Buffer is null || _documentLines.Count == 0) return [];
         int first = LineAt(Math.Min(_caret, _selectionAnchor)), last = LineAt(Math.Max(_caret, _selectionAnchor));
+        if (first >= _documentLines.Count) return [];
+        last = Math.Min(last, _documentLines.Count - 1);
         return [.. Enumerable.Range(first + 1, last - first + 1)];
     }
     private IReadOnlyList<DocumentLine> _documentLines = [];
@@ -135,8 +138,16 @@ public sealed partial class DiffPane
         SetCaret(offset, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift), false);
         if (point.X < 54)
         {
+            // Number-column click: select the whole line; Shift extends from the anchor line so
+            // multi-line selections feed the batch line-split menu.
             int line = LineAt(offset);
-            if (line < _documentLines.Count) { _selectionAnchor = _documentLines[line].Offset; _caret = _selectionAnchor + _documentLines[line].Length; }
+            if (line < _documentLines.Count)
+            {
+                int first = line, last = line;
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) { int anchor = LineAt(_selectionAnchor); first = Math.Min(anchor, line); last = Math.Max(anchor, line); }
+                else _selectionAnchor = _documentLines[first].Offset;
+                _caret = _documentLines[last].Offset + _documentLines[last].Length;
+            }
         }
         else if (e.ClickCount == 2 && Buffer is not null)
         {
