@@ -35,8 +35,8 @@ var rowsList = ((Grid)window.Content!).Children.OfType<TabControl>().Single().It
 window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
 var cellEditor = (rowsList.ContainerFromIndex(0) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
 Check(cellEditor is not null, "inline cell editor realized");
-var cssRow = (rowsList.ContainerFromIndex(rowsList.ItemCount - 1) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
-Check(cssRow?.ContextMenu is { ItemCount: > 0 }, "css line offers split context menu");
+var cssMenuRow = rowsList.Items.OfType<AlignedRow>().First(r => r.Left?.Text.StartsWith("--bg:") == true);
+Check(window.CreateSplitMenu(cssMenuRow, false) is { ItemCount: > 0 }, "css line offers split context menu");
 cellEditor!.Text += " // edited";
 Dispatcher.UIThread.RunJobs();
 Check(((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "inline cell edit marks session dirty");
@@ -50,8 +50,8 @@ var cssRows = rowsList.Items.OfType<AlignedRow>().Where(r => r.Left?.Text.Starts
 Check(cssRows.Count == 2, "two css rows present for batch split");
 rowsList.SelectedItems?.Clear();
 foreach (var r in cssRows) rowsList.SelectedItems!.Add(r);
-var splitItem = cssRow!.ContextMenu!.Items.OfType<MenuItem>().First();
-splitItem.Tag = cssRows.Count;   // 模拟右键时隧道处理器写入的批量数
+var splitItem = window.CreateSplitMenu(cssRows[0], false)!.Items.OfType<MenuItem>().First();
+Check(((string?)splitItem.Header)?.Contains("2 行") == true, "split menu reports batch row count");
 splitItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
 int before = rowsList.ItemCount;
@@ -70,9 +70,7 @@ rowsList.SelectedItems!.Add(gapRow);
 rowsList.ScrollIntoView(gapRow);
 Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
 int gapIndex = allRows2.IndexOf(gapRow);
-var gapEditor = (rowsList.ContainerFromIndex(gapIndex) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
-var gapItem = gapEditor!.ContextMenu!.Items.OfType<MenuItem>().First();
-gapItem.Tag = 1;
+var gapItem = window.CreateSplitMenu(gapRow, false)!.Items.OfType<MenuItem>().First();
 int autoBefore = rowsList.ItemCount;
 gapItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();

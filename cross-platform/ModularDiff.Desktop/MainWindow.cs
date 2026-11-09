@@ -31,6 +31,7 @@ public sealed class MainWindow : Window
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
     private int _selectionAnchor = -1;
+    private bool _dragSelecting;
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
     {
@@ -79,7 +80,16 @@ public sealed class MainWindow : Window
             if (row is null) return new TextBlock();
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
             grid.Children.Add(Cell(row, true)); var right = Cell(row, false); Grid.SetColumn(right, 1); grid.Children.Add(right);
-            return new Border { Child = grid };
+            var border = new Border { Child = grid };
+            // 右键任意位置(含行号、边距):按点击侧懒构建"换行"菜单 —— 修菜单时灵时不灵,且行号也可右键。
+            border.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
+            {
+                if (e.GetCurrentPoint(border).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
+                if (_rows.SelectedItems is { } selection && !selection.Contains(row)) _rows.SelectedItem = row;
+                bool leftSide = e.GetPosition(border).X <= border.Bounds.Width / 2;
+                border.ContextMenu = CreateSplitMenu(row, leftSide);
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            return border;
         });
         _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
             file is null ? new TextBlock() : Columns(
@@ -126,37 +136,79 @@ public sealed class MainWindow : Window
         var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         editor.TextChanged += (_, _) => CellEdited(row, left, editor);
         editor.GotFocus += (_, _) => _rows.SelectedItem = row;   // 聚焦单元格即选中所在行,供差异块合并等操作使用
-        number.PointerPressed += (_, e) => { SelectRows(row, e.KeyModifiers); e.Handled = true; };   // 行号区:多选入口
-        var splitters = _plugins.GetAll<ILineSplitter>()
-            .Where(s => cell is not null && s.CanSplit((left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "", cell.Text))
-            .ToArray();
-        if (splitters.Length > 0)
+        // 未聚焦时右键单元格不出文本编辑菜单(让整行的"换行"菜单接管);左键聚焦后右键才是编辑菜单。
+        editor.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
         {
-            var menu = new ContextMenu();
-            var pairs = new List<(MenuItem Item, ILineSplitter Splitter)>();
-            foreach (var splitter in splitters)
-            {
-                var item = new MenuItem { Header = "换行 · " + splitter.DisplayName, Tag = 1 };
-                item.Click += (_, _) => { if (item.Tag is int n && n > 1) ApplySplitBatch(left, splitter); else ApplySplit(row, left, splitter); };
-                pairs.Add((item, splitter));
-                menu.Items.Add(item);
-            }
-            editor.ContextMenu = menu;
-            editor.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
-            {
-                if (e.GetCurrentPoint(editor).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
-                if (_rows.SelectedItems is { } selection && !selection.Contains(row)) _rows.SelectedItem = row;
-                foreach (var (item, splitter) in pairs)
-                {
-                    int batch = CountSplittable(left, splitter);
-                    item.Tag = batch;
-                    item.Header = batch > 1 ? $"换行 · {splitter.DisplayName}（{batch} 行）" : "换行 · " + splitter.DisplayName;
-                }
-            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        }
+            if (e.GetCurrentPoint(editor).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
+            editor.ContextMenu = editor.IsFocused ? TextMenu(editor) : null;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // 行号区:单击/Shift 范围/Cmd 点选,以及按住左键拖动连续选择多行。
+        number.PointerPressed += (_, e) =>
+        {
+            if (!e.GetCurrentPoint(number).Properties.IsLeftButtonPressed) return;
+            SelectRows(row, e.KeyModifiers);
+            _dragSelecting = true;
+            e.Pointer.Capture(number);
+            e.Handled = true;
+        };
+        number.AddHandler(Avalonia.Input.InputElement.PointerMovedEvent, (_, e) =>
+        {
+            if (!_dragSelecting) return;
+            int target = RowIndexAt(e.GetPosition(_rows));
+            if (target >= 0) SelectRange(_selectionAnchor, target);
+        });
+        number.PointerReleased += (_, e) =>
+        {
+            if (!_dragSelecting) return;
+            _dragSelecting = false;
+            e.Pointer.Capture(null);
+        };
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         line.Children.Add(number); Grid.SetColumn(editor, 1); line.Children.Add(editor); Grid.SetColumn(ending, 2); line.Children.Add(ending);
         return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
+    }
+    private static ContextMenu TextMenu(TextBox editor)
+    {
+        var menu = new ContextMenu();
+        void Add(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        Add("撤销", editor.Undo); Add("重做", editor.Redo);
+        menu.Items.Add(new Separator());
+        Add("剪切", editor.Cut); Add("复制", editor.Copy); Add("粘贴", editor.Paste); Add("全选", editor.SelectAll);
+        return menu;
+    }
+    /// <summary>按点击侧构建换行菜单;批量数按当前选中集合实时统计(右键时懒构建,不再有陈旧菜单)。</summary>
+    public ContextMenu? CreateSplitMenu(AlignedRow row, bool left)
+    {
+        var cell = left ? row.Left : row.Right;
+        if (cell is null) return null;
+        string path = (left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "";
+        var splitters = _plugins.GetAll<ILineSplitter>().Where(s => s.CanSplit(path, cell.Text)).ToArray();
+        if (splitters.Length == 0) return null;
+        var menu = new ContextMenu();
+        foreach (var splitter in splitters)
+        {
+            var chosen = splitter;
+            int batch = CountSplittable(left, chosen);
+            var item = new MenuItem { Header = batch > 1 ? $"换行 · {chosen.DisplayName}（{batch} 行）" : "换行 · " + chosen.DisplayName, Tag = Math.Max(1, batch) };
+            item.Click += (_, _) => { if (item.Tag is int n && n > 1) ApplySplitBatch(left, chosen); else ApplySplit(row, left, chosen); };
+            menu.Items.Add(item);
+        }
+        return menu;
+    }
+    private int RowIndexAt(Avalonia.Point point)
+    {
+        for (int i = 0; i < _rows.ItemCount; i++)
+        {
+            if (_rows.ContainerFromIndex(i) is not Control container) continue;
+            var relative = _rows.TranslatePoint(point, container);
+            if (relative is { } p && p.Y >= 0 && p.Y < container.Bounds.Height) return i;
+        }
+        return -1;
     }
     private void Realign()
     {
@@ -172,8 +224,7 @@ public sealed class MainWindow : Window
         bool toggle = modifiers.HasFlag(Avalonia.Input.KeyModifiers.Control) || modifiers.HasFlag(Avalonia.Input.KeyModifiers.Meta);
         if (modifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift) && _selectionAnchor >= 0)
         {
-            selected.Clear();
-            for (int i = Math.Min(_selectionAnchor, index); i <= Math.Max(_selectionAnchor, index) && i < rows.Count; i++) selected.Add(rows[i]);
+            SelectRange(_selectionAnchor, index);
         }
         else if (toggle)
         {
@@ -181,6 +232,12 @@ public sealed class MainWindow : Window
             _selectionAnchor = index;
         }
         else { selected.Clear(); selected.Add(row); _selectionAnchor = index; }
+    }
+    private void SelectRange(int anchor, int target)
+    {
+        if (_rows.ItemsSource is not IReadOnlyList<AlignedRow> rows || _rows.SelectedItems is not { } selected || anchor < 0 || target < 0) return;
+        selected.Clear();
+        for (int i = Math.Min(anchor, target); i <= Math.Max(anchor, target) && i < rows.Count; i++) selected.Add(rows[i]);
     }
     private static int IndexOf(IReadOnlyList<AlignedRow> rows, AlignedRow row)
     {
