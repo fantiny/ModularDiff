@@ -1,5 +1,7 @@
+using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using ModularDiff.Comparison.Tables;
 using ModularDiff.Contracts;
 using ModularDiff.Core;
 
@@ -26,6 +28,55 @@ try
     await SafetyTests.Run(catalog, temp, Test);
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
+
+    await Test("Tables module: RFC4180 csv, cell alignment, xlsx sheets", async () =>
+    {
+        string dir = Path.Combine(temp, "tables"); Directory.CreateDirectory(dir);
+
+        var parsed = TableComparisonModule.ParseDelimited("Name,Score\r\n\"Ann, M.\",90\r\nBob,\"a,\"\"b\"\r\n", ',');
+        Check(parsed.Length == 3 && parsed[0].SequenceEqual(["Name", "Score"]), "csv header");
+        Check(parsed[1].SequenceEqual(["Ann, M.", "90"]), "quoted separator stays inside the field");
+        Check(parsed[2].SequenceEqual(["Bob", "a,\"b"]), "doubled quotes unescape to one");
+        Check(TableComparisonModule.ParseDelimited("a\tb\nc\td\r\n", '\t').Length == 2, "tsv rows");
+
+        string a = Path.Combine(dir, "a.csv"), b = Path.Combine(dir, "b.csv");
+        await File.WriteAllTextAsync(a, "id,name\n1,Ann\n2,Bob\n");
+        await File.WriteAllTextAsync(b, "id,name,extra\n1,Ann\n2,Bob,X\n");
+        var result = await engine.CompareAsync(new(a, b, "myers"));
+        var file = result.Files.Single();
+        Check(result.ModuleId == "tables" && file.Status == FileStatus.Modified, "auto routing and status");
+        var view = catalog.GetAll<ITextPresentation>().First(p => p.Id == "side-by-side").Build(file.Lines);
+        var headerRow = view.Rows.FirstOrDefault(r => r.Right?.Text.Contains("extra") == true)
+            ?? throw new InvalidOperationException("header row not found in " + string.Join("|", view.Rows.Select(r => r.Left?.Text + "/" + r.Right?.Text)));
+        Check(headerRow.Left?.Text == "id │ name │ ", "inserted column pads the left row: [" + headerRow.Left?.Text + "]");
+        Check(headerRow.Right?.Text == "id │ name │ extra", "right row keeps the new column face to face: " + headerRow.Right?.Text);
+        Check(view.Rows.Any(r => r.Right?.Text.EndsWith("│ X") == true), "changed row aligns the extra cell");
+
+        byte[] MinimalXlsx(string sheet, string[][] cells)
+        {
+            using var output = new MemoryStream();
+            using (var archive = new ZipArchive(output, ZipArchiveMode.Create))
+            {
+                void Put(string path, string xml) { var entry = archive.CreateEntry(path); using var writer = new StreamWriter(entry.Open()); writer.Write(xml); }
+                Put("[Content_Types].xml", """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>""");
+                Put("xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheet name=\"" + sheet + "\" sheetId=\"1\" r:id=\"rId1\"/></workbook>");
+                Put("xl/_rels/workbook.xml.rels", """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""");
+                Put("xl/sharedStrings.xml", """<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>你好</t></si></sst>""");
+                var rowsXml = string.Concat(cells.Select((row, r) => "<row r=\"" + (r + 1) + "\">" +
+                    string.Concat(row.Select((cell, c) => "<c r=\"" + (char)('A' + c) + (r + 1) + "\"" + (cell == "你" ? " t=\"s\"" : "") + "><v>" + (cell == "你" ? "0" : cell) + "</v></c>")) + "</row>"));
+                Put("xl/worksheets/sheet1.xml", """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""" + rowsXml + "</sheetData></worksheet>");
+            }
+            return output.ToArray();
+        }
+        string leftX = Path.Combine(dir, "t-a.xlsx"), rightX = Path.Combine(dir, "t-b.xlsx");
+        await File.WriteAllBytesAsync(leftX, MinimalXlsx("数据", [["你", "7"], ["x", "2"]]));
+        await File.WriteAllBytesAsync(rightX, MinimalXlsx("数据", [["你", "7"], ["x", "3"]]));
+        var sheets = await TableComparisonModule.ParseAsync(leftX, default);
+        Check(sheets[0][0] == "── Sheet: 数据 ──", "sheet name row: " + sheets[0][0]);
+        Check(sheets[1].SequenceEqual(["你好", "7"]), "shared string + numeric cell: [" + string.Join(",", sheets[1]) + "]");
+        result = await engine.CompareAsync(new(leftX, rightX, "myers"));
+        Check(result.ModuleId == "tables" && result.Files.Single().Status == FileStatus.Modified, "xlsx routes and differs");
+    });
 
     await Test("Pictures module: header sizes, byte segments, auto routing", async () =>
     {

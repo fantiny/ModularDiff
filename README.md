@@ -17,6 +17,7 @@
 - **不重要差异规则**：正则把匹配文本（如 `$Id$`、版本号、时间戳）标记为不重要，不产生差异块——配置与代码评审利器（CLI `--unimportant`，GUI 规则框每行一条）。
 - **十六进制比较**：二进制文件并排 hex dump，差异字节红色高亮、共享偏移列、自动定位首个差异，虚拟化渲染支持大文件。
 - **图片比较**：PNG / JPEG / BMP / GIF 并排显示，尺寸一致时右侧叠加半透明红色差异像素；尺寸与差异段直接从文件头解析，无图像库依赖。
+- **表格比较**：CSV / TSV / XLSX 按单元格对齐——行用比较算法对齐，变更行的单元格再做列级对齐（插入列自动补空槽、同列面对面、单元格级高亮）；RFC 4180 引号语义、xlsx 多工作表与共享字符串全支持，行视图 / 差异块 / 报告导出全部复用。
 - **HTML 报告**：`--format html` 输出自包含着色并排报告，适合存档与分享（CLI 与 GUI 导出均可用）。
 - **资源管理器集成**（Windows，可选）：`ModularDiff Compare / Select Left / Compare to '<名称>'` 系列右键命令，随选中数量与记忆的左侧动态出现（与 Beyond Compare 同类的原生 COM 菜单扩展）。
 
@@ -57,7 +58,7 @@ CLI 用法：
 
 CLI 退出码：`0` 相同、`1` 有差异、`2` 错误或比较不完整、`130` 取消；发现差异返回 `1` 是正常行为，便于脚本集成。`--output` 要求新文件，避免无提示覆盖已有报告。
 
-常用选项：`--module files|directories|pictures`、`--plugins PATH`、`--algorithm ID`、`--format ID`、`--ignore-case`、`--ignore-whitespace`、`--ignore-eol`、`--unimportant REGEX`（可重复，标记不重要文本）、`--no-recursive`、`--max-text-mb N`。算法、模块、输出格式参数均为插件 ID，不是写死的枚举；两个图片文件会自动选择 pictures 模块。
+常用选项：`--module files|directories|pictures|tables`、`--plugins PATH`、`--algorithm ID`、`--format ID`、`--ignore-case`、`--ignore-whitespace`、`--ignore-eol`、`--unimportant REGEX`（可重复，标记不重要文本）、`--no-recursive`、`--max-text-mb N`。算法、模块、输出格式参数均为插件 ID，不是写死的枚举；图片对自动选 pictures、表格对（csv/tsv/xlsx）自动选 tables。
 
 ## 项目结构
 

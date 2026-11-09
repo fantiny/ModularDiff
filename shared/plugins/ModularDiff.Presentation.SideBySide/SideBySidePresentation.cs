@@ -11,10 +11,10 @@ public sealed class SideBySidePresentation : ITextPresentation
     {
         if (contextLines < -1) throw new ArgumentOutOfRangeException(nameof(contextLines));
         var rows = new List<AlignedRow>(); var hunks = new List<DiffHunk>();
-        TextCell? Cell(DiffLine? line, bool left, IReadOnlyList<HighlightSpan>? spans = null)
+        TextCell? Cell(DiffLine? line, bool left, IReadOnlyList<HighlightSpan>? spans = null, string? text = null)
         {
             int? number = left ? line?.LeftLine : line?.RightLine;
-            return number is null ? null : new(number.Value, (left ? line!.LeftText : line!.RightText) ?? "",
+            return number is null ? null : new(number.Value, text ?? (left ? line!.LeftText : line!.RightText) ?? "",
                 (left ? line!.LeftEnding : line!.RightEnding) ?? "EOF", spans ?? []);
         }
         for (int index = 0; index < lines.Count;)
@@ -36,8 +36,11 @@ public sealed class SideBySidePresentation : ITextPresentation
             // This is display alignment only; the algorithm's edit script is never rewritten.
             foreach (var (a, b) in Align(deletes, inserts, cancellationToken))
             {
-                var (leftSpans, rightSpans) = Highlight(a?.LeftText, b?.RightText);
-                rows.Add(new(rows.Count, Cell(a, true, leftSpans), Cell(b, false, rightSpans), id));
+                string? leftText = a?.LeftText, rightText = b?.RightText;
+                if (leftText is not null && rightText is not null && leftText.Contains(CellSeparator) && rightText.Contains(CellSeparator))
+                    (leftText, rightText) = AlignCells(leftText, rightText);
+                var (leftSpans, rightSpans) = Highlight(leftText, rightText);
+                rows.Add(new(rows.Count, Cell(a, true, leftSpans, leftText), Cell(b, false, rightSpans, rightText), id));
             }
             hunks.Add(new(id, start, rows.Count - 1));
         }
@@ -54,6 +57,37 @@ public sealed class SideBySidePresentation : ITextPresentation
             filtered.Add(new(begin, null, null, HiddenLines: i - begin));
         }
         return new(filtered, hunks, rows.Count);
+    }
+
+    /// <summary>Table rows (joined with " │ ") align their cells so equal columns stay face to
+    /// face: nearby matches keep their slots, insertions/deletions get blank slots.</summary>
+    private const string CellSeparator = " │ ";
+    private static (string Left, string Right) AlignCells(string left, string right)
+    {
+        var a = left.Split(CellSeparator);
+        var b = right.Split(CellSeparator);
+        if ((long)a.Length * b.Length > 4096) return (left, right);
+        var outA = new List<string>(); var outB = new List<string>();
+        static int Near(string[] values, int from, string value, int limit)
+        {
+            for (int i = from; i < Math.Min(values.Length, from + limit); i++)
+                if (values[i] == value) return i;
+            return -1;
+        }
+        int i = 0, j = 0;
+        while (i < a.Length && j < b.Length)
+        {
+            if (a[i] == b[j]) { outA.Add(a[i++]); outB.Add(b[j++]); continue; }
+            int bAhead = Near(b, j, a[i], 9), aAhead = Near(a, i, b[j], 9);
+            if (bAhead >= 0 && (aAhead < 0 || bAhead - j <= aAhead - i))
+                while (j < bAhead) { outA.Add(""); outB.Add(b[j++]); }              // inserted column
+            else if (aAhead >= 0)
+                while (i < aAhead) { outA.Add(a[i++]); outB.Add(""); }              // deleted column
+            else { outA.Add(a[i++]); outB.Add(b[j++]); }                            // changed cell, face to face
+        }
+        while (i < a.Length) { outA.Add(a[i++]); outB.Add(""); }
+        while (j < b.Length) { outA.Add(""); outB.Add(b[j++]); }
+        return (string.Join(CellSeparator, outA), string.Join(CellSeparator, outB));
     }
 
     private static IReadOnlyList<(DiffLine? Left, DiffLine? Right)> Align(List<DiffLine> left, List<DiffLine> right, CancellationToken token)
