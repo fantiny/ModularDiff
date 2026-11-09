@@ -74,6 +74,7 @@ public partial class MainWindow : Window
     }
     private string? Arg(string name) { int i = Array.IndexOf(_arguments, name); return i >= 0 && i + 1 < _arguments.Length ? _arguments[i + 1] : null; }
     private void NewWindowClick(object sender, RoutedEventArgs e) => new MainWindow([]).Show();
+    private void MergeWindowClick(object sender, RoutedEventArgs e) => new MergeWindow().Show();
 
     /// <summary>One regex per line; invalid patterns fail the comparison with a clear message.</summary>
     private IReadOnlyList<string>? ParseUnimportantPatterns()

@@ -15,6 +15,11 @@ public partial class App : Application
                 if (args[0] == "--shell-install") ExplorerIntegration.Install(); else ExplorerIntegration.Uninstall();
                 Shutdown(); return;
             }
+            if (args.Length == 4 && args[0] == "--merge")
+            {
+                new MergeWindow(args[1], args[2], args[3]).Show();
+                return;
+            }
             new MainWindow(args).Show();
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ModularDiff startup error"); Shutdown(2); }

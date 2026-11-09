@@ -38,6 +38,8 @@ try
     });
 
     await MenuPlanTests.Run(Test);
+    MergeTests.Catalog = catalog;
+    await MergeTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
     await Test("Presentation highlights word-level differences as separate spans", () =>

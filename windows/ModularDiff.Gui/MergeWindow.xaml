@@ -1,0 +1,38 @@
+<Window x:Class="ModularDiff.Gui.MergeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="三路合并 — ModularDiff" Width="1100" Height="760" MinWidth="760" MinHeight="480"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <TextBlock Text="公共祖先 (base)" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="BasePath" Grid.Column="1" Margin="0,4" ToolTip="三方共同的原始版本"/>
+            <Button Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseBase"/>
+            <TextBlock Text="左侧 (我的修改)" Grid.Row="1" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="LeftPath" Grid.Row="1" Grid.Column="1" Margin="0,4" ToolTip="这一侧的修改，冲突时标记为 LEFT"/>
+            <Button Grid.Row="1" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseLeft"/>
+            <TextBlock Text="右侧 (对方的修改)" Grid.Row="2" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="RightPath" Grid.Row="2" Grid.Column="1" Margin="0,4" ToolTip="另一侧的修改，冲突时标记为 RIGHT"/>
+            <Button Grid.Row="2" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseRight"/>
+        </Grid>
+        <WrapPanel Grid.Row="1" Margin="0,2,0,6">
+            <Button Content="合并" Background="#3569AE" Foreground="White" Padding="14,4" Click="MergeClick" ToolTip="执行三路合并：不同位置的修改自动合入，同一位置的分歧标为冲突"/>
+            <Button x:Name="PreviousConflict" Content="◀ 上一冲突" Margin="16,0,4,0" Click="PreviousConflictClick" IsEnabled="False"/>
+            <Button x:Name="NextConflict" Content="下一冲突 ▶" Margin="4,0,12,0" Click="NextConflictClick" IsEnabled="False"/>
+            <TextBlock x:Name="ConflictLabel" VerticalAlignment="Center" Foreground="#A35D39" Margin="0,0,16,0" Text="未合并"/>
+            <Button x:Name="TakeLeft" Content="取左侧" Margin="4,0" Click="TakeLeftClick" IsEnabled="False" ToolTip="当前冲突采用左侧版本"/>
+            <Button x:Name="TakeRight" Content="取右侧" Margin="4,0" Click="TakeRightClick" IsEnabled="False" ToolTip="当前冲突采用右侧版本"/>
+            <Button x:Name="Save" Content="保存结果…" Margin="16,0,4,0" Click="SaveClick" IsEnabled="False"/>
+        </WrapPanel>
+        <Border Grid.Row="2" BorderBrush="#DDE3EC" BorderThickness="1">
+            <RichTextBox x:Name="Result" FontFamily="Consolas" FontSize="13" AcceptsTab="True" VerticalScrollBarVisibility="Auto"
+                         HorizontalScrollBarVisibility="Auto" TextChanged="ResultChanged" ToolTip="合并结果，可直接编辑；冲突块以标记行分隔"/>
+        </Border>
+        <TextBlock x:Name="StatusLabel" Grid.Row="3" Margin="0,8,0,0" Foreground="#667085" Text="填写三个路径后点击“合并”。"/>
+    </Grid>
+</Window>

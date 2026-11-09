@@ -13,6 +13,7 @@ try
             ModularDiff — composable file and directory comparison
               ModularDiff.Cli plugins [--plugins PATH]
               ModularDiff.Cli compare LEFT RIGHT [options]
+              ModularDiff.Cli merge BASE LEFT RIGHT [--output PATH]
 
             Options:
               --algorithm myers|patience    Algorithm plugin ID (default myers)
@@ -28,13 +29,15 @@ try
               --max-text-mb N               Larger files use exact streaming byte comparison
 
             Exit codes: 0 equal, 1 different, 2 error/incomplete, 130 cancelled.
+            merge: 0 merged cleanly, 1 conflicts (marked in output), 2 error.
             Directory reports contain summaries; compare an individual file for line edits.
             """);
         return 0;
     }
     var command = args[0];
-    if (command is not ("plugins" or "compare")) throw new ArgumentException($"Unknown command: {command}");
-    int start = command == "compare" ? 3 : 1;
+    if (command is not ("plugins" or "compare" or "merge")) throw new ArgumentException($"Unknown command: {command}");
+    int start = command == "merge" ? 4 : command == "compare" ? 3 : 1;
+    if (command == "merge" && args.Length < 4) throw new ArgumentException("merge requires BASE LEFT RIGHT paths.");
     if (args.Length < start) throw new ArgumentException("compare requires LEFT and RIGHT paths.");
     var values = new Dictionary<string, string>(StringComparer.Ordinal);
     var flags = new HashSet<string>(StringComparer.Ordinal);
@@ -63,6 +66,19 @@ try
         foreach (var plugin in catalog.GetAll<IPlugin>())
             Console.WriteLine($"{plugin.Id,-15} {plugin.DisplayName} [{string.Join(", ", plugin.GetType().GetInterfaces().Where(t => t != typeof(IPlugin) && typeof(IPlugin).IsAssignableFrom(t)).Select(t => t.Name))}]");
         return 0;
+    }
+    if (command == "merge")
+    {
+        foreach (string input in new[] { args[1], args[2], args[3] })
+            if (!File.Exists(input)) throw new ArgumentException($"Merge input not found: {input}");
+        string[] Read(string path) => File.ReadAllText(path).Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+        var merged = ThreeWayMerger.Merge(Read(args[1]), Read(args[2]), Read(args[3]), Value("--algorithm", "myers"), catalog, cancellation.Token);
+        string newLine = File.ReadAllText(args[2]).Contains("\r\n") ? "\r\n" : "\n";   // result follows the left file's ending style
+        string mergedText = merged.Compose(Path.GetFileName(args[2]), Path.GetFileName(args[3]), newLine);
+        if (values.TryGetValue("--output", out string? mergeOutput)) File.WriteAllText(mergeOutput, mergedText);
+        else Console.Write(mergedText);
+        Console.Error.WriteLine(merged.Clean ? "合并完成，无冲突。" : $"{merged.Conflicts} 处冲突，已用 <<<<<<< / >>>>>>> 标记。");
+        return merged.Clean ? 0 : 1;
     }
     long maxBytes = 8 * 1024 * 1024;
     if (values.TryGetValue("--max-text-mb", out var mb))
