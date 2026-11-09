@@ -152,7 +152,7 @@ try
         await ThrowsAsync<InvalidOperationException>(() => engine.CompareAsync(new("/does-not-exist-left", "/does-not-exist-right")));
         await ThrowsAsync<InvalidOperationException>(() => Text("a", "b", algorithm: "missing"));
     });
-    await Test("Both formatter plugins serialize the real comparison result", async () =>
+    await Test("All formatter plugins serialize the real comparison result", async () =>
     {
         var result = await Text("left\n", "right\n");
         using var json = new StringWriter(); await catalog.Get<IResultFormatter>("json").WriteAsync(result, json);
@@ -161,6 +161,13 @@ try
         Check(parsed.RootElement.GetProperty("Files")[0].GetProperty("Status").GetString() == "Modified", "Enums not readable.");
         using var text = new StringWriter(); await catalog.Get<IResultFormatter>("text").WriteAsync(result, text);
         Check(text.ToString().Contains("left") && text.ToString().Contains("right"), "Text edits missing.");
+        using var html = new StringWriter(); await catalog.Get<IResultFormatter>("html").WriteAsync(result, html);
+        string page = html.ToString();
+        Check(page.StartsWith("<!DOCTYPE html>") && page.Contains("<td class=\"code\">left</td>") && page.Contains("<td class=\"code\">right</td>"), "HTML rows missing.");
+        Check(!page.Contains("<script"), "Report must stay self-contained.");
+        var tagged = await Text("<script>alert(1)</script>\n", "ok\n");
+        using var escaped = new StringWriter(); await catalog.Get<IResultFormatter>("html").WriteAsync(tagged, escaped);
+        Check(escaped.ToString().Contains("&lt;script&gt;"), "HTML must escape content.");
     });
     await Test("Malformed manifest isolated, good packages still load", () =>
     {
