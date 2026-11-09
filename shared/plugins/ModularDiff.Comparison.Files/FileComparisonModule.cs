@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using ModularDiff.Contracts;
 
 namespace ModularDiff.Comparison.Files;
@@ -14,6 +15,13 @@ public sealed class FileComparisonModule : IComparisonModule
     {
         var options = request.EffectiveOptions;
         var algorithm = plugins.Get<IDiffAlgorithm>(request.AlgorithmId);
+        var unimportant = new List<Regex>();
+        var patternWarnings = new List<string>();
+        foreach (string pattern in options.EffectiveUnimportantPatterns)
+        {
+            try { unimportant.Add(new Regex(pattern, RegexOptions.Compiled, TimeSpan.FromMilliseconds(100))); }
+            catch (ArgumentException) { patternWarnings.Add($"忽略无效的不重要差异规则：{pattern}"); }
+        }
         await using var left = Open(request.LeftPath);
         await using var right = Open(request.RightPath);
         bool bytesEqual = await BytesEqual(left, right, cancellationToken);
@@ -36,6 +44,7 @@ public sealed class FileComparisonModule : IComparisonModule
                 string Key(TextLine line)
                 {
                     var text = line.Text;
+                    foreach (var pattern in unimportant) text = pattern.Replace(text, "");
                     if (options.IgnoreWhitespace) text = string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
                     if (options.IgnoreCase) text = text.ToUpperInvariant();
                     return options.IgnoreLineEndings ? text : text + line.Ending;
@@ -51,7 +60,7 @@ public sealed class FileComparisonModule : IComparisonModule
             }
         }
         progress?.Report(new(1, 1, name));
-        return new(request.LeftPath, request.RightPath, Id, algorithm.Id, [file], []);
+        return new(request.LeftPath, request.RightPath, Id, algorithm.Id, [file], patternWarnings);
     }
 
     private static FileStream Open(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.Read,

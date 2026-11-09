@@ -33,7 +33,8 @@ public partial class MainWindow
         _sessions = _sessions.UpsertNamed(new SavedSession(name!, LeftPath.Text, RightPath.Text,
             (AlgorithmBox.SelectedItem as Contracts.IDiffAlgorithm)?.Id,
             IgnoreCaseBox.IsChecked == true, IgnoreWhitespaceBox.IsChecked == true, IgnoreEolBox.IsChecked == true,
-            RecursiveBox.IsChecked == true, DateTime.Now));
+            RecursiveBox.IsChecked == true, DateTime.Now,
+            UnimportantBox.Text.Length > 0 ? [.. UnimportantBox.Text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0)] : null));
         SessionStore.Save(_sessions);
         RefreshSessionLists();
         SessionBox.SelectedItem = name;
@@ -74,6 +75,7 @@ public partial class MainWindow
         IgnoreWhitespaceBox.IsChecked = session.IgnoreWhitespace;
         IgnoreEolBox.IsChecked = session.IgnoreEol;
         RecursiveBox.IsChecked = session.Recursive;
+        UnimportantBox.Text = session.UnimportantPatterns is { } patterns ? string.Join("\n", patterns) : "";
         if (session.Algorithm is { } id && AlgorithmBox.ItemsSource is System.Collections.IEnumerable algorithms)
             foreach (var plugin in algorithms.OfType<Contracts.IDiffAlgorithm>())
                 if (plugin.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) { AlgorithmBox.SelectedItem = plugin; break; }
@@ -85,7 +87,8 @@ public partial class MainWindow
         try
         {
             _sessions = _sessions.RecordRecent(request.LeftPath, request.RightPath, request.AlgorithmId,
-                request.EffectiveOptions.IgnoreCase, request.EffectiveOptions.IgnoreWhitespace, request.EffectiveOptions.IgnoreLineEndings, request.EffectiveOptions.Recursive);
+                request.EffectiveOptions.IgnoreCase, request.EffectiveOptions.IgnoreWhitespace, request.EffectiveOptions.IgnoreLineEndings, request.EffectiveOptions.Recursive,
+                request.EffectiveOptions.UnimportantPatterns);
             SessionStore.Save(_sessions);
             RefreshSessionLists();
         }

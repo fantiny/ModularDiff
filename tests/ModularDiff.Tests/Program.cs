@@ -26,6 +26,20 @@ try
     await SafetyTests.Run(catalog, temp, Test);
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
+
+    await Test("Unimportant patterns strip matched text before equality", async () =>
+    {
+        var left = "// header\nint Build = 1234;\nstring Tag = \"$Id: abc $\";\n";
+        var right = "// header\nint Build = 5678;\nstring Tag = \"$Id: xyz $\";\n";
+        var strict = await Text(left, right);
+        Check(strict.HasDifferences, "Without rules the build number must differ.");
+        var relaxed = await Text(left, right, new(false, false, false, true,
+            UnimportantPatterns: ["Build = \\d+", "\\$Id[^$]*\\$"]));
+        Check(!relaxed.HasDifferences && relaxed.Files[0].Status == FileStatus.Equal, "Rules must neutralize unimportant text.");
+        Check(relaxed.Files[0].Lines.Count == 3 && relaxed.Files[0].Lines.All(l => l.Kind == EditKind.Equal), "Rows stay aligned and equal.");
+        var warned = await Text(left, right, new(UnimportantPatterns: ["[invalid"]));
+        Check(warned.HasDifferences && warned.Warnings.Any(w => w.Contains("[invalid")), "Invalid regex must warn, not crash.");
+    });
     await Test("myers: budget fallback anchors unique common lines", () =>
     {
         var algorithm = catalog.Get<IDiffAlgorithm>("myers");

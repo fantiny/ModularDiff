@@ -73,6 +73,19 @@ public partial class MainWindow : Window
     }
     private string? Arg(string name) { int i = Array.IndexOf(_arguments, name); return i >= 0 && i + 1 < _arguments.Length ? _arguments[i + 1] : null; }
     private void NewWindowClick(object sender, RoutedEventArgs e) => new MainWindow([]).Show();
+
+    /// <summary>One regex per line; invalid patterns fail the comparison with a clear message.</summary>
+    private IReadOnlyList<string>? ParseUnimportantPatterns()
+    {
+        if (UnimportantBox.Text.Length == 0) return null;
+        var patterns = UnimportantBox.Text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToArray();
+        foreach (string pattern in patterns)
+        {
+            try { _ = new System.Text.RegularExpressions.Regex(pattern); }
+            catch (ArgumentException ex) { throw new InvalidOperationException($"不重要差异规则无效：{pattern}（{ex.Message}）"); }
+        }
+        return patterns.Length > 0 ? patterns : null;
+    }
     private void BrowseFile(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog { Title = "选择比较文件" };
@@ -104,7 +117,8 @@ public partial class MainWindow : Window
             if (string.IsNullOrWhiteSpace(LeftPath.Text) || string.IsNullOrWhiteSpace(RightPath.Text)) throw new InvalidOperationException("请填写左右两侧路径。");
             if (AlgorithmBox.SelectedItem is not IDiffAlgorithm algorithm) throw new InvalidOperationException("没有可用的算法插件。");
             var request = new ComparisonRequest(Path.GetFullPath(LeftPath.Text), Path.GetFullPath(RightPath.Text), algorithm.Id,
-                new(IgnoreCaseBox.IsChecked == true, IgnoreWhitespaceBox.IsChecked == true, IgnoreEolBox.IsChecked == true, RecursiveBox.IsChecked == true));
+                new(IgnoreCaseBox.IsChecked == true, IgnoreWhitespaceBox.IsChecked == true, IgnoreEolBox.IsChecked == true, RecursiveBox.IsChecked == true,
+                    UnimportantPatterns: ParseUnimportantPatterns()));
             string? module = (ModuleBox.SelectedItem as ModuleChoice)?.Id;
             var progress = new Progress<ComparisonProgress>(p => { if (_busy && !token.IsCancellationRequested) StatusLabel.Text = $"比较中 {p.Completed}/{p.Total} · {p.Path}"; });
             StatusLabel.Text = "扫描并比较…";

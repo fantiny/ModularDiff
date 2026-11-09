@@ -37,9 +37,14 @@ public interface ICodeFormatter : IPlugin
     IReadOnlyList<string> Format(IReadOnlyList<string> lines);
 }
 
+// 不重要差异规则:每条是一个正则,行等值判断前把匹配片段从行文本中剔除(如 $Id$、时间戳、版本号)。
 public sealed record ComparisonOptions(
     bool IgnoreCase = false, bool IgnoreWhitespace = false, bool IgnoreLineEndings = false,
-    bool Recursive = true, long MaxTextBytes = 8 * 1024 * 1024);
+    bool Recursive = true, long MaxTextBytes = 8 * 1024 * 1024,
+    IReadOnlyList<string>? UnimportantPatterns = null)
+{
+    public IReadOnlyList<string> EffectiveUnimportantPatterns => UnimportantPatterns ?? [];
+}
 public sealed record ComparisonRequest(string LeftPath, string RightPath, string AlgorithmId = "myers",
     ComparisonOptions? Options = null)
 {

@@ -6,7 +6,8 @@ namespace ModularDiff.Core;
 /// <summary>A remembered comparison: named sessions are user-saved; recent entries are recorded automatically.</summary>
 public sealed record SavedSession(
     string Name, string Left, string Right, string? Algorithm,
-    bool IgnoreCase, bool IgnoreWhitespace, bool IgnoreEol, bool Recursive, DateTime SavedAt);
+    bool IgnoreCase, bool IgnoreWhitespace, bool IgnoreEol, bool Recursive, DateTime SavedAt,
+    IReadOnlyList<string>? UnimportantPatterns = null);
 
 /// <summary>Persisted session lists shared by the GUIs (WPF and Desktop) through one JSON file,
 /// mirroring Beyond Compare's named sessions and recent-comparations lists.</summary>
@@ -56,11 +57,11 @@ public static class SessionStore
 
     /// <summary>Records an automatic recent comparison; identical path pairs move to the front, limited to <see cref="RecentLimit"/>.</summary>
     public static SessionFile RecordRecent(this SessionFile sessions, string left, string right, string? algorithm,
-        bool ignoreCase, bool ignoreWhitespace, bool ignoreEol, bool recursive)
+        bool ignoreCase, bool ignoreWhitespace, bool ignoreEol, bool recursive, IReadOnlyList<string>? unimportant = null)
     {
         bool SamePair(SavedSession s) =>
             string.Equals(s.Left, left, StringComparison.OrdinalIgnoreCase) && string.Equals(s.Right, right, StringComparison.OrdinalIgnoreCase);
-        var entry = new SavedSession("", left, right, algorithm, ignoreCase, ignoreWhitespace, ignoreEol, recursive, DateTime.Now);
+        var entry = new SavedSession("", left, right, algorithm, ignoreCase, ignoreWhitespace, ignoreEol, recursive, DateTime.Now, unimportant);
         var recent = sessions.Recent.Where(s => !SamePair(s)).Prepend(entry).Take(RecentLimit);
         return new(sessions.Named, [.. recent]);
     }
@@ -82,7 +83,9 @@ public static class SessionStore
                     item.TryGetProperty("IgnoreWhitespace", out var ignoreWhitespace) && ignoreWhitespace.GetBoolean(),
                     item.TryGetProperty("IgnoreEol", out var ignoreEol) && ignoreEol.GetBoolean(),
                     !item.TryGetProperty("Recursive", out var recursive) || recursive.GetBoolean(),
-                    item.TryGetProperty("SavedAt", out var savedAt) && DateTime.TryParse(savedAt.GetString(), out var stamp) ? stamp : DateTime.MinValue));
+                    item.TryGetProperty("SavedAt", out var savedAt) && DateTime.TryParse(savedAt.GetString(), out var stamp) ? stamp : DateTime.MinValue,
+                    item.TryGetProperty("UnimportantPatterns", out var patterns) && patterns.ValueKind == JsonValueKind.Array
+                        ? [.. patterns.EnumerateArray().Select(p => p.GetString() ?? "").Where(p => p.Length > 0)] : null));
             }
             catch (KeyNotFoundException) { /* skip malformed entries, keep the rest loadable */ }
         }

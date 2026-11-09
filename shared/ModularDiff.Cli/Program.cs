@@ -23,6 +23,7 @@ try
               --ignore-case                Ignore invariant character case
               --ignore-whitespace          Remove all whitespace within each line
               --ignore-eol                 Ignore CRLF/LF/CR and final-newline differences
+              --unimportant REGEX          Mark regex-matched text as unimportant (repeatable, e.g. '\$Id[^$]*\$')
               --no-recursive               Compare only files at the directory root
               --max-text-mb N               Larger files use exact streaming byte comparison
 
@@ -38,7 +39,8 @@ try
     var values = new Dictionary<string, string>(StringComparer.Ordinal);
     var flags = new HashSet<string>(StringComparer.Ordinal);
     var knownValues = new HashSet<string> { "--algorithm", "--module", "--format", "--output", "--plugins", "--max-text-mb" };
-    var knownFlags = new HashSet<string> { "--ignore-case", "--ignore-whitespace", "--ignore-eol", "--no-recursive" };
+    var knownFlags = new HashSet<string>(StringComparer.Ordinal) { "--ignore-case", "--ignore-whitespace", "--ignore-eol", "--no-recursive" };
+    var unimportant = new List<string>();
     for (int i = start; i < args.Length; i++)
     {
         var option = args[i];
@@ -48,6 +50,7 @@ try
             if (++i >= args.Length || args[i].StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException($"Missing value for {option}");
             if (!values.TryAdd(option, args[i])) throw new ArgumentException($"Repeated option: {option}");
         }
+        else if (option == "--unimportant") { if (++i >= args.Length) throw new ArgumentException("Missing value for --unimportant"); unimportant.Add(args[i]); }
         else throw new ArgumentException($"Unknown option: {option}");
     }
     string Value(string key, string fallback) => values.GetValueOrDefault(key, fallback);
@@ -68,7 +71,8 @@ try
         maxBytes = (long)limit * 1024 * 1024;
     }
     var request = new ComparisonRequest(args[1], args[2], Value("--algorithm", "myers"),
-        new(flags.Contains("--ignore-case"), flags.Contains("--ignore-whitespace"), flags.Contains("--ignore-eol"), !flags.Contains("--no-recursive"), maxBytes));
+        new(flags.Contains("--ignore-case"), flags.Contains("--ignore-whitespace"), flags.Contains("--ignore-eol"), !flags.Contains("--no-recursive"), maxBytes,
+            unimportant.Count > 0 ? unimportant : null));
     var formatter = catalog.Get<IResultFormatter>(Value("--format", "text"));
     var result = await new ComparisonEngine(catalog).CompareAsync(request, values.GetValueOrDefault("--module"), cancellationToken: cancellation.Token);
     if (values.TryGetValue("--output", out var output))
