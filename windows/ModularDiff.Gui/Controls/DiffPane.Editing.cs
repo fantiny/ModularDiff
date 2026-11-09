@@ -11,6 +11,40 @@ public sealed partial class DiffPane
     public int CaretOffset => _caret;
     public event Action<DiffPane, TextEdit>? EditRequested;
     public event Action<DiffPane, bool>? HistoryRequested;
+    public event Action<DiffPane, int>? SplitMenuRequested;
+
+    /// <summary>Right-click on an editable cell: the host builds the line-splitter menu for that row.</summary>
+    protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonDown(e);
+        if (Buffer is null || _rows.Count == 0) return;
+        Focus();
+        if (RowSourceLine(Math.Clamp((int)((e.GetPosition(this).Y + _verticalOffset) / RowHeight), 0, _rows.Count - 1)) >= 0)
+            SplitMenuRequested?.Invoke(this, Math.Clamp((int)((e.GetPosition(this).Y + _verticalOffset) / RowHeight), 0, _rows.Count - 1));
+        e.Handled = true;
+    }
+    /// <summary>Source line number shown at a row, or -1 when this side has no cell there.</summary>
+    public int RowSourceLine(int rowIndex)
+    {
+        RefreshBufferCache();
+        if (rowIndex < 0 || rowIndex >= _rows.Count) return -1;
+        var cell = IsLeft ? _rows[rowIndex].Left : _rows[rowIndex].Right;
+        return cell is not null && cell.LineNumber <= _documentLines.Count ? cell.LineNumber : -1;
+    }
+    public int LineCount { get { RefreshBufferCache(); return _documentLines.Count; } }
+    public DocumentLine? Line(int sourceLine)
+    {
+        RefreshBufferCache();
+        return sourceLine >= 1 && sourceLine <= _documentLines.Count ? _documentLines[sourceLine - 1] : null;
+    }
+    /// <summary>Source lines covered by the current selection (text selection in edit mode).</summary>
+    public IReadOnlyList<int> SelectedSourceLines()
+    {
+        RefreshBufferCache();
+        if (Buffer is null || _documentLines.Count == 0) return [];
+        int first = LineAt(Math.Min(_caret, _selectionAnchor)), last = LineAt(Math.Max(_caret, _selectionAnchor));
+        return [.. Enumerable.Range(first + 1, last - first + 1)];
+    }
     private IReadOnlyList<DocumentLine> _documentLines = [];
     private Dictionary<int, int> _lineRows = [];
     private long _bufferVersion = -1;

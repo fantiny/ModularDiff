@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using ModularDiff.Contracts;
 
 namespace ModularDiff.Gui;
 
@@ -41,9 +42,39 @@ public partial class MainWindow
             LeftCode.ReplaceSelection("// empty-buffer input\r\n"); await _editTask;
             HistoryRequested(LeftCode, false); await _editTask; HistoryRequested(LeftCode, false); await _editTask;
             Require(!_leftBuffer.IsDirty, "Restore after empty edit");
+
+            // Line tools: css-format formatting, css declaration splitting, and ⟳/⚡ realignment.
+            string cssLeft = "a { color: red; background: blue }\nb { margin: 0 }\n";
+            string cssRight = "a { color: blue; background: blue }\nb { margin: 0 }\n";
+            LeftPath.Text = Path.Combine(root, "left.css"); RightPath.Text = Path.Combine(root, "right.css");
+            await File.WriteAllTextAsync(LeftPath.Text, cssLeft); await File.WriteAllTextAsync(RightPath.Text, cssRight);
+            await CompareAsync();
+            Require(_leftBuffer is not null && _rightBuffer is not null, "CSS buffers missing");
+            _activePane = LeftCode;
+            FormatSideClick(this, new RoutedEventArgs()); await _editTask;
+            Require(_leftBuffer!.Text != cssLeft && _leftBuffer.Text.Split('\n').Length > 3, "css-format output");
+            HistoryRequested(LeftCode, false); await _editTask;
+            Require(_leftBuffer.Text == cssLeft, "Format undo must restore in one step");
+            var splitter = _plugins.GetAll<ILineSplitter>().FirstOrDefault(s => s.CanSplit(LeftPath.Text, "a { color: red; background: blue }"))
+                ?? throw new InvalidOperationException("css splitter missing");
+            ApplySplit(RightCode, splitter, [1]); await _editTask;
+            Require(_rightBuffer!.Text.Split('\n').Length > 3 && _rightBuffer.Text.Contains("color: blue"), "Split output");
+            HistoryRequested(RightCode, false); await _editTask;
+            Require(_rightBuffer.Text == cssRight, "Split undo must restore in one step");
+            AutoRealignToggle.IsChecked = false;
+            ApplySplit(RightCode, splitter, [1]);
+            Require(HunkLabel.Text.Contains("未对齐"), "Manual realign pending hint");
+            string splitDraft = _rightBuffer.Text;
+            RealignClick(this, new RoutedEventArgs()); await _editTask;
+            Require(_presentation is not null && _presentation.Rows.Count > 3, "Manual realign recomputes");
+            Require(_rightBuffer.Text == splitDraft, "Realign must not touch the edit");
+            AutoRealignToggle.IsChecked = true;
+            HistoryRequested(RightCode, false); await _editTask;
+            Require(_rightBuffer.Text == cssRight, "Cleanup undo");
+
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             if (Arg("--screenshot") is string screenshot) SaveScreenshot(screenshot);
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit" }));
+            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign" }));
         }
         catch (Exception ex) { exit = 2; File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-error.txt"), ex.ToString()); }
         _allowClose = true; Application.Current.Shutdown(exit);

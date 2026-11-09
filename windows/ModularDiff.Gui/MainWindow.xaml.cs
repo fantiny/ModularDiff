@@ -59,7 +59,7 @@ public partial class MainWindow : Window
             CompareButton.IsEnabled = false;
         }
         Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
-        InitializeEditing(); InitializeSync();
+        InitializeEditing(); InitializeSync(); InitializeLineTools();
         _ready = true;
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
         if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;

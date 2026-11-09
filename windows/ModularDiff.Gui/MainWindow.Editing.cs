@@ -60,7 +60,8 @@ public partial class MainWindow
         {
             pane.Buffer.Apply(edit); _activePane = pane;
             ShowDraft(); UpdateEditState();
-            _editTask = RecompareBuffers(true);
+            if (_autoRealign) _editTask = RecompareBuffers(true);
+            else HunkLabel.Text = "未对齐 · 点 ⟳ 重算";
         }
         catch (Exception ex) { StatusLabel.Text = "编辑失败：" + ex.Message; }
     }
@@ -155,7 +156,8 @@ public partial class MainWindow
         if (_syncActive || pane.Buffer is null || (redo ? !pane.Buffer.CanRedo : !pane.Buffer.CanUndo)) return;
         _activePane = pane;
         int caret = redo ? pane.Buffer.Redo() : pane.Buffer.Undo();
-        ShowDraft(); pane.SetCaret(caret); pane.Focus(); UpdateEditState(); _editTask = RecompareBuffers(false);
+        ShowDraft(); pane.SetCaret(caret); pane.Focus(); UpdateEditState();
+        if (_autoRealign) _editTask = RecompareBuffers(false);
     }
     private void UndoClick(object sender, RoutedEventArgs e) { if (_activePane is not null) HistoryRequested(_activePane, false); }
     private void RedoClick(object sender, RoutedEventArgs e) { if (_activePane is not null) HistoryRequested(_activePane, true); }
