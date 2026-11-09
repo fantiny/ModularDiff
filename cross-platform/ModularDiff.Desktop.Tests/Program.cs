@@ -81,6 +81,58 @@ var saveDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < saveDone) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
 window.Close();
 Directory.Delete(uiRoot, recursive: true);
+// 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
+string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(binRoot);
+try
+{
+    File.WriteAllBytes(Path.Combine(binRoot, "a.bin"), new byte[] { 0x4D, 0x5A, 0x90, 0x00, 0x03, 0xFF, 0xFE, 0x1A, 0xE9, 0x80, 0x11, 0xB8 });
+    File.WriteAllBytes(Path.Combine(binRoot, "b.bin"), new byte[] { 0x4D, 0x5A, 0x90, 0x00, 0x03, 0xFF, 0xFE, 0x7B, 0xE9, 0x80, 0x11, 0xB8 });
+    var hexWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(binRoot, "a.bin"), "--right", Path.Combine(binRoot, "b.bin"), "--auto-compare"]);
+    hexWindow.Show();
+    var hexDone = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < hexDone) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10);
+        if (((Grid)hexWindow.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0)) break; }
+    var hexStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
+    var hexRows = ((Grid)hexWindow.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0);
+    Check(hexRows && hexStatus.Contains("十六进制"), "binary pair renders hex view");
+    hexWindow.Close();
+}
+finally { Directory.Delete(binRoot, recursive: true); }
+// 图片视图:BMP 对(一枚差异像素)→ 图片比较页。
+static byte[] Bmp(int width, int height, byte different)
+{
+    int row = (width * 3 + 3) / 4 * 4, pixels = row * height;
+    var data = new byte[54 + pixels];
+    data[0] = (byte)'B'; data[1] = (byte)'M';
+    BitConverter.GetBytes(54 + pixels).CopyTo(data, 2);
+    BitConverter.GetBytes(54).CopyTo(data, 10);
+    BitConverter.GetBytes(40).CopyTo(data, 14);
+    BitConverter.GetBytes(width).CopyTo(data, 18);
+    BitConverter.GetBytes(height).CopyTo(data, 22);
+    data[26] = 1; data[28] = 24;
+    for (int y = 0; y < height; y++) for (int x = 0; x < width; x++)
+    {
+        int at = 54 + y * row + x * 3;
+        data[at] = different; data[at + 1] = 32; data[at + 2] = 200;
+    }
+    return data;
+}
+string picRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-pic-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(picRoot);
+try
+{
+    File.WriteAllBytes(Path.Combine(picRoot, "a.bmp"), Bmp(3, 3, 0));
+    File.WriteAllBytes(Path.Combine(picRoot, "b.bmp"), Bmp(3, 3, 90));
+    var picWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(picRoot, "a.bmp"), "--right", Path.Combine(picRoot, "b.bmp"), "--auto-compare"]);
+    picWindow.Show();
+    var picDone = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < picDone) { Dispatcher.UIThread.RunJobs(); picWindow.UpdateLayout(); Thread.Sleep(10); }
+    var picStatus = string.Join(" ", ((Grid)picWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
+    Check(picStatus.Contains("图片比较"), $"picture pair opens picture view (status: {picStatus[..Math.Min(80, picStatus.Length)]})");
+    picWindow.Close();
+}
+finally { Directory.Delete(picRoot, recursive: true); }
 // 注意:在无 Avalonia 调度泵的环境里 await 真异步 IO 会死锁,故同步等待脱离 UI 上下文的后台任务。
 Task.Run(async () =>
 {

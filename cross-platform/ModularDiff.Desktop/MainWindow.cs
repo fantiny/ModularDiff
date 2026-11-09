@@ -25,6 +25,9 @@ public sealed class MainWindow : Window
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreWhitespace = new() { Content = "␣", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreCase = new() { Content = "Aa", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _autoRealign = new() { Content = "⚡", MinWidth = 32, Padding = new Thickness(8, 4) };
+    private readonly ComboBox _sessionBox = new() { Width = 170 }, _recentBox = new() { Width = 170 };
+    private SessionStore.SessionFile _sessions = SessionStore.Load();
+    private IReadOnlyList<string> _unimportant = [];
     private static int _windowCount;
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -60,6 +63,12 @@ public sealed class MainWindow : Window
         ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
         _toolbar.Children.Add(_autoRealign);
         _toolbar.Children.Add(Button("⌗", "格式化本侧：按最近聚焦的一侧，应用代码格式化插件（如 CSS 规范格式化）", FormatSide));
+        _toolbar.Children.Add(Button("◈", "不重要差异规则：每行一条正则，匹配文本（如 $Id$、时间戳、版本号）不产生差异块", EditRules));
+        _toolbar.Children.Add(Button("💾", "保存当前比较为命名会话（左右路径 + 算法 + 忽略规则）", () => Run(SaveSession)));
+        ToolTip.SetTip(_sessionBox, "命名会话：选择后载入并比较"); ToolTip.SetTip(_recentBox, "最近比较（自动记录，去重，最多 10 条）");
+        _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_sessionBox.SelectedIndex >= 0 && _sessions.Named.Count > _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex]); _sessionBox.SelectedIndex = -1; });
+        _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_recentBox.SelectedIndex >= 0 && _sessions.Recent.Count > _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex]); _recentBox.SelectedIndex = -1; });
+        _toolbar.Children.Add(_sessionBox); _toolbar.Children.Add(_recentBox); RefreshSessions();
         _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
@@ -373,9 +382,75 @@ public sealed class MainWindow : Window
     }
     private void ApplyOptions()
     {
-        _session.Options = new((bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!);
+        _session.Options = BuildOptions();
         if (_session.Left is null) return;
         _rows.ItemsSource = null; _debounce.Stop(); _debounce.Start();
+    }
+    private ComparisonOptions BuildOptions() => new((bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, UnimportantPatterns: _unimportant);
+    private void RefreshSessions()
+    {
+        _sessionBox.ItemsSource = _sessions.Named.Select(s => $"📌 {s.Name} · {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}").ToArray();
+        _recentBox.ItemsSource = _sessions.Recent.Select(s => $"🕘 {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}").ToArray();
+    }
+    private async Task LoadSession(SavedSession session)
+    {
+        if (!await Leave()) return;
+        _leftPath.Text = session.Left; _rightPath.Text = session.Right;
+        _algorithm.SelectedItem = session.Algorithm ?? "myers";
+        _ignoreCase.IsChecked = session.IgnoreCase; _ignoreWhitespace.IsChecked = session.IgnoreWhitespace; _ignoreEol.IsChecked = session.IgnoreEol;
+        _unimportant = session.UnimportantPatterns ?? [];
+        _session.Algorithm = session.Algorithm ?? "myers";
+        _session.Options = BuildOptions();
+        await Compare();
+    }
+    private async Task SaveSession()
+    {
+        if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) { _status.Text = "请先指定左右路径。"; return; }
+        string? name = await Prompt("保存会话", "会话名称", $"{Path.GetFileName(_leftPath.Text)} ↔ {Path.GetFileName(_rightPath.Text)}");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        _sessions = _sessions.UpsertNamed(new(name, _leftPath.Text.Trim(), _rightPath.Text.Trim(), _session.Algorithm,
+            (bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, true, DateTime.Now, _unimportant));
+        SessionStore.Save(_sessions);
+        RefreshSessions();
+        _status.Text = $"会话「{name}」已保存。";
+    }
+    private async void EditRules()
+    {
+        var window = new Window { Title = "不重要差异规则", Width = 600, Height = 340, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = true };
+        var input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), Text = string.Join("\n", _unimportant), Watermark = "每行一条正则，匹配到的文本不算差异。例：\\$Id:.*\\$　\\d{4}-\\d{2}-\\d{2}　v\\d+\\.\\d+", Margin = new Thickness(12), MinHeight = 180 };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
+        var panel = new DockPanel { Margin = new Thickness(6) };
+        foreach (var (label, _) in new[] { ("应用", ""), ("清空", ""), ("取消", "") })
+        {
+            string choice = label;
+            buttons.Children.Add(Button(choice, choice, () => window.Close(choice == "取消" ? null : choice == "清空" ? "" : input.Text ?? "")));
+        }
+        DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons); panel.Children.Add(input);
+        window.Content = panel;
+        string? result = await window.ShowDialog<string?>(this);
+        if (result is null) return;
+        var patterns = result.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        foreach (string pattern in patterns)
+        {
+            try { _ = new System.Text.RegularExpressions.Regex(pattern); }
+            catch (ArgumentException ex) { _status.Text = $"规则无效：{pattern}（{ex.Message}）"; return; }
+        }
+        _unimportant = patterns;
+        ToolTip.SetTip(_algorithm, _unimportant.Count > 0 ? $"比较算法插件 · {_unimportant.Count} 条不重要规则" : "比较算法插件");
+        ApplyOptions();
+        _status.Text = $"已应用 {_unimportant.Count} 条不重要差异规则。";
+    }
+    private async Task<string?> Prompt(string title, string label, string defaultValue)
+    {
+        var window = new Window { Title = title, Width = 480, Height = 170, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var input = new TextBox { Text = defaultValue, Watermark = label, Margin = new Thickness(12) };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
+        buttons.Children.Add(Button("保存", label, () => window.Close(input.Text)));
+        buttons.Children.Add(Button("取消", label, () => window.Close(null)));
+        var panel = new DockPanel();
+        DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons); panel.Children.Add(input);
+        window.Content = panel;
+        return await window.ShowDialog<string?>(this);
     }
     private async Task Compare()
     {
@@ -400,18 +475,148 @@ public sealed class MainWindow : Window
         {
             _directory = null; _files.ItemsSource = null;
             var file = result.Files.Single();
+            if (result.ModuleId == "pictures" && file.Status != FileStatus.Error)
+            {
+                ShowPicture(left, right, file);
+                _status.Text = $"图片比较 · {file.Note}";
+                RecordRecent(left, right);
+                return;
+            }
             if (file.IsBinary || file.Status == FileStatus.Error)
             {
-                _rows.ItemsSource = null; _diffTab.Content = _binaryInfo; _tabs.SelectedIndex = 0;
-                _binaryInfo.Text = await BinarySummaryAsync(left, right);
-                _status.Text = $"{file.Status}：{file.Note ?? "二进制文件"} · 摘要见「差异对齐」页";
+                _rows.ItemsSource = null; _tabs.SelectedIndex = 0;
+                string summary = await BinarySummaryAsync(left, right);
+                if (file.Status == FileStatus.Error) { _diffTab.Content = _binaryInfo; _binaryInfo.Text = summary; _status.Text = $"{file.Status}：{file.Note}"; return; }
+                ShowHex(left, right, file);
+                string verdict = summary.Split('\n').LastOrDefault(l => l.TrimStart().StartsWith("结论")) ?? "";
+                _status.Text = $"十六进制视图（16 字节/行，着色行含差异字节）· {verdict.Trim()}";
+                RecordRecent(left, right);
                 return;
             }
             await OpenFile(left, right);
         }
+        RecordRecent(left, right);
         if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings);
     }
+    private void RecordRecent(string left, string right)
+    {
+        _sessions = _sessions.RecordRecent(left, right, _session.Algorithm,
+            (bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, true, _unimportant);
+        SessionStore.Save(_sessions);
+        RefreshSessions();
+    }
     private async Task OpenFile(string left, string right) { _diffTab.Content = _rows; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    /// <summary>十六进制视图:16 字节/行并排 dump,与任一差异字节段重叠的行着色,自动定位首个差异行(单侧最多 1MB)。</summary>
+    private void ShowHex(string left, string right, FileComparison file)
+    {
+        const int rowBytes = 16, cap = 1 << 20;
+        static byte[] Read(string path)
+        {
+            using var stream = File.OpenRead(path);
+            var buffer = new byte[Math.Min(stream.Length, cap)];
+            stream.ReadAtLeast(buffer, buffer.Length);
+            return buffer;
+        }
+        static string Dump(byte[] buffer, long offset)
+        {
+            var hex = new System.Text.StringBuilder(16 * 3);
+            var ascii = new System.Text.StringBuilder(16);
+            for (int i = 0; i < rowBytes; i++)
+            {
+                if (offset + i < buffer.Length)
+                {
+                    byte value = buffer[offset + i];
+                    hex.Append(value.ToString("x2")).Append(' ');
+                    ascii.Append(value is >= 0x20 and < 0x7F ? (char)value : '·');
+                }
+                else { hex.Append("   "); ascii.Append(' '); }
+            }
+            return hex.ToString() + ' ' + ascii;
+        }
+        var a = Read(left); var b = Read(right);
+        int rows = (int)((Math.Max(a.Length, b.Length) + rowBytes - 1) / rowBytes);
+        var different = new bool[rows];
+        foreach (var segment in file.BinaryDiffs ?? [])
+            for (long row = segment.Offset / rowBytes; row <= Math.Min(rows - 1L, (segment.Offset + segment.Length - 1) / rowBytes); row++)
+                different[row] = true;
+        var list = new List<AlignedRow>(rows);
+        for (int row = 0; row < rows; row++)
+        {
+            long offset = (long)row * rowBytes;
+            list.Add(new(row, new(row + 1, Dump(a, offset), "LF", []), new(row + 1, Dump(b, offset), "LF", []), different[row] ? 0 : -1));
+        }
+        _diffTab.Content = _rows;
+        _rows.ItemsSource = list;
+        int first = Array.IndexOf(different, true);
+        if (first >= 0) { _rows.SelectedIndex = first; _rows.ScrollIntoView(list[first]); }
+    }
+    /// <summary>图片并排视图:尺寸一致(且 ≤4096×4096)时右侧叠加半透明红色差异像素(SkiaSharp 解码,无图像库落盘)。</summary>
+    private void ShowPicture(string left, string right, FileComparison file)
+    {
+        static Avalonia.Media.IImage? Load(string path) { try { return new Avalonia.Media.Imaging.Bitmap(path); } catch { return null; } }
+        var panel = new StackPanel { Orientation = Orientation.Vertical, Spacing = 8, Margin = new Thickness(8) };
+        panel.Children.Add(new TextBlock { Text = file.Note ?? "", Foreground = Brush.Parse("#253041"), TextWrapping = TextWrapping.Wrap });
+        var images = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        var overlay = OverlayDifference(left, right);
+        Control Pane(Avalonia.Media.IImage? image, string title, Avalonia.Media.IImage? overlayImage)
+        {
+            var header = new TextBlock { Text = title + (overlayImage is null ? "" : "（红色叠层 = 差异像素）"), Foreground = Brush.Parse("#8793A4"), Margin = new Thickness(0, 4) };
+            Control content;
+            if (image is null)
+                content = new TextBlock { Text = "无法解码", Foreground = Brush.Parse("#A52D22") };
+            else if (overlayImage is null)
+                content = new Image { Source = image, Stretch = Stretch.Uniform, MaxHeight = 480, HorizontalAlignment = HorizontalAlignment.Left };
+            else
+            {
+                var stack = new Grid();
+                stack.Children.Add(new Image { Source = image, Stretch = Stretch.Uniform, MaxHeight = 480, HorizontalAlignment = HorizontalAlignment.Left });
+                stack.Children.Add(new Image { Source = overlayImage, Stretch = Stretch.Uniform, MaxHeight = 480, HorizontalAlignment = HorizontalAlignment.Left, IsHitTestVisible = false });
+                content = stack;
+            }
+            return new StackPanel { Children = { header, content } };
+        }
+        images.Children.Add(Pane(Load(left), "左侧", null));
+        var rightPane = Pane(Load(right), "右侧", overlay);
+        Grid.SetColumn(rightPane, 1);
+        images.Children.Add(rightPane);
+        panel.Children.Add(images);
+        _diffTab.Content = panel;
+    }
+    private static Avalonia.Media.IImage? OverlayDifference(string left, string right)
+    {
+        try
+        {
+            using var l = SkiaSharp.SKBitmap.Decode(left);
+            using var r = SkiaSharp.SKBitmap.Decode(right);
+            if (l is null || r is null || l.Width != r.Width || l.Height != r.Height) return null;
+            if ((long)l.Width * l.Height > 4096L * 4096L) return null;
+            using var a = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(l.Width, l.Height, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
+            using var b = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(r.Width, r.Height, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
+            if (!l.CopyTo(a) || !r.CopyTo(b)) return null;
+            var overlay = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(l.Width, l.Height), new Avalonia.Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888);
+            using (var locked = overlay.Lock())
+            {
+                unsafe
+                {
+                    byte* target = (byte*)locked.Address;
+                    for (int y = 0; y < l.Height; y++)
+                    {
+                        byte* rowA = (byte*)a.GetAddress(0, y);
+                        byte* rowB = (byte*)b.GetAddress(0, y);
+                        byte* rowO = target + y * locked.RowBytes;
+                        for (int x = 0; x < l.Width; x++)
+                        {
+                            rowO[x * 4] = 60; rowO[x * 4 + 1] = 50; rowO[x * 4 + 2] = 255; rowO[x * 4 + 3] = 0;
+                            if (rowA[x * 4] != rowB[x * 4] || rowA[x * 4 + 1] != rowB[x * 4 + 1] || rowA[x * 4 + 2] != rowB[x * 4 + 2] || rowA[x * 4 + 3] != rowB[x * 4 + 3])
+                                rowO[x * 4 + 3] = 110;
+                        }
+                    }
+                }
+            }
+            return overlay;
+        }
+        catch { return null; }
+    }
     private static async Task<string> BinarySummaryAsync(string left, string right)
     {
         static async Task<(long Size, DateTime Time, string Hash)> Info(string path)

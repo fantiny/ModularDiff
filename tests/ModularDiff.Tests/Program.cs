@@ -26,6 +26,17 @@ try
     await EditingTests.Run(catalog, temp, Test);
     await SyncTests.Run(catalog, temp, Test);
     await SafetyTests.Run(catalog, temp, Test);
+    await Test("unimportant patterns mark matched text as equal", async () =>
+    {
+        string root = Path.Combine(temp, "unimportant"); Directory.CreateDirectory(root);
+        string a = Path.Combine(root, "a.txt"), b = Path.Combine(root, "b.txt");
+        await File.WriteAllTextAsync(a, "rev 1.2\nsame\n"); await File.WriteAllTextAsync(b, "rev 1.9\nsame\n");
+        var strict = await engine.CompareAsync(new(a, b, "myers"));
+        Check(strict.Files[0].Status == FileStatus.Modified, "without rules the revision line differs");
+        var relaxed = await engine.CompareAsync(new(a, b, "myers", new(UnimportantPatterns: ["rev \\d+\\.\\d+"])));
+        Check(relaxed.Files[0].Status == FileStatus.Equal, "unimportant pattern collapses the revision line");
+    });
+
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 

@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><AllowUnsafeBlocks>true</AllowUnsafeBlocks><TargetFramework>net10.0</TargetFramework></PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
     <ProjectReference Include="../../shared/ModularDiff.Core/ModularDiff.Core.csproj" />
   </ItemGroup>
 </Project>
