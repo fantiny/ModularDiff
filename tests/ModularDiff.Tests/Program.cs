@@ -25,6 +25,34 @@ try
     await SyncTests.Run(catalog, temp, Test);
     await SafetyTests.Run(catalog, temp, Test);
     await MenuPlanTests.Run(Test);
+    await Test("myers: budget fallback anchors unique common lines", () =>
+    {
+        var algorithm = catalog.Get<IDiffAlgorithm>("myers");
+        var random = new Random(9);
+        var left = new List<string>(); var right = new List<string>();
+        for (int block = 0; block < 60; block++)
+        {
+            for (int i = 0; i < 140; i++) left.Add($"left-{block}-{i}-{random.Next():x8}");
+            for (int i = 0; i < 140; i++) right.Add($"right-{block}-{i}-{random.Next():x8}");
+            left.Add($"COMMON-ANCHOR-{block:000}"); right.Add($"COMMON-ANCHOR-{block:000}");
+        }
+        var result = algorithm.Compare(left, right, catalog);
+        Check(result.IsApproximate, "expected the trace budget to be exceeded");
+        var anchors = result.Edits.Where(e => e.Kind == EditKind.Equal && left[e.LeftIndex!.Value].StartsWith("COMMON-ANCHOR")).Count();
+        Check(anchors == 60, $"expected 60 anchored equals, got {anchors}");
+        // 编辑脚本必须能完整重建两侧输入(兜底路径也不例外)。
+        var rebuiltLeft = new List<string>(); var rebuiltRight = new List<string>();
+        int li = 0, ri = 0;
+        foreach (var edit in result.Edits)
+        {
+            if (edit.Kind == EditKind.Equal) { rebuiltLeft.Add(left[li++]); rebuiltRight.Add(right[ri++]); }
+            else if (edit.Kind == EditKind.Delete) rebuiltLeft.Add(left[li++]);
+            else rebuiltRight.Add(right[ri++]);
+        }
+        Check(rebuiltLeft.SequenceEqual(left) && rebuiltRight.SequenceEqual(right), "fallback edits must reconstruct both inputs");
+        return Task.CompletedTask;
+    });
+
     await LineSplitTests.Run(catalog, Test);
 
     foreach (var id in new[] { "myers", "patience" })

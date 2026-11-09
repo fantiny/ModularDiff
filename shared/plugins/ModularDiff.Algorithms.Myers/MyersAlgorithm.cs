@@ -24,29 +24,27 @@ public sealed class MyersAlgorithm : IDiffAlgorithm
             if ((suffix & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
             suffix++;
         }
-        int n = left.Count - prefix - suffix, m = right.Count - prefix - suffix;
-        var output = new List<Edit>();
-        for (int i = 0; i < prefix; i++) output.Add(new(EditKind.Equal, i, i));
         bool approximate = false;
-        var middle = Solve(left, right, prefix, n, m, cancellationToken, ref approximate);
-        output.AddRange(middle.Select(e => new Edit(e.Kind, e.LeftIndex + prefix, e.RightIndex + prefix)));
-        for (int i = suffix; i > 0; i--) output.Add(new(EditKind.Equal, left.Count - i, right.Count - i));
-        return new(output, approximate, approximate ? "Myers trace budget exceeded; unmatched region shown as delete/insert (not minimal)." : null);
+        var edits = new List<Edit>();
+        for (int i = 0; i < prefix; i++) edits.Add(new(EditKind.Equal, i, i));
+        edits.AddRange(Solve(left, right, prefix, prefix, left.Count - prefix - suffix, right.Count - prefix - suffix, cancellationToken, ref approximate));
+        for (int i = suffix; i > 0; i--) edits.Add(new(EditKind.Equal, left.Count - i, right.Count - i));
+        return new(edits, approximate, approximate ? "Myers trace budget exceeded; anchored on unique common lines (not minimal)." : null);
     }
 
-    private static List<Edit> Solve(IReadOnlyList<string> left, IReadOnlyList<string> right, int start,
+    private static List<Edit> Solve(IReadOnlyList<string> left, IReadOnlyList<string> right, int lx, int rx,
         int n, int m, CancellationToken token, ref bool approximate)
     {
         List<Edit> Coarse()
         {
             var edits = new List<Edit>(n + m);
-            for (int i = 0; i < n; i++) { if ((i & 1023) == 0) token.ThrowIfCancellationRequested(); edits.Add(new(EditKind.Delete, i, null)); }
-            for (int j = 0; j < m; j++) { if ((j & 1023) == 0) token.ThrowIfCancellationRequested(); edits.Add(new(EditKind.Insert, null, j)); }
+            for (int i = 0; i < n; i++) { if ((i & 1023) == 0) token.ThrowIfCancellationRequested(); edits.Add(new(EditKind.Delete, lx + i, null)); }
+            for (int j = 0; j < m; j++) { if ((j & 1023) == 0) token.ThrowIfCancellationRequested(); edits.Add(new(EditKind.Insert, null, rx + j)); }
             return edits;
         }
         if (n == 0 || m == 0) return Coarse();
         int max = checked(n + m);
-        if (max > 200_000) { approximate = true; return Coarse(); }
+        if (max > 200_000) { approximate = true; return Anchored(left, right, lx, rx, n, m, token, ref approximate); }
         int offset = max + 1;
         var frontier = new int[2 * max + 3];
         var trace = new List<int[]>();
@@ -54,7 +52,7 @@ public sealed class MyersAlgorithm : IDiffAlgorithm
         {
             token.ThrowIfCancellationRequested();
             if ((long)(trace.Count + 1) * frontier.Length > MaxTraceCells)
-            { approximate = true; return Coarse(); }
+            { approximate = true; return Anchored(left, right, lx, rx, n, m, token, ref approximate); }
             trace.Add((int[])frontier.Clone());
             for (int k = -d; k <= d; k += 2)
             {
@@ -62,14 +60,71 @@ public sealed class MyersAlgorithm : IDiffAlgorithm
                 int x = k == -d || (k != d && frontier[offset + k - 1] < frontier[offset + k + 1])
                     ? frontier[offset + k + 1] : frontier[offset + k - 1] + 1;
                 int y = x - k;
-                while (x < n && y < m && left[start + x] == right[start + y])
+                while (x < n && y < m && left[lx + x] == right[rx + y])
                 { if ((x & 1023) == 0) token.ThrowIfCancellationRequested(); x++; y++; }
                 frontier[offset + k] = x;
-                if (x >= n && y >= m) return Backtrack(trace, offset, n, m, token);
+                if (x >= n && y >= m)
+                    return Backtrack(trace, offset, n, m, token)
+                        .Select(e => new Edit(e.Kind, e.LeftIndex is int li ? lx + li : null, e.RightIndex is int ri ? rx + ri : null))
+                        .ToList();
             }
         }
         throw new InvalidOperationException("No edit path found.");
     }
+
+    /// <summary>预算超限后的兜底:按"两侧均唯一且相同"的行锚定,锚点间递归再解,子区间仍超限则继续锚定;
+    /// 这样相同的唯一行(如逐行拆开的 CSS 变量)不会被退化为 delete/insert,只有真正的无锚大区间才整体对撞。</summary>
+    private static List<Edit> Anchored(IReadOnlyList<string> left, IReadOnlyList<string> right, int lx, int rx,
+        int n, int m, CancellationToken token, ref bool approximate)
+    {
+        var leftCount = new Dictionary<string, int>();
+        for (int i = 0; i < n; i++)
+        {
+            if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
+            Increment(leftCount, left[lx + i]);
+        }
+        var rightCount = new Dictionary<string, int>();
+        var rightIndex = new Dictionary<string, int>();
+        for (int j = 0; j < m; j++)
+        {
+            if ((j & 1023) == 0) token.ThrowIfCancellationRequested();
+            string line = right[rx + j];
+            Increment(rightCount, line);
+            rightIndex[line] = j;
+        }
+        var anchors = new List<(int X, int Y)>();
+        int scan = 0;
+        for (int x = 0; x < n; x++)
+        {
+            string line = left[lx + x];
+            if (leftCount[line] == 1 && rightCount.TryGetValue(line, out int count) && count == 1 && rightIndex[line] >= scan)
+            {
+                anchors.Add((x, rightIndex[line]));
+                scan = rightIndex[line] + 1;
+            }
+        }
+        if (anchors.Count == 0)
+        {
+            var coarse = new List<Edit>(n + m);
+            for (int i = 0; i < n; i++) { if ((i & 1023) == 0) token.ThrowIfCancellationRequested(); coarse.Add(new(EditKind.Delete, lx + i, null)); }
+            for (int j = 0; j < m; j++) { if ((j & 1023) == 0) token.ThrowIfCancellationRequested(); coarse.Add(new(EditKind.Insert, null, rx + j)); }
+            return coarse;
+        }
+        var edits = new List<Edit>();
+        int px = 0, py = 0;
+        foreach (var (ax, ay) in anchors)
+        {
+            if (ax > px || ay > py)
+                edits.AddRange(Solve(left, right, lx + px, rx + py, ax - px, ay - py, token, ref approximate));
+            edits.Add(new(EditKind.Equal, lx + ax, rx + ay));
+            px = ax + 1; py = ay + 1;
+        }
+        if (px < n || py < m)
+            edits.AddRange(Solve(left, right, lx + px, rx + py, n - px, m - py, token, ref approximate));
+        return edits;
+    }
+    private static void Increment(Dictionary<string, int> counts, string line)
+    { counts.TryGetValue(line, out int value); counts[line] = value + 1; }
 
     private static List<Edit> Backtrack(List<int[]> trace, int offset, int x, int y, CancellationToken token)
     {
