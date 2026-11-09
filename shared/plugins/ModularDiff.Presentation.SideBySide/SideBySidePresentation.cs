@@ -139,17 +139,75 @@ public sealed class SideBySidePresentation : ITextPresentation
         pairs.Reverse(); return pairs;
     }
 
+    /// <summary>Word-level in-line differences: words unique to either side highlight as separate
+    /// small segments (like Beyond Compare) instead of one big prefix/suffix block. Long inputs and
+    /// surrogate characters stay on the old prefix/suffix fallback path.</summary>
     private static (IReadOnlyList<HighlightSpan>, IReadOnlyList<HighlightSpan>) Highlight(string? left, string? right)
     {
         if (left is null) return ([], right is { Length: > 0 } ? [new(0, right.Length)] : []);
         if (right is null) return (left.Length > 0 ? [new(0, left.Length)] : [], []);
+        if (left == right) return ([], []);
+        if (WordSpans(left, out var aWords) && WordSpans(right, out var bWords))
+        {
+            var leftSpans = new List<HighlightSpan>();
+            var rightSpans = new List<HighlightSpan>();
+            foreach (var (kind, a, b) in WordDiff(aWords, bWords))
+            {
+                if (kind == 0) continue;
+                if (a is not null) leftSpans.Add(new(a.Value.Start, a.Value.Length));
+                if (b is not null) rightSpans.Add(new(b.Value.Start, b.Value.Length));
+            }
+            return (leftSpans, rightSpans);
+        }
         int prefix = 0, suffix = 0;
         while (prefix < Math.Min(left.Length, right.Length) && left[prefix] == right[prefix]) prefix++;
         // Never split a UTF-16 surrogate pair when drawing a highlighted range.
         if (prefix > 0 && prefix < left.Length && char.IsLowSurrogate(left[prefix])) prefix--;
         while (suffix < Math.Min(left.Length, right.Length) - prefix && left[^(suffix + 1)] == right[^(suffix + 1)]) suffix++;
         if (suffix > 0 && suffix < left.Length && char.IsLowSurrogate(left[left.Length - suffix])) suffix--;
-        int a = left.Length - prefix - suffix, b = right.Length - prefix - suffix;
-        return (a > 0 ? [new(prefix, a)] : [], b > 0 ? [new(prefix, b)] : []);
+        int leftRun = left.Length - prefix - suffix, rightRun = right.Length - prefix - suffix;
+        return (leftRun > 0 ? [new(prefix, leftRun)] : [], rightRun > 0 ? [new(prefix, rightRun)] : []);
+    }
+
+    /// <summary>Splits text into word spans: identifier runs and single other characters;
+    /// whitespace never highlights. Returns false for surrogate characters or >256 words.</summary>
+    private static bool WordSpans(string text, out (int Start, int Length, string Word)[] words)
+    {
+        var spans = new List<(int, int, string)>();
+        int i = 0;
+        while (i < text.Length)
+        {
+            char c = text[i];
+            if (char.IsWhiteSpace(c)) { i++; continue; }
+            if (char.IsHighSurrogate(c)) { words = []; return false; }
+            int start = i;
+            if (char.IsLetterOrDigit(c) || c == '_')
+                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
+            else i++;
+            spans.Add((start, i - start, text[start..i]));
+            if (spans.Count > 256) { words = []; return false; }
+        }
+        words = [.. spans];
+        return true;
+    }
+
+    /// <summary>LCS over word spans: (0, both) equal, (1, left-only), (2, right-only).</summary>
+    private static IEnumerable<(int Kind, (int Start, int Length, string Word)? A, (int Start, int Length, string Word)? B)> WordDiff(
+        (int Start, int Length, string Word)[] a, (int Start, int Length, string Word)[] b)
+    {
+        int n = a.Length, m = b.Length;
+        var common = new int[n + 1, m + 1];
+        for (int i = n - 1; i >= 0; i--)
+            for (int j = m - 1; j >= 0; j--)
+                common[i, j] = a[i].Word == b[j].Word ? common[i + 1, j + 1] + 1 : Math.Max(common[i + 1, j], common[i, j + 1]);
+        int x = 0, y = 0;
+        while (x < n && y < m)
+        {
+            if (a[x].Word == b[y].Word) { yield return (0, a[x], b[y]); x++; y++; }
+            else if (common[x + 1, y] >= common[x, y + 1]) { yield return (1, a[x], null); x++; }
+            else { yield return (2, null, b[y]); y++; }
+        }
+        while (x < n) yield return (1, a[x++], null);
+        while (y < m) yield return (2, null, b[y++]);
     }
 }

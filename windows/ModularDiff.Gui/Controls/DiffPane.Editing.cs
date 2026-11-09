@@ -13,14 +13,16 @@ public sealed partial class DiffPane
     public event Action<DiffPane, bool>? HistoryRequested;
     public event Action<DiffPane, int>? SplitMenuRequested;
 
-    /// <summary>Right-click on an editable cell: the host builds the line-splitter menu for that row.</summary>
+    /// <summary>Right-click in an editable pane: move the caret to the click point (keeping any
+    /// text selection) and let the host build the context menu (edit actions + line splitters).</summary>
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseRightButtonDown(e);
         if (Buffer is null || _rows.Count == 0) return;
         Focus();
-        if (RowSourceLine(Math.Clamp((int)((e.GetPosition(this).Y + _verticalOffset) / RowHeight), 0, _rows.Count - 1)) >= 0)
-            SplitMenuRequested?.Invoke(this, Math.Clamp((int)((e.GetPosition(this).Y + _verticalOffset) / RowHeight), 0, _rows.Count - 1));
+        RefreshBufferCache();
+        if (_caret == _selectionAnchor) SetCaret(OffsetAtPoint(e.GetPosition(this)), false, false);
+        SplitMenuRequested?.Invoke(this, Math.Clamp((int)((e.GetPosition(this).Y + _verticalOffset) / RowHeight), 0, _rows.Count - 1));
         e.Handled = true;
     }
     /// <summary>Source line number shown at a row, or -1 when this side has no cell there.</summary>
@@ -129,12 +131,26 @@ public sealed partial class DiffPane
         if (lo < text.Length && lo > 0 && char.IsLowSurrogate(text[lo])) lo--;
         return _documentLines[cell.LineNumber - 1].Offset + lo;
     }
+    private List<(int Line, int Start, int End)>? _columnSelection;
+    private int _columnAnchorLine, _columnAnchorColumn;
+
     private void EditMouseDown(MouseButtonEventArgs e)
     {
         RefreshBufferCache(); var point = e.GetPosition(this);
         int row = Math.Max(0, (int)((point.Y + _verticalOffset) / RowHeight));
         if (row < _rows.Count && _rows[row].HiddenLines > 0) { ExpandContext?.Invoke(); e.Handled = true; return; }
         int offset = OffsetAtPoint(point);
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt) && Buffer is not null && point.X >= 54)
+        {
+            // Column selection: Alt+drag selects a rectangle across lines (copy/delete/type into every line).
+            _columnSelection = null;
+            _columnAnchorLine = LineAt(offset);
+            _columnAnchorColumn = offset - (_documentLines.Count > 0 ? _documentLines[Math.Min(_columnAnchorLine, _documentLines.Count - 1)].Offset : 0);
+            UpdateColumnSelection(LineAt(offset), offset);
+            CaptureMouse(); InvalidateVisual(); e.Handled = true;
+            return;
+        }
+        _columnSelection = null;
         SetCaret(offset, Keyboard.Modifiers.HasFlag(ModifierKeys.Shift), false);
         if (point.X < 54)
         {
@@ -163,7 +179,24 @@ public sealed partial class DiffPane
         if (!IsMouseCaptured || e.LeftButton != MouseButtonState.Pressed) return;
         var point = e.GetPosition(this);
         if (point.Y < 0) LineUp(); else if (point.Y > _viewport.Height) LineDown();
-        SetCaret(OffsetAtPoint(point), true, false);
+        int offset = OffsetAtPoint(point);
+        if (_columnSelection is not null || (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt) && Buffer is not null))
+        {
+            UpdateColumnSelection(LineAt(offset), offset);
+            return;
+        }
+        SetCaret(offset, true, false);
+    }
+    private void UpdateColumnSelection(int line, int offset)
+    {
+        int column = offset - (_documentLines.Count > 0 ? _documentLines[Math.Min(line, _documentLines.Count - 1)].Offset : 0);
+        int first = Math.Min(_columnAnchorLine, line), last = Math.Max(_columnAnchorLine, line);
+        int from = Math.Min(_columnAnchorColumn, column), to = Math.Max(_columnAnchorColumn, column);
+        var selection = new List<(int, int, int)>();
+        for (int l = first; l <= last && l < _documentLines.Count; l++)
+            selection.Add((l, Math.Min(from, _documentLines[l].Text.Length), Math.Min(to, _documentLines[l].Text.Length)));
+        _columnSelection = selection;
+        InvalidateVisual();
     }
     protected override void OnTextInput(TextCompositionEventArgs e)
     {
@@ -171,13 +204,47 @@ public sealed partial class DiffPane
         if (Buffer is null || string.IsNullOrEmpty(e.Text) || e.Text.Any(char.IsControl)) return;
         ReplaceSelection(e.Text, "Typing"); e.Handled = true;
     }
+    /// <summary>Programmatic column selection across [fromLine, toLine] for tests and automation.</summary>
+    public void SelectColumn(int fromLine, int toLine, int columnStart, int columnEnd)
+    {
+        if (Buffer is null) return;
+        RefreshBufferCache();
+        _columnAnchorLine = fromLine; _columnAnchorColumn = columnStart;
+        var selection = new List<(int, int, int)>();
+        for (int line = Math.Min(fromLine, toLine); line <= Math.Max(fromLine, toLine) && line < _documentLines.Count; line++)
+            selection.Add((line, Math.Min(columnStart, _documentLines[line].Text.Length), Math.Min(columnEnd, _documentLines[line].Text.Length)));
+        _columnSelection = selection;
+        InvalidateVisual();
+    }
+
     public void ReplaceSelection(string text, string label = "Paste")
     {
         if (Buffer is null) return;
+        if (_columnSelection is { } selection) { ReplaceColumnSelection(selection, text, label); return; }
         int start = Math.Min(_caret, _selectionAnchor), length = Math.Abs(_caret - _selectionAnchor);
         // Host applies the edit synchronously, then recomputes the diff asynchronously.
         EditRequested?.Invoke(this, new(start, length, text, label));
         SetCaret(start + text.Length);
+    }
+
+    /// <summary>Column-mode replace: bottom-up per line, delete the covered span then insert the
+    /// text, so typing into a rectangle edits every covered line (like Beyond Compare).</summary>
+    private void ReplaceColumnSelection(List<(int Line, int Start, int End)> selection, string text, string label)
+    {
+        _columnSelection = null;
+        foreach (var (line, start, end) in selection.OrderByDescending(s => s.Line))
+        {
+            RefreshBufferCache();
+            if (line >= _documentLines.Count) continue;
+            var document = _documentLines[line];
+            int from = document.Offset + Math.Clamp(start, 0, document.Text.Length);
+            int to = document.Offset + Math.Clamp(end, 0, document.Text.Length);
+            if (to > from) EditRequested?.Invoke(this, new(from, to - from, "", label));
+            if (text.Length > 0) EditRequested?.Invoke(this, new(from, 0, text, label));
+        }
+        if (selection.Count > 0 && selection[0].Line < _documentLines.Count)
+            SetCaret(_documentLines[selection[0].Line].Offset + selection[0].End + text.Length);
+        InvalidateVisual();
     }
     private static bool IsWord(char c) => char.IsLetterOrDigit(c) || c == '_';
     private int PreviousPosition(int position)
@@ -257,7 +324,18 @@ public sealed partial class DiffPane
     protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e) { base.OnLostKeyboardFocus(e); InvalidateVisual(); }
     private void DrawTextSelection(DrawingContext dc, TextCell cell, FormattedText formatted, int[] positions, Point origin)
     {
-        if (Buffer is null || cell.LineNumber > _documentLines.Count || _caret == _selectionAnchor) return;
+        if (Buffer is null || cell.LineNumber > _documentLines.Count) return;
+        if (_columnSelection is { } column)
+        {
+            foreach (var (row, from, to) in column)
+            {
+                if (row != cell.LineNumber - 1 || to <= from) continue;
+                var geometry = formatted.BuildHighlightGeometry(origin, positions[Math.Clamp(from, 0, positions.Length - 1)], positions[Math.Clamp(to, 0, positions.Length - 1)] - positions[Math.Clamp(from, 0, positions.Length - 1)]);
+                if (geometry is not null) dc.DrawGeometry(Selected, null, geometry);
+            }
+            return;
+        }
+        if (_caret == _selectionAnchor) return;
         var line = _documentLines[cell.LineNumber - 1];
         int start = Math.Clamp(Math.Min(_caret, _selectionAnchor) - line.Offset, 0, line.Text.Length);
         int end = Math.Clamp(Math.Max(_caret, _selectionAnchor) - line.Offset, 0, line.Text.Length);

@@ -22,29 +22,56 @@ public partial class MainWindow
     private void SplitMenuRequested(DiffPane pane, int rowIndex)
     {
         if (pane.Buffer is null) return;
+        var menu = new ContextMenu();
+        void Add(string header, bool enabled, Action action)
+        {
+            var item = new MenuItem { Header = header, IsEnabled = enabled };
+            item.Click += (_, _) => action();
+            menu.Items.Add(item);
+        }
+        bool hasSelection = pane.SelectedText().Length > 0;
+        Add("撤销", pane.Buffer.CanUndo, () => HistoryRequested(pane, false));
+        Add("重做", pane.Buffer.CanRedo, () => HistoryRequested(pane, true));
+        menu.Items.Add(new Separator());
+        Add("剪切", hasSelection, () => { SafeClipboard(() => Clipboard.SetText(pane.SelectedText())); pane.ReplaceSelection("", "Cut"); });
+        Add("复制", hasSelection, () => SafeClipboard(() => Clipboard.SetText(pane.SelectedText())));
+        Add("粘贴", Clipboard.ContainsText(), () => pane.ReplaceSelection(Clipboard.GetText(), "Paste"));
+        Add("复制差异块到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+            TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
+            () => _ = CopyBlock(ReferenceEquals(pane, LeftCode)));
+        // Line splitters for the clicked row (tables etc.), batched over the selection.
         int line = pane.RowSourceLine(rowIndex);
         string current = pane.Line(line)?.Text ?? "";
-        if (line < 0 || current.Length == 0) return;
-        string path = pane.Buffer.Path;
-        var splitters = _plugins.GetAll<ILineSplitter>().Where(s => s.CanSplit(path, current)).ToArray();
-        if (splitters.Length == 0) return;
-        var candidates = new HashSet<int>(pane.SelectedSourceLines()) { line };
-        var menu = new ContextMenu();
-        foreach (var splitter in splitters)
+        if (line >= 0 && current.Length > 0)
         {
-            var chosen = splitter;
-            int[] targets = [.. candidates.Where(n => n == line || chosen.CanSplit(path, pane.Line(n)?.Text ?? "")).Order()];
-            var item = new MenuItem
+            string path = pane.Buffer.Path;
+            var splitters = _plugins.GetAll<ILineSplitter>().Where(s => s.CanSplit(path, current)).ToArray();
+            if (splitters.Length > 0)
             {
-                Header = targets.Length > 1 ? $"换行 · {chosen.DisplayName}（{targets.Length} 行）" : "换行 · " + chosen.DisplayName,
-                ToolTip = "把所选行按各自领域规则拆成多行；行尾风格沿用原行",
-            };
-            item.Click += (_, _) => ApplySplit(pane, chosen, targets);
-            menu.Items.Add(item);
+                var candidates = new HashSet<int>(pane.SelectedSourceLines()) { line };
+                menu.Items.Add(new Separator());
+                foreach (var splitter in splitters)
+                {
+                    var chosen = splitter;
+                    int[] targets = [.. candidates.Where(n => n == line || chosen.CanSplit(path, pane.Line(n)?.Text ?? "")).Order()];
+                    var item = new MenuItem
+                    {
+                        Header = targets.Length > 1 ? $"换行 · {chosen.DisplayName}（{targets.Length} 行）" : "换行 · " + chosen.DisplayName,
+                        ToolTip = "把所选行按各自领域规则拆成多行；行尾风格沿用原行",
+                    };
+                    item.Click += (_, _) => ApplySplit(pane, chosen, targets);
+                    menu.Items.Add(item);
+                }
+            }
         }
         menu.PlacementTarget = pane;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
         menu.IsOpen = true;
+    }
+
+    private static void SafeClipboard(Action action)
+    {
+        try { action(); } catch (System.Runtime.InteropServices.ExternalException) { /* clipboard busy: ignore */ }
     }
 
     /// <summary>Replaces the covered block in one edit so a single undo restores it;

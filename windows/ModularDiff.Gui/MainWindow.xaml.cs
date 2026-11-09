@@ -63,7 +63,7 @@ public partial class MainWindow : Window
             CompareButton.IsEnabled = false;
         }
         Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
-        InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions();
+        InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions(); InitializeFolderOps();
         _ready = true;
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
         if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
@@ -505,6 +505,57 @@ public partial class MainWindow : Window
         }
         StatusLabel.Text = $"未找到：{FindBox.Text}";
     }
+
+    private void ReplaceToggleChanged(object sender, RoutedEventArgs e)
+    {
+        bool show = ReplaceToggle.IsChecked == true;
+        ReplaceBox.Visibility = ReplaceOneButton.Visibility = ReplaceAllButton.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show) { ReplaceBox.Focus(); ReplaceBox.SelectAll(); }
+    }
+    private async void ReplaceKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { e.Handled = true; await ReplaceNext(); }
+        else if (e.Key == Key.Escape) { e.Handled = true; ReplaceToggle.IsChecked = false; }
+    }
+    private async void ReplaceOneClick(object sender, RoutedEventArgs e) => await ReplaceNext();
+    private async Task ReplaceNext()
+    {
+        var pane = _activePane ?? LeftCode;
+        if (pane.Buffer is null) { StatusLabel.Text = "此文件为只读。"; return; }
+        if (FindBox.Text.Length == 0) { StatusLabel.Text = "请输入要查找的内容。"; return; }
+        string text = pane.Buffer.Text;
+        int from = Math.Min(Math.Max(pane.CaretOffset, 0), text.Length);
+        int index = text.IndexOf(FindBox.Text, from, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) index = text.IndexOf(FindBox.Text, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) { StatusLabel.Text = $"未找到：{FindBox.Text}"; return; }
+        pane.Focus();
+        pane.SetCaret(index, false, false);
+        pane.SetCaret(index + FindBox.Text.Length, true, false);
+        pane.ReplaceSelection(ReplaceBox.Text, "Replace");
+        await _editTask;
+        StatusLabel.Text = $"已替换 1 处 · {FindBox.Text} → {ReplaceBox.Text}";
+    }
+    private async void ReplaceAllClick(object sender, RoutedEventArgs e)
+    {
+        var pane = _activePane ?? LeftCode;
+        if (pane.Buffer is null) { StatusLabel.Text = "此文件为只读。"; return; }
+        if (FindBox.Text.Length == 0) { StatusLabel.Text = "请输入要查找的内容。"; return; }
+        string text = pane.Buffer.Text;
+        var builder = new StringBuilder(text.Length);
+        int at = 0, count = 0;
+        while (true)
+        {
+            int found = text.IndexOf(FindBox.Text, at, StringComparison.OrdinalIgnoreCase);
+            if (found < 0) { builder.Append(text.AsSpan(at)); break; }
+            builder.Append(text.AsSpan(at, found - at)).Append(ReplaceBox.Text);
+            at = found + FindBox.Text.Length;
+            count++;
+        }
+        if (count == 0) { StatusLabel.Text = $"未找到：{FindBox.Text}"; return; }
+        pane.Buffer.Apply(new Contracts.TextEdit(0, text.Length, builder.ToString(), $"全部替换 ×{count}"));
+        AfterProgrammaticEdit(pane, $"已替换 {count} 处 · {FindBox.Text} → {ReplaceBox.Text}");
+        await _editTask;
+    }
     private async void WindowKeyDown(object sender, KeyEventArgs e)
     {
         if (await EditingShortcut(e)) return;
@@ -518,6 +569,8 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         { e.Handled = true; if (TextView.Visibility == Visibility.Visible) { FindBox.Focus(); FindBox.SelectAll(); } else { FolderSearch.Focus(); FolderSearch.SelectAll(); } }
         else if (e.Key == Key.F3) { e.Handled = true; if (TextView.Visibility == Visibility.Visible) await FindNext(); }
+        else if (e.Key == Key.H && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        { e.Handled = true; ReplaceToggle.IsChecked = true; ReplaceBox.Focus(); ReplaceBox.SelectAll(); }
         else if (e.Key == Key.N && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { e.Handled = true; NewWindowClick(sender, e); }
         else if (e.Key == Key.Escape) { SettingsToggle.IsChecked = false; CancelClick(sender, e); }
         else if (e.SystemKey == Key.Left && _folderResult is not null) { SetView(false); e.Handled = true; }

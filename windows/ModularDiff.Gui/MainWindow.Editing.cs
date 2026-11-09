@@ -148,6 +148,7 @@ public partial class MainWindow
             var pane = toRight ? RightCode : LeftCode;
             EditRequested(pane, edit); pane.SetCaret(edit.Offset + edit.Text.Length); pane.Focus();
             await _editTask;
+            NavigateHunk(1);   // like Beyond Compare: after a block copy, advance to the next difference
         }
         catch (Exception ex) { StatusLabel.Text = "块复制失败：" + ex.Message; }
     }

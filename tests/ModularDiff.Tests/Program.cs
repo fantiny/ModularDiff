@@ -29,6 +29,23 @@ try
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
+    await Test("Presentation highlights word-level differences as separate spans", () =>
+    {
+        var presenter = catalog.GetAll<ITextPresentation>().First(p => p.Id == "side-by-side");
+        var left = new DiffLine(EditKind.Delete, 1, null, "int count = f(alpha, beta) + 1;", null, "LF", null);
+        var right = new DiffLine(EditKind.Insert, null, 1, null, "int total = f(alpha, gamma) + 2;", null, "LF");
+        var view = presenter.Build([left, right]);
+        var row = view.Rows.Single(r => r.HunkId >= 0);
+        string Slice(TextCell cell, HighlightSpan span) => cell.Text.Substring(span.Start, span.Length);
+        Check(row.Left!.Highlights.Count >= 2 && row.Left.Highlights.Any(s => Slice(row.Left, s) == "count")
+              && row.Left.Highlights.Any(s => Slice(row.Left, s) == "1"), "left words highlight separately: "
+              + string.Join(",", row.Left.Highlights.Select(s => Slice(row.Left, s))));
+        Check(row.Right!.Highlights.Any(s => Slice(row.Right, s) == "total")
+              && row.Right.Highlights.Any(s => Slice(row.Right, s) == "2"), "right words highlight separately");
+        Check(!row.Left.Highlights.Any(s => Slice(row.Left, s).Contains("alpha")), "common words stay unhighlighted");
+        return Task.CompletedTask;
+    });
+
     await Test("Tables module: RFC4180 csv, cell alignment, xlsx sheets", async () =>
     {
         string dir = Path.Combine(temp, "tables"); Directory.CreateDirectory(dir);

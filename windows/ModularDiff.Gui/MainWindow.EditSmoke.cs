@@ -78,9 +78,32 @@ public partial class MainWindow
             HistoryRequested(RightCode, false); await _editTask;
             Require(_rightBuffer.Text == cssRight, "Cleanup undo");
 
+            // Find & replace on the focused side; each operation is one edit so a single undo restores.
+            FindBox.Text = "blue"; ReplaceBox.Text = "green"; _activePane = RightCode;
+            await ReplaceNext();
+            Require(_rightBuffer.Text.Contains("green"), "replace next applies");
+            HistoryRequested(RightCode, false); await _editTask;
+            Require(_rightBuffer.Text == cssRight, "Replace-next undo restores in one step");
+            ReplaceAllClick(this, new RoutedEventArgs()); await _editTask;
+            Require(!_rightBuffer.Text.Contains("blue") && _rightBuffer.Text.Contains("green"), "replace all applies");
+            HistoryRequested(RightCode, false); await _editTask;
+            Require(_rightBuffer.Text == cssRight, "Replace-all undo restores in one step");
+            FindBox.Text = ""; ReplaceBox.Text = "";
+
+            // Column selection (Alt+drag rectangle): copy spans lines; typing edits every line.
+            RightCode.SelectColumn(0, 1, 1, 4);
+            string rectangle = RightCode.SelectedText();
+            Require(rectangle == " { \n { ", "column copy: [" + rectangle.Replace("\n", "\\n") + "]");
+            RightCode.ReplaceSelection("//", "Column");
+            string[] rightLines = _rightBuffer.Text.Split('\n');
+            Require(rightLines[0].StartsWith("a//") && rightLines[1].StartsWith("b//"), "column typing edits every covered line");
+            int guard = 0;
+            while (_rightBuffer.Text != cssRight && _rightBuffer.CanUndo && guard++ < 12) { HistoryRequested(RightCode, false); await _editTask; }
+            Require(_rightBuffer.Text == cssRight, "column edits undo back to the original");
+
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             if (Arg("--screenshot") is string screenshot) SaveScreenshot(screenshot);
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign" }));
+            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign, find/replace, column selection" }));
         }
         catch (Exception ex) { exit = 2; File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-error.txt"), ex.ToString()); }
         _allowClose = true; Application.Current.Shutdown(exit);

@@ -85,6 +85,17 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
     }
     public string SelectedText()
     {
+        if (Buffer is not null && _columnSelection is { } column)
+        {
+            var lines = new List<string>();
+            foreach (var (line, start, end) in column.OrderBy(s => s.Line))
+            {
+                if (line >= _documentLines.Count) continue;
+                string text = _documentLines[line].Text;
+                lines.Add(text[Math.Clamp(start, 0, text.Length)..Math.Clamp(end, 0, text.Length)]);
+            }
+            return string.Join(Buffer.NewLine, lines);
+        }
         if (Buffer is not null) return Buffer.Text[Math.Min(_caret, _selectionAnchor)..Math.Max(_caret, _selectionAnchor)];
         if (_selected < 0 || _anchor < 0) return "";
         var result = new StringBuilder();
