@@ -53,8 +53,11 @@ public sealed record ComparisonRequest(string LeftPath, string RightPath, string
 public enum FileStatus { Equal, Modified, LeftOnly, RightOnly, Error }
 public sealed record DiffLine(EditKind Kind, int? LeftLine, int? RightLine,
     string? LeftText, string? RightText, string? LeftEnding, string? RightEnding);
+// 二进制差异区间:不等的连续字节段(相邻段间隔不超过 16 字节时合并,段数封顶防大文件膨胀)。
+public sealed record ByteDiff(long Offset, long Length);
 public sealed record FileComparison(string RelativePath, FileStatus Status, IReadOnlyList<DiffLine> Lines,
-    bool IsBinary = false, bool IsApproximate = false, string? Note = null);
+    bool IsBinary = false, bool IsApproximate = false, string? Note = null,
+    IReadOnlyList<ByteDiff>? BinaryDiffs = null);
 public sealed record ComparisonResult(string LeftPath, string RightPath, string ModuleId, string AlgorithmId,
     IReadOnlyList<FileComparison> Files, IReadOnlyList<string> Warnings)
 {

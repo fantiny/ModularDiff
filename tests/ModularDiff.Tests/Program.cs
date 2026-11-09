@@ -27,6 +27,30 @@ try
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
+    await Test("Binary diffs report merged unequal byte segments", async () =>
+    {
+        string dir = Path.Combine(temp, "hex"); Directory.CreateDirectory(dir);
+        var a = new byte[100]; var b = new byte[100];
+        a[10] = 1; b[10] = 2;                        // segment @10
+        a[40] = 5; b[40] = 6; a[41] = 7; b[41] = 8;  // run @40..41
+        a[50] = 1; b[50] = 2;                        // 9 bytes later -> merges into @40..50
+        a[80] = 1; b[80] = 2;                        // 30 bytes later -> separate segment
+        string left = Path.Combine(dir, "a.bin"), right = Path.Combine(dir, "b.bin");
+        await File.WriteAllBytesAsync(left, a); await File.WriteAllBytesAsync(right, b);
+        var result = await engine.CompareAsync(new(left, right, "myers"));
+        var file = result.Files.Single();
+        Check(file.IsBinary && file.BinaryDiffs is not null, "NUL bytes must use the binary path with segments.");
+        var segments = file.BinaryDiffs!;
+        Check(segments.Count == 3, $"expected 3 merged segments, got {segments.Count}");
+        Check(segments[0] == new ByteDiff(10, 1), "segment @10");
+        Check(segments[1] == new ByteDiff(40, 11), "runs 9 bytes apart merge into @40..50");
+        Check(segments[2] == new ByteDiff(80, 1), "segment @80 stays separate");
+        await File.WriteAllBytesAsync(left, [.. a, .. new byte[5]]);
+        result = await engine.CompareAsync(new(left, right, "myers"));
+        segments = result.Files.Single().BinaryDiffs!;
+        Check(segments[^1].Offset == 100 && segments[^1].Length == 5, "length mismatch tail is one segment");
+    });
+
     await Test("Unimportant patterns strip matched text before equality", async () =>
     {
         var left = "// header\nint Build = 1234;\nstring Tag = \"$Id: abc $\";\n";

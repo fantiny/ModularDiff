@@ -24,12 +24,14 @@ public sealed class FileComparisonModule : IComparisonModule
         }
         await using var left = Open(request.LeftPath);
         await using var right = Open(request.RightPath);
-        bool bytesEqual = await BytesEqual(left, right, cancellationToken);
+        var byteDiffs = await BinaryDiffs(left, right, cancellationToken);
+        bool bytesEqual = byteDiffs.Count == 0;
         string name = Path.GetFileName(request.LeftPath);
         FileComparison file;
         if (Math.Max(left.Length, right.Length) > Math.Min(options.MaxTextBytes, int.MaxValue))
             file = new(name, bytesEqual ? FileStatus.Equal : FileStatus.Modified, [], true,
-                Note: "Above text-size limit: exact byte comparison without line edits or text ignore options.");
+                Note: "Above text-size limit: exact byte comparison without line edits or text ignore options.",
+                BinaryDiffs: bytesEqual ? null : byteDiffs);
         else
         {
             left.Position = right.Position = 0;
@@ -37,7 +39,8 @@ public sealed class FileComparisonModule : IComparisonModule
             await left.ReadExactlyAsync(a, cancellationToken); await right.ReadExactlyAsync(b, cancellationToken);
             if (!TryDecode(a, out var leftText) || !TryDecode(b, out var rightText))
                 file = new(name, bytesEqual ? FileStatus.Equal : FileStatus.Modified, [], true,
-                    Note: "Binary or unsupported encoding: compared bytes exactly.");
+                    Note: "Binary or unsupported encoding: compared bytes exactly.",
+                    BinaryDiffs: bytesEqual ? null : byteDiffs);
             else
             {
                 var leftLines = Split(leftText); var rightLines = Split(rightText);
@@ -66,20 +69,53 @@ public sealed class FileComparisonModule : IComparisonModule
     private static FileStream Open(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.Read,
         65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-    private static async Task<bool> BytesEqual(FileStream left, FileStream right, CancellationToken token)
+    private const int MaxByteSegments = 4096;
+    private const long MergeGap = 16;
+
+    /// <summary>Streams both files and returns the unequal byte segments. Runs less than 16 bytes
+    /// apart are merged; the longer file's tail is one segment; once 4096 segments are recorded
+    /// the trailing segment is stretched to EOF to mark the truncation.</summary>
+    private static async Task<List<ByteDiff>> BinaryDiffs(FileStream left, FileStream right, CancellationToken token)
     {
-        if (left.Length != right.Length) return false;
+        var segments = new List<ByteDiff>();
+        long start = -1, end = -1;
+        bool capped = false;
+        void Flush(long length) { if (start >= 0) { segments.Add(new(start, length)); start = -1; } }
+
         var a = new byte[65536]; var b = new byte[65536];
-        long remaining = left.Length;
-        while (remaining > 0)
+        long common = Math.Min(left.Length, right.Length), max = Math.Max(left.Length, right.Length), offset = 0;
+        while (offset < common && !capped)
         {
-            int count = (int)Math.Min(a.Length, remaining);
+            int count = (int)Math.Min(a.Length, common - offset);
             await left.ReadExactlyAsync(a.AsMemory(0, count), token);
             await right.ReadExactlyAsync(b.AsMemory(0, count), token);
-            if (!a.AsSpan(0, count).SequenceEqual(b.AsSpan(0, count))) return false;
-            remaining -= count;
+            if (!a.AsSpan(0, count).SequenceEqual(b.AsSpan(0, count)))
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    if (a[i] == b[i]) continue;
+                    long at = offset + i;
+                    if (start >= 0 && at - end > MergeGap) Flush(end - start + 1);
+                    if (start < 0) start = at;
+                    end = at;
+                    if (segments.Count >= MaxByteSegments) { capped = true; break; }
+                }
+            }
+            offset += count;
         }
-        return true;
+        if (common < max && !capped)
+        {
+            if (start >= 0 && common - end > MergeGap) Flush(end - start + 1);
+            start = start >= 0 ? start : common;
+            end = max - 1;
+        }
+        if (capped)
+        {
+            if (start >= 0) Flush(max - start);
+            else if (segments.Count > 0) segments[^1] = new(segments[^1].Offset, max - segments[^1].Offset);
+        }
+        else Flush(end - start + 1);
+        return segments;
     }
 
     private static bool TryDecode(byte[] bytes, out string text)

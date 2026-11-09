@@ -110,6 +110,7 @@ public partial class MainWindow : Window
         _presentationVersion++; _presentation = null; _folderRows = [];
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
+        HexHost.Visibility = Visibility.Collapsed;
         TextTab.IsEnabled = false; FolderTab.IsEnabled = true; SetView(false);
         ActivityLabel.Text = "比较中…";
         try
@@ -236,6 +237,7 @@ public partial class MainWindow : Window
         var root = _folderResult; var request = _rootRequest;
         _currentNode = node; _textFile = null; _fileResult = null; _presentation = null; _presentationVersion++;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
+        HexHost.Visibility = Visibility.Collapsed;
         TextTab.Content = "≡ " + node.Name; TextTab.IsEnabled = true; SetView(true);
         TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
         string left = Path.Combine(root.LeftPath, node.RelativePath), right = Path.Combine(root.RightPath, node.RelativePath);
@@ -292,6 +294,8 @@ public partial class MainWindow : Window
     private async Task RebuildPresentation(CancellationToken token = default, bool preservePosition = false)
     {
         var file = _textFile; if (file is null) return;
+        if (file.IsBinary && file.BinaryDiffs is not null) { await ShowHexAsync(token); return; }
+        HexHost.Visibility = Visibility.Collapsed;
         if (PresentationBox.SelectedItem is not ITextPresentation presenter) throw new InvalidOperationException("没有文本展示插件。");
         int version = ++_presentationVersion;
         int context = TextFilter.SelectedIndex switch { 1 => 0, 2 => 3, _ => -1 };
@@ -309,6 +313,39 @@ public partial class MainWindow : Window
             : "空文件：没有可显示的文本行。";
         DetailLabel.Text = (file.IsApproximate ? "粗粒度对齐 · " : "") + (file.Note ?? "F7 / Shift+F7 跳转差异块 · Ctrl+F 查找 · 拖动选择行，Ctrl+C 复制");
     }
+    /// <summary>Binary files render as a virtualized side-by-side hex dump with the differing
+    /// bytes colored; the view loads at most 16&nbsp;MB per side.</summary>
+    private async Task ShowHexAsync(CancellationToken token)
+    {
+        var file = _textFile!;
+        var result = _fileResult!;
+        const long limit = 16L << 20;
+        try
+        {
+            Task<byte[]> Read(string path) => Task.Run(async () =>
+            {
+                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                var data = new byte[Math.Min(stream.Length, limit)];
+                await stream.ReadExactlyAsync(data, token);
+                return data;
+            }, token);
+            byte[] left = await Read(result.LeftPath), right = await Read(result.RightPath);
+            token.ThrowIfCancellationRequested();
+            Hex.SetContent(left, right, file.BinaryDiffs!);
+            HexHost.Visibility = Visibility.Visible;
+            if (file.BinaryDiffs!.Count > 0)
+                Hex.SetVerticalOffset(Math.Max(0, file.BinaryDiffs[0].Offset / 16 * Hex.RowHeight - 120));
+            HunkLabel.Text = $"{file.BinaryDiffs!.Count} 段字节差异";
+            StatusLabel.Text = $"十六进制比较 · 每侧最多加载 {limit >> 20} MB";
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            HexHost.Visibility = Visibility.Collapsed;
+            StatusLabel.Text = "十六进制视图加载失败：" + ex.Message;
+        }
+    }
+
     private async void TextFilterChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_ready || _textFile is null) return;
