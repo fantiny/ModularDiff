@@ -13,6 +13,11 @@
 - **重对齐与行工具**：编辑后可按当前算法与忽略选项立即重算对齐（⟳ 手动 / ⚡ 自动，不重读磁盘、保留未保存修改）；右键行按领域规则换行（如 CSS 多属性行拆成每属性一行，支持选区批量），⌗ 按语言格式化整侧文档（如 css-format）；行尾风格全程沿用原文件。
 - **目录同步**：带预览的批量复制、覆盖前自动备份、持久化操作记录与历史恢复，支持双向补齐和逐项冲突决策。
 - **插件隔离加载**：每个插件包使用独立的 AssemblyLoadContext 与依赖解析，宿主只依赖契约程序集。
+- **命名会话与最近比较**：左右路径 + 算法 + 忽略规则一键保存为命名会话，随时重开；最近比较自动记录（去重、上限 10 条），WPF 与跨平台版共用同一存储。
+- **不重要差异规则**：正则把匹配文本（如 `$Id$`、版本号、时间戳）标记为不重要，不产生差异块——配置与代码评审利器（CLI `--unimportant`，GUI 规则框每行一条）。
+- **十六进制比较**：二进制文件并排 hex dump，差异字节红色高亮、共享偏移列、自动定位首个差异，虚拟化渲染支持大文件。
+- **图片比较**：PNG / JPEG / BMP / GIF 并排显示，尺寸一致时右侧叠加半透明红色差异像素；尺寸与差异段直接从文件头解析，无图像库依赖。
+- **HTML 报告**：`--format html` 输出自包含着色并排报告，适合存档与分享（CLI 与 GUI 导出均可用）。
 - **资源管理器集成**（Windows，可选）：`ModularDiff Compare / Select Left / Compare to '<名称>'` 系列右键命令，随选中数量与记忆的左侧动态出现（与 Beyond Compare 同类的原生 COM 菜单扩展）。
 
 ## 系统要求
@@ -52,7 +57,7 @@ CLI 用法：
 
 CLI 退出码：`0` 相同、`1` 有差异、`2` 错误或比较不完整、`130` 取消；发现差异返回 `1` 是正常行为，便于脚本集成。`--output` 要求新文件，避免无提示覆盖已有报告。
 
-常用选项：`--module files|directories`、`--plugins PATH`、`--algorithm ID`、`--format ID`、`--ignore-case`、`--ignore-whitespace`、`--ignore-eol`、`--no-recursive`、`--max-text-mb N`。算法、模块、输出格式参数均为插件 ID，不是写死的枚举。
+常用选项：`--module files|directories|pictures`、`--plugins PATH`、`--algorithm ID`、`--format ID`、`--ignore-case`、`--ignore-whitespace`、`--ignore-eol`、`--unimportant REGEX`（可重复，标记不重要文本）、`--no-recursive`、`--max-text-mb N`。算法、模块、输出格式参数均为插件 ID，不是写死的枚举；两个图片文件会自动选择 pictures 模块。
 
 ## 项目结构
 
