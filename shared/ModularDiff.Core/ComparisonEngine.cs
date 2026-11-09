@@ -11,8 +11,11 @@ public sealed class ComparisonEngine(IPluginResolver plugins)
         if (request.EffectiveOptions.MaxTextBytes <= 0) throw new ArgumentException("MaxTextBytes must be positive.");
         _ = plugins.Get<IDiffAlgorithm>(request.AlgorithmId);
         var candidates = plugins.GetAll<IComparisonModule>().Where(m => m.CanCompare(request.LeftPath, request.RightPath)).ToArray();
+        // "files" is the generic fallback module: when a more specific module (e.g. pictures) also
+        // applies, auto-selection prefers it instead of demanding an explicit --module.
         var module = moduleId is not null ? plugins.Get<IComparisonModule>(moduleId)
             : candidates.Length == 1 ? candidates[0]
+            : candidates.ExceptBy(["files"], m => m.Id).ToArray() is { Length: 1 } specific ? specific[0]
             : throw new InvalidOperationException(candidates.Length == 0
                 ? "Choose two existing files or two existing directories."
                 : "Multiple comparison modules support these paths; select --module explicitly.");

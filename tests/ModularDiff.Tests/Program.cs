@@ -27,6 +27,33 @@ try
     await MenuPlanTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
+    await Test("Pictures module: header sizes, byte segments, auto routing", async () =>
+    {
+        string dir = Path.Combine(temp, "pics"); Directory.CreateDirectory(dir);
+        static byte[] Png(int width, int height, byte tail)
+        {
+            var data = new byte[40];
+            byte[] header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52];
+            header.CopyTo(data, 0);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(16, 4), width);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(20, 4), height);
+            data[^1] = tail;
+            return data;
+        }
+        string a = Path.Combine(dir, "a.png"), b = Path.Combine(dir, "b.png");
+        await File.WriteAllBytesAsync(a, Png(2, 3, 0));
+        await File.WriteAllBytesAsync(b, Png(2, 3, 9));
+        var result = await engine.CompareAsync(new(a, b, "myers"));
+        var file = result.Files.Single();
+        Check(result.ModuleId == "pictures", "Auto-selection must prefer the specific module over generic files.");
+        Check(file.IsBinary && file.Status == FileStatus.Modified, "Different tail bytes must report Modified.");
+        Check(file.Note is not null && file.Note.Contains("PNG 2×3"), "Dimensions must come from the header: " + file.Note);
+        Check(file.BinaryDiffs is { Count: 1 } segments && segments[0].Offset == 39, "Tail byte is one segment");
+        await File.WriteAllBytesAsync(b, Png(2, 3, 0));
+        result = await engine.CompareAsync(new(a, b, "myers"));
+        Check(result.Files.Single().Status == FileStatus.Equal && result.Files.Single().BinaryDiffs is null, "Identical pictures must be equal.");
+    });
+
     await Test("Binary diffs report merged unequal byte segments", async () =>
     {
         string dir = Path.Combine(temp, "hex"); Directory.CreateDirectory(dir);

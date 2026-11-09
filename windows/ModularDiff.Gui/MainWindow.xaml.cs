@@ -110,7 +110,7 @@ public partial class MainWindow : Window
         _presentationVersion++; _presentation = null; _folderRows = [];
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
-        HexHost.Visibility = Visibility.Collapsed;
+        HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         TextTab.IsEnabled = false; FolderTab.IsEnabled = true; SetView(false);
         ActivityLabel.Text = "比较中…";
         try
@@ -237,7 +237,7 @@ public partial class MainWindow : Window
         var root = _folderResult; var request = _rootRequest;
         _currentNode = node; _textFile = null; _fileResult = null; _presentation = null; _presentationVersion++;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
-        HexHost.Visibility = Visibility.Collapsed;
+        HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         TextTab.Content = "≡ " + node.Name; TextTab.IsEnabled = true; SetView(true);
         TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
         string left = Path.Combine(root.LeftPath, node.RelativePath), right = Path.Combine(root.RightPath, node.RelativePath);
@@ -291,11 +291,18 @@ public partial class MainWindow : Window
         RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.RightLine is not null):N0} 行 · 右侧";
         TextTab.Content = "≡ " + Path.GetFileName(file.RelativePath);
     }
+    private static readonly HashSet<string> PictureExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
+
     private async Task RebuildPresentation(CancellationToken token = default, bool preservePosition = false)
     {
         var file = _textFile; if (file is null) return;
-        if (file.IsBinary && file.BinaryDiffs is not null) { await ShowHexAsync(token); return; }
-        HexHost.Visibility = Visibility.Collapsed;
+        if (file.IsBinary)
+        {
+            if (PictureExtensions.Contains(Path.GetExtension(_fileResult?.LeftPath ?? ""))) await ShowPictureAsync(file);
+            else await ShowHexAsync(token);
+            return;
+        }
+        HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         if (PresentationBox.SelectedItem is not ITextPresentation presenter) throw new InvalidOperationException("没有文本展示插件。");
         int version = ++_presentationVersion;
         int context = TextFilter.SelectedIndex switch { 1 => 0, 2 => 3, _ => -1 };
@@ -344,6 +351,69 @@ public partial class MainWindow : Window
             HexHost.Visibility = Visibility.Collapsed;
             StatusLabel.Text = "十六进制视图加载失败：" + ex.Message;
         }
+    }
+
+    /// <summary>Pictures render side by side; when dimensions match, differing pixels are
+    /// overlaid in translucent red on the right image (up to 4096² pixels).</summary>
+    private async Task ShowPictureAsync(FileComparison file)
+    {
+        var result = _fileResult!;
+        try
+        {
+            var left = LoadPicture(result.LeftPath);
+            var right = LoadPicture(result.RightPath);
+            LeftPicture.Source = left;
+            RightPicture.Source = right;
+            if (file.Status != FileStatus.Equal && left.PixelWidth == right.PixelWidth && left.PixelHeight == right.PixelHeight
+                && (long)left.PixelWidth * left.PixelHeight <= 4096L * 4096L)
+            {
+                WriteableBitmap overlay = await Task.Run(() => OverlayDifference(left, right));
+                RightPicture.Source = overlay;
+            }
+            HexHost.Visibility = Visibility.Collapsed;
+            PictureHost.Visibility = Visibility.Visible;
+            HunkLabel.Text = file.Note ?? "";
+            StatusLabel.Text = "图片比较 · 右侧红色半透明为差异像素";
+        }
+        catch (Exception ex)
+        {
+            PictureHost.Visibility = Visibility.Collapsed;
+            StatusLabel.Text = "图片视图加载失败：" + ex.Message;
+        }
+    }
+
+    private static BitmapImage LoadPicture(string path)
+    {
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.UriSource = new Uri(path);
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    private static WriteableBitmap OverlayDifference(BitmapSource left, BitmapSource right)
+    {
+        int width = left.PixelWidth, height = left.PixelHeight, stride = width * 4;
+        var a = new byte[stride * height];
+        var b = new byte[stride * height];
+        left.CopyPixels(a, stride, 0);
+        right.CopyPixels(b, stride, 0);
+        var pixels = new int[width * height];
+        right.CopyPixels(pixels, stride, 0);
+        int changed = 0;
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            int o = i * 4;
+            if (a[o] == b[o] && a[o + 1] == b[o + 1] && a[o + 2] == b[o + 2]) continue;
+            pixels[i] = unchecked((int)0x46FF2020);   // translucent red over the right image
+            changed++;
+        }
+        var overlay = new WriteableBitmap(right);
+        overlay.WritePixels(new Int32Rect(0, 0, width, height), pixels, stride, 0);
+        overlay.Freeze();
+        return overlay;
     }
 
     private async void TextFilterChanged(object sender, SelectionChangedEventArgs e)
