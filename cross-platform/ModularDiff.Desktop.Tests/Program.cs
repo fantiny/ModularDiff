@@ -14,8 +14,8 @@ void Check(bool ok, string message) { if (!ok) throw new Exception(message); Con
 Check(plugins.Diagnostics.Count == 0, "plugin load");
 string uiRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ui-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(uiRoot);
-File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n");
-File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n--bg:#0b0d10;--panel:#11151a;\n");
+File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n");
+File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n");
 var window = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(uiRoot, "left.cs"), "--right", Path.Combine(uiRoot, "right.cs"), "--auto-compare"]);
 window.Show();
 Check(window.Content is Grid && window.IsVisible, "Avalonia window initializes on headless platform");
@@ -45,6 +45,21 @@ compareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Con
 var realign = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
 Check(rowsList.Items.Count > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
+// 多选 + 批量换行 + ⟳ 重对齐:两条 css 行各拆成两行,行数 +2。
+var cssRows = rowsList.Items.OfType<AlignedRow>().Where(r => r.Left?.Text.StartsWith("--") == true).ToList();
+Check(cssRows.Count == 2, "two css rows present for batch split");
+rowsList.SelectedItems?.Clear();
+foreach (var r in cssRows) rowsList.SelectedItems!.Add(r);
+var splitItem = cssRow!.ContextMenu!.Items.OfType<MenuItem>().First();
+splitItem.Tag = cssRows.Count;   // 模拟右键时隧道处理器写入的批量数
+splitItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
+Dispatcher.UIThread.RunJobs();
+int before = rowsList.ItemCount;
+var realignButton = window.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true);
+realignButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+var batchDone = DateTime.UtcNow.AddSeconds(5);
+while (DateTime.UtcNow < batchDone) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
+Check(rowsList.ItemCount - before == 2, $"batch split realigns to {rowsList.ItemCount - before} extra rows (expected 2)");
 foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
     save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var saveDone = DateTime.UtcNow.AddSeconds(5);

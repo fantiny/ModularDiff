@@ -17,7 +17,7 @@ public sealed class MainWindow : Window
     private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
     private readonly TextBlock _status = new() { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap };
-    private readonly ListBox _rows = new(), _files = new() { SelectionMode = SelectionMode.Multiple };
+    private readonly ListBox _rows = new() { SelectionMode = SelectionMode.Multiple }, _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly TabControl _tabs = new();
     private readonly TabItem _diffTab = new() { Header = "差异对齐" };
     private readonly ComboBox _algorithm = new() { Width = 130 };
@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
+    private int _selectionAnchor = -1;
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
     {
@@ -52,6 +53,7 @@ public sealed class MainWindow : Window
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = "myers";
         ToolTip.SetTip(_algorithm, "比较算法插件");
         _toolbar.Children.Add(Button("▶", "比较左右路径", () => Run(Compare)));
+        _toolbar.Children.Add(Button("⟳", "重新对齐：按当前算法与忽略选项重算，不重读磁盘，保留未保存修改", Realign));
         _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
@@ -121,23 +123,98 @@ public sealed class MainWindow : Window
         var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         editor.TextChanged += (_, _) => CellEdited(row, left, editor);
         editor.GotFocus += (_, _) => _rows.SelectedItem = row;   // 聚焦单元格即选中所在行,供差异块合并等操作使用
+        number.PointerPressed += (_, e) => { SelectRows(row, e.KeyModifiers); e.Handled = true; };   // 行号区:多选入口
         var splitters = _plugins.GetAll<ILineSplitter>()
             .Where(s => cell is not null && s.CanSplit((left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "", cell.Text))
             .ToArray();
         if (splitters.Length > 0)
         {
             var menu = new ContextMenu();
+            var pairs = new List<(MenuItem Item, ILineSplitter Splitter)>();
             foreach (var splitter in splitters)
             {
-                var item = new MenuItem { Header = "换行 · " + splitter.DisplayName };
-                item.Click += (_, _) => ApplySplit(row, left, splitter);
+                var item = new MenuItem { Header = "换行 · " + splitter.DisplayName, Tag = 1 };
+                item.Click += (_, _) => { if (item.Tag is int n && n > 1) ApplySplitBatch(left, splitter); else ApplySplit(row, left, splitter); };
+                pairs.Add((item, splitter));
                 menu.Items.Add(item);
             }
             editor.ContextMenu = menu;
+            editor.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
+            {
+                if (e.GetCurrentPoint(editor).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
+                if (_rows.SelectedItems is { } selection && !selection.Contains(row)) _rows.SelectedItem = row;
+                foreach (var (item, splitter) in pairs)
+                {
+                    int batch = CountSplittable(left, splitter);
+                    item.Tag = batch;
+                    item.Header = batch > 1 ? $"换行 · {splitter.DisplayName}（{batch} 行）" : "换行 · " + splitter.DisplayName;
+                }
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         }
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         line.Children.Add(number); Grid.SetColumn(editor, 1); line.Children.Add(editor); Grid.SetColumn(ending, 2); line.Children.Add(ending);
         return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
+    }
+    private void Realign()
+    {
+        if (_session.Left is null || _session.Right is null) { Run(Compare); return; }
+        try { _session.Recompare(); RefreshRows(); }
+        catch (Exception ex) { _status.Text = "重对齐失败：" + ex.Message; }
+    }
+    private void SelectRows(AlignedRow row, Avalonia.Input.KeyModifiers modifiers)
+    {
+        // 行号区域点击:普通单击单选,Shift 范围选择,Cmd/Ctrl 点选切换 —— 供批量右键操作。
+        if (_rows.SelectedItems is not { } selected || _rows.ItemsSource is not IReadOnlyList<AlignedRow> rows) { _rows.SelectedItem = row; return; }
+        int index = IndexOf(rows, row);
+        bool toggle = modifiers.HasFlag(Avalonia.Input.KeyModifiers.Control) || modifiers.HasFlag(Avalonia.Input.KeyModifiers.Meta);
+        if (modifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift) && _selectionAnchor >= 0)
+        {
+            selected.Clear();
+            for (int i = Math.Min(_selectionAnchor, index); i <= Math.Max(_selectionAnchor, index) && i < rows.Count; i++) selected.Add(rows[i]);
+        }
+        else if (toggle)
+        {
+            if (selected.Contains(row)) selected.Remove(row); else selected.Add(row);
+            _selectionAnchor = index;
+        }
+        else { selected.Clear(); selected.Add(row); _selectionAnchor = index; }
+    }
+    private static int IndexOf(IReadOnlyList<AlignedRow> rows, AlignedRow row)
+    {
+        for (int i = 0; i < rows.Count; i++) if (ReferenceEquals(rows[i], row)) return i;
+        return -1;
+    }
+    private int CountSplittable(bool left, ILineSplitter splitter)
+    {
+        string path = (left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "";
+        return _rows.SelectedItems?.Cast<AlignedRow>()
+            .Select(r => left ? r.Left : r.Right).OfType<TextCell>()
+            .Count(c => splitter.CanSplit(path, c.Text)) ?? 0;
+    }
+    private void ApplySplitBatch(bool left, ILineSplitter splitter)
+    {
+        if (_loading || _session.Left is null || _session.Right is null) return;
+        string[] lines = (left ? _session.Left : _session.Right).Text.Split('\n');
+        var targets = _rows.SelectedItems?.Cast<AlignedRow>()
+            .Select(r => left ? r.Left : r.Right).OfType<TextCell>()
+            .Where(c => c.LineNumber - 1 < lines.Length)
+            .OrderByDescending(c => c.LineNumber).ToList();   // 自底向上替换,行号不失效
+        if (targets is null || targets.Count == 0) return;
+        int applied = 0;
+        foreach (var cell in targets)
+        {
+            string raw = lines[cell.LineNumber - 1];
+            string suffix = raw.EndsWith('\r') ? "\r" : "";
+            var parts = splitter.Split(suffix.Length > 0 ? raw[..^1] : raw);
+            if (parts.Count < 2) continue;
+            lines[cell.LineNumber - 1] = string.Join("\n" + suffix, parts) + suffix;
+            applied++;
+        }
+        if (applied == 0) return;
+        _session.Edit(left, string.Join("\n", lines));
+        _debounce.Stop();
+        RefreshDirty();
+        _status.Text = $"已按「{splitter.DisplayName}」换行 {applied} 行 · 点 ⟳ 重新对齐";
     }
     private void ApplySplit(AlignedRow row, bool left, ILineSplitter splitter)
     {
