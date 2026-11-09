@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         else if (arguments.Contains("--edit-smoke-test")) Loaded += EditSmokeTest;
         else if (arguments.Contains("--smoke-test")) Loaded += SmokeTest;
         else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) => await CompareAsync();
+        if (arguments.Contains("--wrap")) WrapToggle.IsChecked = true;
     }
     private string? Arg(string name) { int i = Array.IndexOf(_arguments, name); return i >= 0 && i + 1 < _arguments.Length ? _arguments[i + 1] : null; }
     private void NewWindowClick(object sender, RoutedEventArgs e) => new MainWindow([]).Show();
@@ -433,8 +434,8 @@ public partial class MainWindow : Window
     private void UpdateOverview()
     {
         if (_presentation is null || _presentation.Rows.Count == 0) return;
-        int first = Math.Clamp((int)(LeftCode.VerticalOffset / LeftCode.RowHeight), 0, _presentation.Rows.Count - 1);
-        int last = Math.Clamp(first + (int)(LeftCode.ViewportHeight / LeftCode.RowHeight), 0, _presentation.Rows.Count - 1);
+        int first = Math.Clamp(LeftCode.FirstVisibleRow, 0, _presentation.Rows.Count - 1);
+        int last = Math.Clamp(LeftCode.LastVisibleRow, 0, _presentation.Rows.Count - 1);
         Overview.SetViewport(_presentation.Rows[first].SourceIndex, _presentation.Rows[last].SourceIndex);
     }
     private void CodeSelected(int index, DiffPane? source = null)
@@ -486,6 +487,11 @@ public partial class MainWindow : Window
     }
     private void ShowEolClick(object sender, RoutedEventArgs e)
     { LeftCode.ShowEndings = RightCode.ShowEndings = ShowEol.IsChecked == true; LeftCode.InvalidateVisual(); RightCode.InvalidateVisual(); }
+    private void WrapChanged(object sender, RoutedEventArgs e)
+    {
+        bool wrap = WrapToggle.IsChecked == true;
+        LeftCode.WrapLines = RightCode.WrapLines = wrap;
+    }
     private void ZoomOut(object sender, RoutedEventArgs e) => Zoom(-1);
     private void ZoomIn(object sender, RoutedEventArgs e) => Zoom(1);
     private void Zoom(int delta) { _codeFontSize = Math.Clamp(_codeFontSize + delta, 10, 24); _syncText = true; LeftCode.Zoom(_codeFontSize); RightCode.Zoom(_codeFontSize); _syncText = false; UpdateOverview(); }
@@ -571,6 +577,8 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F3) { e.Handled = true; if (TextView.Visibility == Visibility.Visible) await FindNext(); }
         else if (e.Key == Key.H && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         { e.Handled = true; ReplaceToggle.IsChecked = true; ReplaceBox.Focus(); ReplaceBox.SelectAll(); }
+        else if (e.Key == Key.Z && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+        { e.Handled = true; WrapToggle.IsChecked = WrapToggle.IsChecked != true; }
         else if (e.Key == Key.N && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { e.Handled = true; NewWindowClick(sender, e); }
         else if (e.Key == Key.Escape) { SettingsToggle.IsChecked = false; CancelClick(sender, e); }
         else if (e.SystemKey == Key.Left && _folderResult is not null) { SetView(false); e.Handled = true; }

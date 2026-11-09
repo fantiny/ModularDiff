@@ -101,6 +101,21 @@ public partial class MainWindow
             while (_rightBuffer.Text != cssRight && _rightBuffer.CanUndo && guard++ < 12) { HistoryRequested(RightCode, false); await _editTask; }
             Require(_rightBuffer.Text == cssRight, "column edits undo back to the original");
 
+            // Wrapping: a long row spans several visual lines, both sides share the height.
+            string longText = new string('x', 500) + "\nsecond\n";
+            LeftPath.Text = Path.Combine(root, "wrap-left.txt"); RightPath.Text = Path.Combine(root, "wrap-right.txt");
+            await File.WriteAllTextAsync(LeftPath.Text, longText); await File.WriteAllTextAsync(RightPath.Text, new string('y', 500) + "\nsecond\n");
+            await CompareAsync();
+            double single = LeftCode.RowHeightOf(0);
+            WrapToggle.IsChecked = true;
+            double wrapped = LeftCode.RowHeightOf(0);
+            Require(wrapped > single * 2, $"wrapped row must be taller: {wrapped} vs {single}");
+            Require(Math.Abs(RightCode.RowHeightOf(0) - wrapped) < .5, "both sides share the wrapped row height");
+            LeftCode.SetCaret(_leftBuffer!.Text.Length - 2);   // hit-testing path must stay sane while wrapped
+            Require(LeftCode.CaretOffset > 0, "caret placement while wrapped");
+            WrapToggle.IsChecked = false;
+            Require(Math.Abs(LeftCode.RowHeightOf(0) - single) < .5, "unwrapping restores single-line height");
+
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             if (Arg("--screenshot") is string screenshot) SaveScreenshot(screenshot);
             File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign, find/replace, column selection" }));

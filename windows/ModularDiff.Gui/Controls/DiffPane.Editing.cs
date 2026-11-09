@@ -98,7 +98,7 @@ public sealed partial class DiffPane
         _selected = row;
         if (reveal)
         {
-            double y = row * RowHeight;
+            double y = RowTopOf(row);
             if (y < _verticalOffset) SetVerticalOffset(y);
             else if (y + RowHeight > _verticalOffset + _viewport.Height) SetVerticalOffset(y + RowHeight - _viewport.Height);
             string prefix = line < _documentLines.Count ? _documentLines[line].Text[..Math.Clamp(_caret - _documentLines[line].Offset, 0, _documentLines[line].Text.Length)] : "";
@@ -116,6 +116,18 @@ public sealed partial class DiffPane
     }
     private int OffsetAtPoint(Point point)
     {
+        if (_wrapLines)
+        {
+            int wrappedRow = RowAtOffset(point.Y + _verticalOffset);
+            if (wrappedRow >= _rows.Count) return Buffer?.Text.Length ?? 0;
+            var hit = IsLeft ? _rows[wrappedRow].Left : _rows[wrappedRow].Right;
+            if (hit is null || hit.LineNumber > _documentLines.Count) return OffsetForRow(wrappedRow);
+            (_, int[] positions) = Expand(hit);
+            int visual = Math.Clamp((int)((point.Y + _verticalOffset - _rowTops[wrappedRow]) / RowHeight), 0, (positions[^1] + WrapColumns - 1) / WrapColumns);
+            int column = Math.Clamp((int)((point.X - 64) / CharWidth) + visual * WrapColumns, 0, positions[^1]);
+            int character = Math.Clamp(CharAtColumn(positions, column), 0, hit.Text.Length);
+            return _documentLines[hit.LineNumber - 1].Offset + character;
+        }
         int row = Math.Max(0, (int)((point.Y + _verticalOffset) / RowHeight));
         if (row >= _rows.Count) return Buffer?.Text.Length ?? 0;
         var cell = IsLeft ? _rows[row].Left : _rows[row].Right;
@@ -322,6 +334,35 @@ public sealed partial class DiffPane
     }
     protected override void OnGotKeyboardFocus(KeyboardFocusChangedEventArgs e) { base.OnGotKeyboardFocus(e); InvalidateVisual(); }
     protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e) { base.OnLostKeyboardFocus(e); InvalidateVisual(); }
+    /// <summary>Column-space selection/caret overlay for a wrapped visual line: everything is
+    /// clipped to [colStart, colEnd) so spans spanning visual lines draw on each of them.</summary>
+    internal void DrawWrappedOverlay(DrawingContext dc, TextCell cell, FormattedText formatted, int[] positions, Point origin, int colStart, int colEnd)
+    {
+        if (Buffer is null || cell.LineNumber > _documentLines.Count) return;
+        var line = _documentLines[cell.LineNumber - 1];
+        int ColumnOf(int character) => positions[Math.Clamp(character, 0, positions.Length - 1)];
+        void Draw(int from, int to)
+        {
+            from = Math.Clamp(from, colStart, colEnd); to = Math.Clamp(to, colStart, colEnd);
+            if (to <= from) return;
+            var geometry = formatted.BuildHighlightGeometry(origin, from - colStart, to - from);
+            if (geometry is not null) dc.DrawGeometry(Selected, null, geometry);
+        }
+        if (_columnSelection is { } column)
+        {
+            foreach (var (row, from, to) in column)
+                if (row == cell.LineNumber - 1 && to > from) Draw(from, to);
+        }
+        else if (_caret != _selectionAnchor)
+            Draw(ColumnOf(Math.Min(_caret, _selectionAnchor) - line.Offset), ColumnOf(Math.Max(_caret, _selectionAnchor) - line.Offset));
+        if (IsKeyboardFocused && LineAt(_caret) == cell.LineNumber - 1)
+        {
+            int column2 = Math.Clamp(ColumnOf(_caret - line.Offset), colStart, colEnd);
+            if (column2 >= colStart && column2 < colEnd)
+                dc.DrawLine(new Pen(Brush("#254E86"), 1.3), new(origin.X + (column2 - colStart) * CharWidth, origin.Y - 2), new(origin.X + (column2 - colStart) * CharWidth, origin.Y + _fontSize + 1));
+        }
+    }
+
     private void DrawTextSelection(DrawingContext dc, TextCell cell, FormattedText formatted, int[] positions, Point origin)
     {
         if (Buffer is null || cell.LineNumber > _documentLines.Count) return;
@@ -355,7 +396,7 @@ public sealed partial class DiffPane
     private void DrawFinalCaretRow(DrawingContext dc)
     {
         if (!HasFinalCaretRow) return;
-        double y = _rows.Count * RowHeight - _verticalOffset;
+        double y = (_rowTops.Length == 0 ? 0 : _rowTops[^1] + _rowHeights[^1]) - _verticalOffset;
         if (y < -RowHeight || y > RenderSize.Height) return;
         dc.DrawRectangle(Brush("#F7F8FA"), null, new Rect(0, y, 54, RowHeight));
         var number = Format((_documentLines.Count + 1).ToString(), Muted, 11); dc.DrawText(number, new(46 - number.Width, y + 4));
