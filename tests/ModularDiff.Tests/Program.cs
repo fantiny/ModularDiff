@@ -25,6 +25,7 @@ try
     await SyncTests.Run(catalog, temp, Test);
     await SafetyTests.Run(catalog, temp, Test);
     await MenuPlanTests.Run(Test);
+    await SessionStoreTests.Run(Test, temp);
     await Test("myers: budget fallback anchors unique common lines", () =>
     {
         var algorithm = catalog.Get<IDiffAlgorithm>("myers");

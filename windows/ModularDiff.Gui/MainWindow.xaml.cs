@@ -63,7 +63,7 @@ public partial class MainWindow : Window
             CompareButton.IsEnabled = false;
         }
         Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
-        InitializeEditing(); InitializeSync(); InitializeLineTools();
+        InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions();
         _ready = true;
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
         if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
@@ -123,6 +123,7 @@ public partial class MainWindow : Window
             }
             ExportButton.IsEnabled = true;
             UpdateSummary();
+            RecordRecentComparison(request);
         }
         catch (OperationCanceledException) { StatusLabel.Text = "已取消比较。"; }
         catch (Exception ex) { StatusLabel.Text = "比较失败：" + ex.Message; }
