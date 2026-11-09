@@ -7,9 +7,10 @@
 
 - **文件与目录比较**：左右逐行对齐显示差异；目录视图呈现名称、大小、修改时间与状态，支持全部 / 差异 / 相同 / 仅左 / 仅右筛选和路径搜索。
 - **可插拔算法**：内置 Myers（最短编辑脚本）与 Patience（可读对齐）两种算法，可加载自行开发的算法插件。
-- **精细文本展示**：行内变化区着色、轻量语法高亮、差异块导航（F7 / Shift+F7）、概览条点击定位、仅差异 / 带上下文视图、双侧同步滚动、行内搜索（Ctrl+F）。
+- **精细文本展示**：行内变化区着色、轻量语法高亮、差异块导航（F7 / Shift+F7）、概览条点击定位、仅差异 / 带上下文视图、双侧同步滚动、行内搜索（Ctrl+F）、多窗口错开排列（Ctrl+N）。
 - **编码与二进制**：支持 UTF-8（有无 BOM 均可）、带 BOM 的 UTF-16 / UTF-32；二进制与超大文件自动切换为流式字节比较。
 - **编辑与合并**：左右两侧均可编辑，支持块级双向复制、每侧独立的撤销 / 重做、保存前 SHA-256 冲突检测，外部修改不会被告警前覆盖。
+- **重对齐与行工具**：编辑后可按当前算法与忽略选项立即重算对齐（⟳ 手动 / ⚡ 自动，不重读磁盘、保留未保存修改）；右键行按领域规则换行（如 CSS 多属性行拆成每属性一行，支持选区批量），⌗ 按语言格式化整侧文档（如 css-format）；行尾风格全程沿用原文件。
 - **目录同步**：带预览的批量复制、覆盖前自动备份、持久化操作记录与历史恢复，支持双向补齐和逐项冲突决策。
 - **插件隔离加载**：每个插件包使用独立的 AssemblyLoadContext 与依赖解析，宿主只依赖契约程序集。
 - **资源管理器集成**（Windows，可选）：`ModularDiff Compare / Select Left / Compare to '<名称>'` 系列右键命令，随选中数量与记忆的左侧动态出现（与 Beyond Compare 同类的原生 COM 菜单扩展）。
@@ -60,7 +61,7 @@ shared/                           两个 GUI 共用的实现
   ModularDiff.Contracts/          插件契约与 UI 无关模型
   ModularDiff.Core/               插件加载、依赖校验、比较调度
   ModularDiff.Cli/                跨平台命令行宿主
-  plugins/                        算法、比较、编辑、合并、同步、备份、格式与展示插件
+  plugins/                        算法、比较、编辑、合并、同步、备份、格式化、行拆分与展示插件
 windows/
   ModularDiff.Gui/                WPF 界面、Windows 对话框、右键菜单注册
   ModularDiff.ShellExt/           Explorer 右键菜单 COM 扩展（NativeAOT 原生 DLL）
@@ -108,6 +109,8 @@ flowchart LR
 | `IComparisonModule` | 判断支持的输入、异步比较、进度与取消 |
 | `IResultFormatter` | 将统一结果写入 `TextWriter`，用于 CLI 与 GUI 导出 |
 | `ITextPresentation` | 将行编辑脚本转换为成对行、差异块与折叠视图模型 |
+| `ILineSplitter` | 差异对齐页右键"换行"：按领域规则把一行拆成多行（如 CSS 多属性行），支持选区批量 |
+| `ICodeFormatter` | 把整侧文本按语言规范重排（选择器 / 声明 / 缩进等），⌗ 按钮调用 |
 | `IEditBufferFactory` / `ITextStorage` / `IBufferComparison` / `IBlockMerge` | 编辑缓冲、磁盘读写与冲突检测、缓冲比较、块合并 |
 | `ISyncPlanner` / `ISyncExecutor` / `ISyncBackup` / `ISyncJournal` / `ISyncRecovery` | 同步计划、执行、备份、记录与恢复 |
 
