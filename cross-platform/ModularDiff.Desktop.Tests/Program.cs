@@ -14,8 +14,8 @@ void Check(bool ok, string message) { if (!ok) throw new Exception(message); Con
 Check(plugins.Diagnostics.Count == 0, "plugin load");
 string uiRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ui-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(uiRoot);
-File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n");
-File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n");
+File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n--gap:8px;--radius:12px;\n");
+File.WriteAllText(Path.Combine(uiRoot, "right.cs"), "// Comparison sample\nclass Calculator\n{\n    // Handle subtraction\n    int Sum(int a, int b) => a - b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n--gap:8px;--radius:12px;\n");
 var window = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(uiRoot, "left.cs"), "--right", Path.Combine(uiRoot, "right.cs"), "--auto-compare"]);
 window.Show();
 Check(window.Content is Grid && window.IsVisible, "Avalonia window initializes on headless platform");
@@ -46,7 +46,7 @@ var realign = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
 Check(rowsList.Items.Count > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
 // 多选 + 批量换行 + ⟳ 重对齐:两条 css 行各拆成两行,行数 +2。
-var cssRows = rowsList.Items.OfType<AlignedRow>().Where(r => r.Left?.Text.StartsWith("--") == true).ToList();
+var cssRows = rowsList.Items.OfType<AlignedRow>().Where(r => r.Left?.Text.StartsWith("--") == true && !r.Left.Text.StartsWith("--gap:")).ToList();
 Check(cssRows.Count == 2, "two css rows present for batch split");
 rowsList.SelectedItems?.Clear();
 foreach (var r in cssRows) rowsList.SelectedItems!.Add(r);
@@ -60,6 +60,23 @@ realignButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Con
 var batchDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < batchDone) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
 Check(rowsList.ItemCount - before == 2, $"batch split realigns to {rowsList.ItemCount - before} extra rows (expected 2)");
+// ⚡ 自动重对齐:开启后右键换行立即重算,无需点 ⟳。
+var autoToggle = window.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>().First(b => (ToolTip.GetTip(b) as string)?.Contains("自动重对齐") == true);
+autoToggle.IsChecked = true;
+var allRows2 = rowsList.Items.OfType<AlignedRow>().ToList();
+var gapRow = allRows2.First(r => r.Left?.Text.StartsWith("--gap:") == true);
+rowsList.SelectedItems?.Clear();
+rowsList.SelectedItems!.Add(gapRow);
+rowsList.ScrollIntoView(gapRow);
+Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
+int gapIndex = allRows2.IndexOf(gapRow);
+var gapEditor = (rowsList.ContainerFromIndex(gapIndex) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
+var gapItem = gapEditor!.ContextMenu!.Items.OfType<MenuItem>().First();
+gapItem.Tag = 1;
+int autoBefore = rowsList.ItemCount;
+gapItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
+Dispatcher.UIThread.RunJobs();
+Check(rowsList.ItemCount - autoBefore == 1, $"auto-realign split adds 1 row immediately (got {rowsList.ItemCount - autoBefore})");
 foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
     save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var saveDone = DateTime.UtcNow.AddSeconds(5);

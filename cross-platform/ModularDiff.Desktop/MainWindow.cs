@@ -24,6 +24,7 @@ public sealed class MainWindow : Window
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreEol = new() { Content = "↵", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreWhitespace = new() { Content = "␣", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreCase = new() { Content = "Aa", MinWidth = 32, Padding = new Thickness(8, 4) };
+    private readonly Avalonia.Controls.Primitives.ToggleButton _autoRealign = new() { Content = "⚡", MinWidth = 32, Padding = new Thickness(8, 4) };
     private static int _windowCount;
     private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
@@ -54,6 +55,8 @@ public sealed class MainWindow : Window
         ToolTip.SetTip(_algorithm, "比较算法插件");
         _toolbar.Children.Add(Button("▶", "比较左右路径", () => Run(Compare)));
         _toolbar.Children.Add(Button("⟳", "重新对齐：按当前算法与忽略选项重算，不重读磁盘，保留未保存修改", Realign));
+        ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
+        _toolbar.Children.Add(_autoRealign);
         _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
@@ -214,7 +217,8 @@ public sealed class MainWindow : Window
         _session.Edit(left, string.Join("\n", lines));
         _debounce.Stop();
         RefreshDirty();
-        _status.Text = $"已按「{splitter.DisplayName}」换行 {applied} 行 · 点 ⟳ 重新对齐";
+        if ((bool)_autoRealign.IsChecked!) Realign();
+        else _status.Text = $"已按「{splitter.DisplayName}」换行 {applied} 行 · 点 ⟳ 重新对齐";
     }
     private void ApplySplit(AlignedRow row, bool left, ILineSplitter splitter)
     {
@@ -232,8 +236,9 @@ public sealed class MainWindow : Window
             if (parts.Count < 2) return;
             lines[index] = string.Join("\n" + suffix, parts) + suffix;
             _session.Edit(left, string.Join("\n", lines));
-            _debounce.Stop();   // 与就地编辑一致:点 ▶ 手动重对齐
+            _debounce.Stop();   // 手动模式:点 ⟳ 重对齐;⚡ 开启时立即重算
             RefreshDirty();
+            if ((bool)_autoRealign.IsChecked!) Realign();
         }
         catch (Exception ex) { _status.Text = ex.Message; }
     }
