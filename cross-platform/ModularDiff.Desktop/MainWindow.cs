@@ -106,8 +106,10 @@ public sealed class MainWindow : Window
         else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
+    private static bool SamePath(string? box, string loaded) =>
+        !string.IsNullOrWhiteSpace(box) && string.Equals(Path.GetFullPath(box.Trim()), loaded, StringComparison.Ordinal);
     private static TextBox Editor() => new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 14, IsReadOnly = true, IsUndoEnabled = false };
-    private static Control Cell(AlignedRow row, bool left)
+    private Control Cell(AlignedRow row, bool left)
     {
         TextCell? cell = left ? row.Left : row.Right;
         // 与 WPF DiffPane 一致的着色:幽灵行灰底,左侧删除/右侧插入/修改各自着色(半透明,选中高亮可透出)。
@@ -115,13 +117,32 @@ public sealed class MainWindow : Window
             : row.IsDifferent ? (left ? (row.Right is null ? "#B3FFF0F0" : "#B3FFF0E9") : (row.Left is null ? "#B3ECF7EF" : "#B3FFF0E9"))
             : "Transparent";
         var number = new TextBlock { Text = cell is null ? "" : cell.LineNumber.ToString(), Foreground = Brush.Parse("#8793A4"), FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 12, TextAlignment = TextAlignment.Right, MinWidth = 40, Margin = new Thickness(6, 1, 8, 1), VerticalAlignment = VerticalAlignment.Center };
-        var text = new TextBlock { FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Margin = new Thickness(0, 1, 8, 1) };
-        text.Inlines = new Avalonia.Controls.Documents.InlineCollection();
-        text.Inlines.Add(new Avalonia.Controls.Documents.Run(cell?.Text ?? ""));
-        if (cell is { Ending: "CRLF" or "CR" })   // 行尾差异可视化：非 LF 行尾加灰色标记
-            text.Inlines.Add(new Avalonia.Controls.Documents.Run(cell.Ending == "CRLF" ? "  ⏎CRLF" : "  ⏎CR") { Foreground = Brush.Parse("#8793A4"), FontSize = 11 });
-        var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") }; line.Children.Add(number); Grid.SetColumn(text, 1); line.Children.Add(text);
+        var editor = new TextBox { Name = "CellEditor", Text = cell?.Text ?? "", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), Margin = new Thickness(0, 1, 6, 1), IsReadOnly = cell is null, AcceptsReturn = false };
+        var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        editor.TextChanged += (_, _) => CellEdited(row, left, editor);
+        editor.GotFocus += (_, _) => _rows.SelectedItem = row;   // 聚焦单元格即选中所在行,供差异块合并等操作使用
+        var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        line.Children.Add(number); Grid.SetColumn(editor, 1); line.Children.Add(editor); Grid.SetColumn(ending, 2); line.Children.Add(ending);
         return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
+    }
+    private void CellEdited(AlignedRow row, bool left, TextBox editor)
+    {
+        if (_loading || _session.Left is null || _session.Right is null) return;
+        var cell = left ? row.Left : row.Right;
+        if (cell is null) return;
+        try
+        {
+            string[] lines = (left ? _session.Left : _session.Right).Text.Split('\n');
+            int index = cell.LineNumber - 1;
+            if (index < 0 || index >= lines.Length) return;
+            string suffix = lines[index].EndsWith('\r') ? "\r" : "";   // 保留该行原有行尾风格(CRLF)
+            if (editor.Text + suffix == lines[index]) return;
+            lines[index] = editor.Text + suffix;
+            _session.Edit(left, string.Join("\n", lines));
+            _debounce.Stop();   // 手动重对齐:编辑时不自动重排,点 ▶ 按当前算法重新对齐
+            RefreshDirty();
+        }
+        catch (Exception ex) { _status.Text = ex.Message; }
     }
     private static Grid Columns(Control left, Control right, bool resize = true)
     {
@@ -163,6 +184,15 @@ public sealed class MainWindow : Window
     }
     private async Task Compare()
     {
+        // 差异对齐页就地编辑后按 ▶:同路径且未保存时直接内存重对齐,不弹保存对话、不重读磁盘。
+        if (_session.Left is not null && _session.Right is not null && _session.Dirty
+            && SamePath(_leftPath.Text, _session.Left.Path) && SamePath(_rightPath.Text, _session.Right.Path))
+        {
+            try { _session.Recompare(); }
+            catch (Exception ex) { _status.Text = "重对齐失败：" + ex.Message; return; }
+            RefreshRows();
+            return;
+        }
         if (!await Leave()) return;
         string left = Path.GetFullPath(_leftPath.Text ?? ""), right = Path.GetFullPath(_rightPath.Text ?? "");
         if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");

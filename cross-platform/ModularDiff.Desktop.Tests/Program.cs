@@ -30,6 +30,23 @@ using (var frame = window.CaptureRenderedFrame())
     Check(frame is not null, "GUI renders a frame");
     if (args.Length > 1) frame!.Save(args[1]);
 }
+// 差异对齐页就地编辑:改单元格 → 会话变脏 → ▶ 内存重对齐(不弹保存对话)。
+var rowsList = ((Grid)window.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().First(l => l.Items.Count > 0);
+window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
+var cellEditor = (rowsList.ContainerFromIndex(0) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
+Check(cellEditor is not null, "inline cell editor realized");
+cellEditor!.Text += " // edited";
+Dispatcher.UIThread.RunJobs();
+Check(((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "inline cell edit marks session dirty");
+var compareButton = ((Grid)window.Content!).Children.OfType<StackPanel>().Single(p => p.Orientation == Avalonia.Layout.Orientation.Horizontal && p.Children.OfType<Button>().Any()).Children.OfType<Button>().First();
+compareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+var realign = DateTime.UtcNow.AddSeconds(5);
+while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
+Check(rowsList.Items.Count > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
+foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+    save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+var saveDone = DateTime.UtcNow.AddSeconds(5);
+while (DateTime.UtcNow < saveDone) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
 window.Close();
 Directory.Delete(uiRoot, recursive: true);
 // 注意:在无 Avalonia 调度泵的环境里 await 真异步 IO 会死锁,故同步等待脱离 UI 上下文的后台任务。
