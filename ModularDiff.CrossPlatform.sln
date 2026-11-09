@@ -41,6 +41,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModularDiff.Tests", "tests\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModularDiff.Split.Css", "shared\plugins\ModularDiff.Split.Css\ModularDiff.Split.Css.csproj", "{E49744EA-CAE4-4195-B3A4-B1B6F8864010}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ModularDiff.Format.Css", "shared\plugins\ModularDiff.Format.Css\ModularDiff.Format.Css.csproj", "{FB79C744-E733-4B28-8D9B-BF8B9517C49A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -231,6 +233,18 @@ Global
 		{E49744EA-CAE4-4195-B3A4-B1B6F8864010}.Release|x64.Build.0 = Release|Any CPU
 		{E49744EA-CAE4-4195-B3A4-B1B6F8864010}.Release|x86.ActiveCfg = Release|Any CPU
 		{E49744EA-CAE4-4195-B3A4-B1B6F8864010}.Release|x86.Build.0 = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|x64.Build.0 = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Debug|x86.Build.0 = Debug|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|x64.ActiveCfg = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|x64.Build.0 = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|x86.ActiveCfg = Release|Any CPU
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -252,5 +266,6 @@ Global
 		{4CF6ABDF-24DF-4CE0-8813-F37708D777EA} = {F314EA42-B205-11A0-9951-7410236BCE71}
 		{13CF783F-4AC4-4E06-93DA-8467A75E1C2A} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{E49744EA-CAE4-4195-B3A4-B1B6F8864010} = {8C3841AE-9013-65F4-367D-6AA399161FD1}
+		{FB79C744-E733-4B28-8D9B-BF8B9517C49A} = {8C3841AE-9013-65F4-367D-6AA399161FD1}
 	EndGlobalSection
 EndGlobal

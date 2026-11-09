@@ -32,6 +32,7 @@ public sealed class MainWindow : Window
     private ComparisonResult? _directory;
     private int _selectionAnchor = -1;
     private bool _dragSelecting;
+    private bool _lastFocusLeft = true;
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
     {
@@ -58,6 +59,7 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("⟳", "重新对齐：按当前算法与忽略选项重算，不重读磁盘，保留未保存修改", Realign));
         ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
         _toolbar.Children.Add(_autoRealign);
+        _toolbar.Children.Add(Button("⌗", "格式化本侧：按最近聚焦的一侧，应用代码格式化插件（如 CSS 规范格式化）", FormatSide));
         _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
@@ -135,7 +137,7 @@ public sealed class MainWindow : Window
         var editor = new TextBox { Name = "CellEditor", Text = cell?.Text ?? "", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), Margin = new Thickness(0, 1, 6, 1), IsReadOnly = cell is null, AcceptsReturn = false };
         var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
         editor.TextChanged += (_, _) => CellEdited(row, left, editor);
-        editor.GotFocus += (_, _) => _rows.SelectedItem = row;   // 聚焦单元格即选中所在行,供差异块合并等操作使用
+        editor.GotFocus += (_, _) => { _rows.SelectedItem = row; _lastFocusLeft = left; };   // 聚焦单元格即选中所在行,并记住最近聚焦侧(⌗ 格式化用)
         // 未聚焦时右键单元格不出文本编辑菜单(让整行的"换行"菜单接管);左键聚焦后右键才是编辑菜单。
         editor.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
         {
@@ -209,6 +211,25 @@ public sealed class MainWindow : Window
             if (relative is { } p && p.Y >= 0 && p.Y < container.Bounds.Height) return i;
         }
         return -1;
+    }
+    private void FormatSide()
+    {
+        if (_loading || _session.Left is null || _session.Right is null) return;
+        bool left = _lastFocusLeft;
+        var buffer = left ? _session.Left : _session.Right;
+        var formatter = _plugins.GetAll<ICodeFormatter>().FirstOrDefault(f => f.CanFormat(buffer.Path));
+        if (formatter is null) { _status.Text = $"没有支持 {Path.GetFileName(buffer.Path)} 的格式化插件（当前插件：{string.Join("、", _plugins.GetAll<ICodeFormatter>().Select(f => f.DisplayName))}）。"; return; }
+        try
+        {
+            string suffix = buffer.Text.Contains("\r\n") ? "\r" : "";   // 行尾风格沿用原文件
+            var formatted = formatter.Format(buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList());
+            _session.Edit(left, string.Join("\n" + suffix, formatted) + suffix);
+            _debounce.Stop();
+            RefreshDirty();
+            if ((bool)_autoRealign.IsChecked!) Realign();
+            else _status.Text = $"已按「{formatter.DisplayName}」格式化{(left ? "左" : "右")}侧 · 点 ⟳ 重新对齐";
+        }
+        catch (Exception ex) { _status.Text = "格式化失败：" + ex.Message; }
     }
     private void Realign()
     {

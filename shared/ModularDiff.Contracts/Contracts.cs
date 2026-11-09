@@ -30,6 +30,12 @@ public interface ILineSplitter : IPlugin
     bool CanSplit(string fileName, string line);
     IReadOnlyList<string> Split(string line);
 }
+// 代码格式化插件:把整侧文本按各语言规范重排(选择器/声明/花括号缩进等),⌗ 按钮调用。
+public interface ICodeFormatter : IPlugin
+{
+    bool CanFormat(string fileName);
+    IReadOnlyList<string> Format(IReadOnlyList<string> lines);
+}
 
 public sealed record ComparisonOptions(
     bool IgnoreCase = false, bool IgnoreWhitespace = false, bool IgnoreLineEndings = false,
