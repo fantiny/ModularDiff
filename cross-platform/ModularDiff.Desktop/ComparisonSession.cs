@@ -46,6 +46,22 @@ public sealed class ComparisonSession(PluginCatalog plugins)
         var edit = Plugin<IBlockMerge>().Plan(Comparison, Left.Snapshot(), Right.Snapshot(), hunk, direction);
         (direction == MergeDirection.LeftToRight ? Right : Left).Apply(edit); Recompare();
     }
+    /// <summary>一次复制全部差异块(BC 的 Copy All):同一份快照规划所有编辑,自底向上应用,
+    /// 低处偏移永不被高处编辑推移,最后只重比较一次。返回复制的块数。</summary>
+    public int MergeAll(MergeDirection direction)
+    {
+        Recompare();
+        if (Comparison is null || Left is null || Right is null || Presentation?.Hunks.Count is not > 0) return 0;
+        var leftSnapshot = Left.Snapshot(); var rightSnapshot = Right.Snapshot();
+        var merge = Plugin<IBlockMerge>();
+        var edits = new List<TextEdit>();
+        for (int index = Presentation.Hunks.Count - 1; index >= 0; index--)
+            edits.Add(merge.Plan(Comparison, leftSnapshot, rightSnapshot, Presentation.Hunks[index].Id, direction));
+        var destination = direction == MergeDirection.LeftToRight ? Right : Left;
+        foreach (var edit in edits) destination!.Apply(edit);
+        Recompare();
+        return edits.Count;
+    }
     public void History(bool left, bool redo)
     {
         var buffer = left ? Left : Right; if (buffer is null) return;

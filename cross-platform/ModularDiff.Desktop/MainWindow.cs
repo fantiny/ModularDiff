@@ -81,6 +81,8 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("↓", "下一个差异块", () => Navigate(1)));
         _toolbar.Children.Add(Button("→", "选中差异块：左复制到右（保存后写入磁盘）", () => Merge(MergeDirection.LeftToRight)));
         _toolbar.Children.Add(Button("←", "选中差异块：右复制到左（保存后写入磁盘）", () => Merge(MergeDirection.RightToLeft)));
+        _toolbar.Children.Add(Button("⇉", "全部差异块：左复制到右（一次规划、自底向上应用）", () => Run(() => CopyAllBlocks(true))));
+        _toolbar.Children.Add(Button("⇇", "全部差异块：右复制到左（一次规划、自底向上应用）", () => Run(() => CopyAllBlocks(false))));
         _toolbar.Children.Add(Button("⇥", "目录：预览所选文件左到右同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.LeftToRight))));
         _toolbar.Children.Add(Button("⇤", "目录：预览所选文件右到左同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.RightToLeft))));
         _toolbar.Children.Add(Button("◷", "同步历史与撤销恢复", () => Run(History)));
@@ -94,6 +96,14 @@ public sealed class MainWindow : Window
         _rows.MenuRequested += (row, left) =>
         {
             var menu = new ContextMenu();
+            if (_session.Presentation?.Hunks.Count > 0)
+            {
+                var allRight = new MenuItem { Header = "全部复制 左→右" };
+                allRight.Click += (_, _) => Run(() => CopyAllBlocks(true));
+                var allLeft = new MenuItem { Header = "全部复制 右→左" };
+                allLeft.Click += (_, _) => Run(() => CopyAllBlocks(false));
+                menu.Items.Add(allRight); menu.Items.Add(allLeft); menu.Items.Add(new Separator());
+            }
             string selected = _rows.SelectedText();
             if (selected.Length > 0)
             {
@@ -112,6 +122,19 @@ public sealed class MainWindow : Window
             file is null ? new TextBlock() : Columns(
                 new TextBlock { Text = file.Status == FileStatus.RightOnly ? "—" : $"{file.Status}  {file.RelativePath}", Margin = new Thickness(4) },
                 new TextBlock { Text = file.Status == FileStatus.LeftOnly ? "—" : $"{file.Status}  {file.RelativePath}  {file.Note}", Margin = new Thickness(4) }, false));
+        _files.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
+        {
+            if (e.GetCurrentPoint(_files).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
+            var selected = _files.SelectedItems?.Cast<FileComparison>().ToArray() ?? [];
+            if (selected.Length == 0) return;
+            var menu = new ContextMenu();
+            var toRight = new MenuItem { Header = $"复制 {selected.Length} 个文件到右侧" };
+            toRight.Click += (_, _) => Run(() => CopySelectedFolderFiles(true));
+            var toLeft = new MenuItem { Header = $"复制 {selected.Length} 个文件到左侧" };
+            toLeft.Click += (_, _) => Run(() => CopySelectedFolderFiles(false));
+            menu.Items.Add(toRight); menu.Items.Add(toLeft);
+            _files.ContextMenu = menu;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _files.DoubleTapped += (_, _) => Run(async () =>
         {
             if (_directory is null || _files.SelectedItem is not FileComparison file || !await Leave()) return;
@@ -580,6 +603,17 @@ public sealed class MainWindow : Window
     }
     private void RefreshRows() { _rows.Rows = _session.Presentation?.Rows ?? []; RefreshDirty(); }
     private void RefreshDirty() => _status.Text = _session.Left is null ? "请选择文件或目录" : $"{(_session.Dirty ? "● 未保存" : "已保存")} · {_session.Presentation?.Hunks.Count ?? 0} 个差异块 · {_session.Left.Path} ↔ {_session.Right?.Path}";
+    private async Task CopyAllBlocks(bool toRight)
+    {
+        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
+        try
+        {
+            int copied = _session.MergeAll(toRight ? MergeDirection.LeftToRight : MergeDirection.RightToLeft);
+            RefreshEditors();
+            _status.Text = copied == 0 ? "没有可复制的差异块。" : $"已复制 {copied} 个差异块到{(toRight ? "右侧" : "左侧")} · 未保存，保存后写入磁盘";
+        }
+        catch (Exception ex) { _status.Text = "批量复制失败：" + ex.Message; }
+    }
     private void Merge(MergeDirection direction)
     {
         if (_rows.SelectedRows.FirstOrDefault(r => r.HunkId >= 0) is not { } row) { _status.Text = "请在差异对齐页选中一个差异块。"; return; }
@@ -609,6 +643,43 @@ public sealed class MainWindow : Window
     }
     private T Plugin<T>() where T : class, IPlugin => _plugins.GetAll<T>().First();
     private SyncSafetyContext Safety() => new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "SyncHistory"), Plugin<ISyncBackup>(), Plugin<ISyncJournal>());
+    /// <summary>测试/程序化入口:按相对路径选中目录页文件(等价于用户在列表中多选)。</summary>
+    public void SelectFolderFiles(params string[] relativePaths)
+    {
+        if (_files.ItemsSource is not IReadOnlyList<FileComparison> files) return;
+        _files.SelectedItems?.Clear();
+        foreach (var path in relativePaths)
+        {
+            var match = files.FirstOrDefault(f => f.RelativePath == path);
+            if (match is not null) _files.SelectedItems?.Add(match);
+        }
+    }
+    /// <summary>目录页批量复制所选文件到另一侧:缺源跳过、逐文件容错、完成后重比较并恢复选中。</summary>
+    public async Task CopySelectedFolderFiles(bool fromLeft)
+    {
+        if (_directory is null) { _status.Text = "请先比较两个目录。"; return; }
+        var selected = _files.SelectedItems?.Cast<FileComparison>().ToArray() ?? [];
+        if (selected.Length == 0) return;
+        string reopen = (_files.SelectedItem as FileComparison ?? selected[0]).RelativePath;
+        int copied = 0, failed = 0;
+        foreach (var file in selected)
+        {
+            try
+            {
+                string source = Path.Combine(fromLeft ? _directory.LeftPath : _directory.RightPath, file.RelativePath);
+                string target = Path.Combine(fromLeft ? _directory.RightPath : _directory.LeftPath, file.RelativePath);
+                if (!File.Exists(source)) { failed++; continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target, overwrite: true);
+                copied++;
+            }
+            catch (Exception) { failed++; }
+        }
+        await Compare();
+        var restored = (_files.ItemsSource as IReadOnlyList<FileComparison>)?.FirstOrDefault(f => f.RelativePath == reopen);
+        if (restored is not null) _files.SelectedItem = restored;
+        _status.Text = $"批量复制完成：{copied} 成功" + (failed > 0 ? $"，{failed} 失败/跳过" : "") + "。";
+    }
     private async Task Sync(SyncMode mode)
     {
         if (_directory is null) throw new IOException("请先比较两个目录。");

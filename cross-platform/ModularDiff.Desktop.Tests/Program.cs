@@ -108,6 +108,33 @@ stopwatch.Stop();
 Check(stopwatch.ElapsedMilliseconds < 1500, $"5 edit cycles with 100k-char lines took {stopwatch.ElapsedMilliseconds}ms (expected <1500ms)");
 perfWindow.Close();
 Directory.Delete(uiRoot2, recursive: true);
+// 目录页多选批量复制:选中的文件复制到另一侧,完成后刷新并恢复选中。
+string folderRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-folder-" + Guid.NewGuid().ToString("N"));
+string folderLeft = Path.Combine(folderRoot, "L"), folderRight = Path.Combine(folderRoot, "R");
+Directory.CreateDirectory(folderLeft); Directory.CreateDirectory(folderRight);
+try
+{
+    File.WriteAllText(Path.Combine(folderLeft, "same.txt"), "one\n");
+    File.WriteAllText(Path.Combine(folderRight, "same.txt"), "one\n");
+    File.WriteAllText(Path.Combine(folderLeft, "diff.txt"), "left\n");
+    File.WriteAllText(Path.Combine(folderRight, "diff.txt"), "right\n");
+    File.WriteAllText(Path.Combine(folderLeft, "only.txt"), "only-left\n");
+    var folderWindow = new MainWindow(["--plugins", pluginsPath, "--left", folderLeft, "--right", folderRight, "--auto-compare"]);
+    folderWindow.Show();
+    var folderReady = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < folderReady) { Dispatcher.UIThread.RunJobs(); folderWindow.UpdateLayout(); Thread.Sleep(10);
+        if (folderWindow.GetVisualDescendants().OfType<ListBox>().Any(l => l.Items.Count > 0)) break; }
+    folderWindow.SelectFolderFiles("diff.txt", "only.txt");
+    var copyTask = folderWindow.CopySelectedFolderFiles(true);   // 不能直接 await:后续体要回 UI 上下文,需循环泵
+    var folderDone = DateTime.UtcNow.AddSeconds(10);
+    while (!copyTask.IsCompleted && DateTime.UtcNow < folderDone) { Dispatcher.UIThread.RunJobs(); folderWindow.UpdateLayout(); Thread.Sleep(10); }
+    Check(File.ReadAllText(Path.Combine(folderRight, "diff.txt")) == "left\n", "folder batch copy overwrites target");
+    Check(File.Exists(Path.Combine(folderRight, "only.txt")), "folder batch copy creates missing target");
+    var folderStatus = string.Join(" ", ((Grid)folderWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
+    Check(folderStatus.Contains("批量复制完成"), $"folder batch copy reports outcome (status: {folderStatus[..Math.Min(60, folderStatus.Length)]})");
+    folderWindow.Close();
+}
+finally { Directory.Delete(folderRoot, recursive: true); }
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);
@@ -190,6 +217,12 @@ try
     Check(session.Right!.IsDirty, "block merge modifies destination buffer");
     session.History(false, false); Check(session.Right.Text == "same\nright\n", "merge undo");
     session.History(false, true); Check(session.Right.IsDirty, "merge redo");
+string caLeft = Path.Combine(root, "ca-l.txt"), caRight = Path.Combine(root, "ca-r.txt");
+await File.WriteAllTextAsync(caLeft, "a\nb\nc\nd\ne\n"); await File.WriteAllTextAsync(caRight, "a\nB\nc\nD\ne\n");
+var copyAllSession = new ComparisonSession(plugins); await copyAllSession.LoadAsync(caLeft, caRight);
+Check(copyAllSession.Presentation!.Hunks.Count == 2, "copy-all setup has two hunks");
+int allCopied = copyAllSession.MergeAll(MergeDirection.LeftToRight);
+Check(allCopied == 2 && copyAllSession.Right!.Text == copyAllSession.Left!.Text && copyAllSession.Right.IsDirty, "copy-all lands every hunk (destination equals source)");
     session.Edit(false, "changed\n"); await session.SaveAsync(false);
     Check(await File.ReadAllTextAsync(b) == "changed\n" && !session.Dirty, "save through storage plugin");
     session.Edit(false, "draft\n"); await File.WriteAllTextAsync(b, "external\n");
