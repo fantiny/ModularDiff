@@ -21,7 +21,7 @@ public sealed class MainWindow : Window
     private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly ScrollViewer _diffScroll = new();
     private readonly Canvas _editorHost = new();
-    private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.White, BorderThickness = new Thickness(1), BorderBrush = Brush.Parse("#8793A4"), Padding = new Thickness(2, 0, 2, 0), Watermark = "" };
+    private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
     private readonly TabControl _tabs = new();
     private readonly TabItem _diffTab = new() { Header = "差异对齐" };
@@ -91,7 +91,20 @@ public sealed class MainWindow : Window
         _cellEditor.KeyDown += (_, e) => { if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape) { if (e.Key == Avalonia.Input.Key.Escape) _editorLoading = true; EndCellEdit(); e.Handled = true; } };
         _cellEditor.LostFocus += (_, _) => EndCellEdit();
         _rows.EditRequested += (row, left) => BeginEditRow(_rows.IndexOfRow(row), left);
-        _rows.MenuRequested += (row, left) => { if (CreateSplitMenu(row, left) is { } menu) _rows.OpenMenu(menu); };
+        _rows.MenuRequested += (row, left) =>
+        {
+            var menu = new ContextMenu();
+            string selected = _rows.SelectedText();
+            if (selected.Length > 0)
+            {
+                var copy = new MenuItem { Header = "复制所选" };
+                copy.Click += async (_, _) => { if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(selected); };
+                menu.Items.Add(copy);
+            }
+            if (CreateSplitMenu(row, left) is { } split)
+                foreach (var item in split.Items.OfType<MenuItem>()) menu.Items.Add(item);
+            if (menu.ItemCount > 0) _rows.OpenMenu(menu);
+        };
         var editTab = new TabItem { Header = "左右编辑", Content = Columns(EditPanel(true), EditPanel(false)) };
         var folderTab = new TabItem { Header = "目录比较", Content = _files };
         _tabs.ItemsSource = new[] { _diffTab, editTab, folderTab };
@@ -238,8 +251,8 @@ public sealed class MainWindow : Window
         _editingRow = row; _editingLeft = left; _lastFocusLeft = left;
         _editorLoading = true; _cellEditor.Text = cell.Text; _editorLoading = false;
         var rect = _rows.CellRect(index, left);
-        _cellEditor.Width = rect.Width + 10; _cellEditor.Height = AlignedRowsView.RowHeight;
-        Canvas.SetLeft(_cellEditor, rect.X - 2); Canvas.SetTop(_cellEditor, rect.Y);
+        _cellEditor.Width = rect.Width; _cellEditor.Height = AlignedRowsView.RowHeight;
+        Canvas.SetLeft(_cellEditor, rect.X); Canvas.SetTop(_cellEditor, rect.Y);
         _cellEditor.IsVisible = true;
         _cellEditor.Focus(); _cellEditor.CaretIndex = _cellEditor.Text.Length;
         _rows.SelectRows([row]);

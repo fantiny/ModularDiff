@@ -46,6 +46,13 @@ compareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Con
 var realign = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
 Check(rowsView.RowCount > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
+// 跨行文本选区:像文本框一样切片复制。
+int classIndex = Enumerable.Range(0, rowsView.RowCount).First(i => rowsView.Rows[i].Left?.Text.StartsWith("class") == true);
+rowsView.SetTextSelection(0, 0, classIndex, 3, true);
+var sliced = rowsView.SelectedText();
+Check(sliced.StartsWith("// Comparison sample") && sliced.EndsWith("\ncla"), $"cross-row text selection slice (got [{sliced}])");
+rowsView.ClearTextSelection();
+Check(rowsView.SelectedText().Length == 0, "text selection clears");
 // 多选 + 批量换行 + ⟳ 重对齐:两条 css 行各拆成两行,行数 +2。
 var cssRows = rowsView.Rows.Where(r => r.Left?.Text.StartsWith("--") == true && !r.Left!.Text.StartsWith("--gap:")).ToList();
 Check(cssRows.Count == 2, "two css rows present for batch split");

@@ -25,13 +25,17 @@ public sealed class AlignedRowsView : Control
     private static readonly IBrush Modified = new SolidColorBrush(Color.Parse("#FFF0E9"));
     private static readonly IBrush Selected = new SolidColorBrush(Color.Parse("#D9E8FF"));
     private static readonly IBrush Word = new SolidColorBrush(Color.Parse("#FFD4BC"));
+    private static readonly IBrush TextSelect = new SolidColorBrush(Color.FromArgb(0x80, 0x33, 0x99, 0xFF));
 
     private IReadOnlyList<AlignedRow> _rows = [];
+    private (int Row, int Column, bool Left)? _textAnchor, _textHead;
+    private bool _textSelecting, _pressPending;
     private readonly HashSet<int> _selected = [];
     private int _primary = -1, _anchor = -1;
     private bool _dragging;
 
-    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; InvalidateMeasure(); InvalidateVisual(); } }
+    public AlignedRowsView() => Focusable = true;
+    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; InvalidateMeasure(); InvalidateVisual(); } }
     public int RowCount => _rows.Count;
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
     public int PrimarySelected => _primary;
@@ -64,8 +68,9 @@ public sealed class AlignedRowsView : Control
     }
     public Rect CellRect(int index, bool left)
     {
-        double half = Bounds.Width / 2;
-        return new Rect(left ? NumberWidth : half + NumberWidth, index * RowHeight + 1, half - NumberWidth - MarkerWidth, RowHeight - 2);
+        double half = Math.Max(80, Bounds.Width / 2);
+        double x = (left ? 0 : half) + NumberWidth;
+        return new Rect(x, index * RowHeight, half - NumberWidth, RowHeight);
     }
     /// <summary>宿主构建好菜单后挂到视图并打开(在指针位置弹出)。</summary>
     public void OpenMenu(ContextMenu menu) { ContextMenu = menu; menu.Open(this); }
@@ -101,6 +106,17 @@ public sealed class AlignedRowsView : Control
             DrawSide(context, row, i, true, 0, half);
             DrawSide(context, row, i, false, half, half);
         }
+        if (_textAnchor is { } anchor && _textHead is { } head && anchor.Left == head.Left)
+        {
+            var (from, to) = anchor.Row <= head.Row ? (anchor, head) : (head, anchor);
+            double origin = from.Left ? 0 : half, textX = origin + NumberWidth;
+            for (int i = from.Row; i <= Math.Min(to.Row, _rows.Count - 1); i++)
+            {
+                double x0 = i == from.Row ? textX + from.Column * CharWidth : textX;
+                double x1 = i == to.Row ? textX + to.Column * CharWidth : origin + half;
+                context.FillRectangle(TextSelect, new Rect(Math.Min(x0, x1), i * RowHeight + 1, Math.Max(2, Math.Abs(x1 - x0)), RowHeight - 2), 2);
+            }
+        }
     }
     private void DrawSide(DrawingContext context, AlignedRow row, int index, bool left, double origin, double width)
     {
@@ -133,7 +149,7 @@ public sealed class AlignedRowsView : Control
             context.FillRectangle(Word, new Rect(textX + start * charWidth, y + 2, length * charWidth, RowHeight - 5), 2);
         }
         var text = new FormattedText(drawn, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink);
-        context.DrawText(text, new Point(textX, y + 3));
+        context.DrawText(text, new Point(textX, y + (RowHeight - TextSize * 1.35) / 2));   // 与居中编辑器的文本基线对齐
         if (cell.Text.Length > drawn.Length)
         {
             var more = new FormattedText("…", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Number);
@@ -165,37 +181,105 @@ public sealed class AlignedRowsView : Control
             return;
         }
         if (!properties.IsLeftButtonPressed) return;
-        if (point.X % half < NumberWidth)   // 行号列:单击/Shift 范围/Cmd 点选/拖动
+        Focus();
+        if (point.X % half < NumberWidth)   // 行号列:单击/Shift 范围/Cmd 点选/拖动选择行
         {
+            ClearTextSelection();
             ApplyClickSelection(index, e.KeyModifiers);
             _dragging = true;
             e.Pointer.Capture(this);
             e.Handled = true;
             return;
         }
-        _selected.Clear(); _selected.Add(index); _primary = _anchor = index;
-        InvalidateVisual(); SelectionChanged?.Invoke();
-        EditRequested?.Invoke(_rows[index], left);
+        // 文本区:先按下待判 —— 松开前几乎未移动 = 点击(进编辑);拖动超过阈值 = 跨行文本选择。
+        _pressPoint = e.GetPosition(this);
+        _pressLocation = LocationAt(_pressPoint.Value, index, left);
+        _pressPending = true;
         e.Handled = true;
     }
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (!_dragging) return;
-        int index = Math.Clamp((int)(e.GetPosition(this).Y / RowHeight), 0, _rows.Count - 1);
-        if (index != _primary)
+        if (_dragging)
         {
-            _selected.Clear();
-            for (int i = Math.Min(_anchor, index); i <= Math.Max(_anchor, index); i++) _selected.Add(i);
-            _primary = index;
-            InvalidateVisual(); SelectionChanged?.Invoke();
+            int index = Math.Clamp((int)(e.GetPosition(this).Y / RowHeight), 0, _rows.Count - 1);
+            if (index != _primary)
+            {
+                _selected.Clear();
+                for (int i = Math.Min(_anchor, index); i <= Math.Max(_anchor, index); i++) _selected.Add(i);
+                _primary = index;
+                InvalidateVisual(); SelectionChanged?.Invoke();
+            }
+            return;
         }
+        if (!_pressPending || _pressPoint is not { } origin) return;
+        var point = e.GetPosition(this);
+        if (Math.Abs(point.X - origin.X) < 4 && Math.Abs(point.Y - origin.Y) < 3) return;   // 拖动阈值
+        if (!_textSelecting)
+        {
+            _textSelecting = true;
+            _textAnchor = _pressLocation;
+            e.Pointer.Capture(this);
+        }
+        _textHead = LocationAt(point, Math.Clamp((int)(point.Y / RowHeight), 0, _rows.Count - 1), point.X < Math.Max(80, Bounds.Width / 2));
+        InvalidateVisual();
     }
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_dragging) { _dragging = false; e.Pointer.Capture(null); e.Handled = true; }
+        if (_dragging) { _dragging = false; e.Pointer.Capture(null); e.Handled = true; return; }
+        if (!_pressPending) { if (_textSelecting) { e.Pointer.Capture(null); e.Handled = true; } return; }
+        _pressPending = false;
+        var location = _pressLocation;
+        _pressPoint = null;
+        e.Handled = true;
+        if (_textSelecting) { _textSelecting = false; e.Pointer.Capture(null); return; }   // 拖选结束,保留文本选区
+        ClearTextSelection();
+        _selected.Clear(); _selected.Add(location.Row); _primary = _anchor = location.Row;
+        InvalidateVisual(); SelectionChanged?.Invoke();
+        EditRequested?.Invoke(_rows[location.Row], location.Left);
     }
+    private (int Row, int Column, bool Left) LocationAt(Point point, int row, bool left)
+    {
+        var cell = left ? _rows[row].Left : _rows[row].Right;
+        int length = cell?.Text.Length ?? 0;
+        double textX = (left ? 0 : Math.Max(80, Bounds.Width / 2)) + NumberWidth;
+        int column = Math.Clamp((int)((point.X - textX) / CharWidth), 0, length);
+        return (row, column, left);
+    }
+    /// <summary>当前跨行文本选区(单侧);无选区返回空串。</summary>
+    public string SelectedText()
+    {
+        if (_textAnchor is not { } a || _textHead is not { } b || a.Left != b.Left) return "";
+        var (from, to) = a.Row <= b.Row ? (a, b) : (b, a);
+        var builder = new System.Text.StringBuilder();
+        for (int i = from.Row; i <= to.Row; i++)
+        {
+            var cell = from.Left ? _rows[i].Left : _rows[i].Right;
+            if (cell is null) { builder.AppendLine(); continue; }
+            int start = i == from.Row ? from.Column : 0;
+            int end = i == to.Row ? Math.Min(to.Column, cell.Text.Length) : cell.Text.Length;
+            if (end > start) builder.Append(cell.Text[start..end]);
+            if (i < to.Row) builder.Append('\n');
+        }
+        return builder.ToString();
+    }
+    public void ClearTextSelection()
+    {
+        if (_textAnchor is null && _textHead is null) return;
+        _textAnchor = _textHead = null;
+        InvalidateVisual();
+    }
+    /// <summary>测试/程序化入口:设置跨行文本选区。</summary>
+    public void SetTextSelection(int fromRow, int fromColumn, int toRow, int toColumn, bool left)
+    {
+        _textAnchor = (fromRow, fromColumn, left);
+        _textHead = (toRow, toColumn, left);
+        InvalidateVisual();
+    }
+
+    private Point? _pressPoint;
+    private (int Row, int Column, bool Left) _pressLocation;
     private void ApplyClickSelection(int index, KeyModifiers modifiers)
     {
         bool toggle = modifiers.HasFlag(KeyModifiers.Control) || modifiers.HasFlag(KeyModifiers.Meta);
@@ -212,6 +296,15 @@ public sealed class AlignedRowsView : Control
         else { _selected.Clear(); _selected.Add(index); _anchor = index; }
         _primary = index;
         InvalidateVisual(); SelectionChanged?.Invoke();
+    }
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (e.Key != Key.C || (e.KeyModifiers & (KeyModifiers.Meta | KeyModifiers.Control)) == 0) return;
+        string text = SelectedText();
+        if (text.Length == 0) return;
+        TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
+        e.Handled = true;
     }
     public int IndexOfRow(AlignedRow row) => IndexOf(row);
     private int IndexOf(AlignedRow row)
