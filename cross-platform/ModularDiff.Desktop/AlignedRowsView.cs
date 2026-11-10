@@ -120,25 +120,33 @@ public sealed class AlignedRowsView : Control
         if (cell is null) return;
         var number = new FormattedText(cell.LineNumber.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 11, Number);
         context.DrawText(number, new Point(origin + NumberWidth - 8 - number.Width, y + 4));
-        var text = new FormattedText(cell.Text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink);
+        // 性能关键:FormattedText 会对整行做排版,压缩文件的超长行(数万字符)会让每次重绘卡几秒。
+        // 只对"视口内可见的前缀"排版与绘制,其余截断;词级高亮同样按可见前缀裁剪。
+        double charWidth = CharWidth;
+        int visibleChars = Math.Max(1, (int)((width - NumberWidth - 10) / charWidth) + 1);
+        string drawn = cell.Text.Length > visibleChars ? cell.Text[..visibleChars] : cell.Text;
         double textX = origin + NumberWidth;
-        if (cell.Highlights.Count > 0)
+        foreach (var span in cell.Highlights)
         {
-            double charWidth = new FormattedText("M", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink).Width;
-            foreach (var span in cell.Highlights)
-            {
-                int start = Math.Clamp(span.Start, 0, cell.Text.Length), length = Math.Clamp(span.Length, 0, cell.Text.Length - start);
-                if (length <= 0) continue;
-                context.FillRectangle(Word, new Rect(textX + start * charWidth, y + 2, length * charWidth, RowHeight - 5), 2);
-            }
+            int start = Math.Clamp(span.Start, 0, drawn.Length), length = Math.Clamp(span.Length, 0, drawn.Length - start);
+            if (length <= 0) continue;
+            context.FillRectangle(Word, new Rect(textX + start * charWidth, y + 2, length * charWidth, RowHeight - 5), 2);
         }
+        var text = new FormattedText(drawn, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink);
         context.DrawText(text, new Point(textX, y + 3));
+        if (cell.Text.Length > drawn.Length)
+        {
+            var more = new FormattedText("…", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Number);
+            context.DrawText(more, new Point(textX + drawn.Length * charWidth, y + 3));
+        }
         if (cell.Ending is "CRLF" or "CR")
         {
             var marker = new FormattedText(cell.Ending == "CRLF" ? "⏎CRLF" : "⏎CR", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 10, Number);
             context.DrawText(marker, new Point(origin + width - MarkerWidth + 4, y + 5));
         }
     }
+    private static double _charWidth;
+    private static double CharWidth => _charWidth != 0 ? _charWidth : _charWidth = new FormattedText("M", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink).Width;
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {

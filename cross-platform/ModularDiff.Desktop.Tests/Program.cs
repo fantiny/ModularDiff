@@ -74,8 +74,33 @@ foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (
     save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var saveDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < saveDone) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
-window.Close();
-Directory.Delete(uiRoot, recursive: true);
+// 性能回归:超长行(压缩行)不得让渲染/进出编辑卡秒级 —— 绘制只排版可见前缀。
+string uiRoot2 = Path.Combine(Path.GetTempPath(), "ModularDiff-perf-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(uiRoot2);
+string longLeft = new string('a', 100_000), longRight = new string('b', 100_000);
+File.WriteAllText(Path.Combine(uiRoot2, "big-l.txt"), "short\n" + longLeft + "\nshort2\n");
+File.WriteAllText(Path.Combine(uiRoot2, "big-r.txt"), "short\n" + longRight + "\nshort2\n");
+var perfWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(uiRoot2, "big-l.txt"), "--right", Path.Combine(uiRoot2, "big-r.txt"), "--auto-compare"]);
+perfWindow.Show();
+var perfReady = DateTime.UtcNow.AddSeconds(15);
+while (DateTime.UtcNow < perfReady && !perfWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0))
+{ Dispatcher.UIThread.RunJobs(); perfWindow.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10); }
+var perfView = perfWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+Check(perfView.RowCount > 0, "long-line window ready");
+var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+for (int cycle = 0; cycle < 5; cycle++)
+{
+    perfView.SelectRows([perfView.Rows[0]]);
+    Dispatcher.UIThread.RunJobs(); perfWindow.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+    perfWindow.BeginEditRow(0, true);
+    Dispatcher.UIThread.RunJobs(); perfWindow.UpdateLayout();
+    perfWindow.BeginEditRow(2, false);   // 切换到另一行 = 提交上一格并重定位
+    Dispatcher.UIThread.RunJobs(); perfWindow.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+}
+stopwatch.Stop();
+Check(stopwatch.ElapsedMilliseconds < 1500, $"5 edit cycles with 100k-char lines took {stopwatch.ElapsedMilliseconds}ms (expected <1500ms)");
+perfWindow.Close();
+Directory.Delete(uiRoot2, recursive: true);
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);
