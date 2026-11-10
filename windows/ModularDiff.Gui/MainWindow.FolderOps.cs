@@ -18,9 +18,23 @@ public partial class MainWindow
 
     private void FolderMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        if (_folderResult is null || (sender as DataGrid)?.SelectedItem is not FolderNode node) return;
+        if (_folderResult is null) return;
+        var grid = (DataGrid)sender;
+        if (grid.SelectedItem is not FolderNode node) return;
         e.Handled = true;
         bool fromLeft = ReferenceEquals(sender, LeftFolders);
+        var selected = grid.SelectedItems.Cast<FolderNode>().Where(n => !n.IsDirectory).ToArray();
+        if (selected.Length > 1)
+        {
+            var multi = new ContextMenu();
+            var copyAll = new MenuItem { Header = $"复制 {selected.Length} 个文件到" + (fromLeft ? "右侧" : "左侧") };
+            copyAll.Click += (_, _) => _ = CopyFolderFiles(selected, fromLeft);
+            multi.Items.Add(copyAll);
+            multi.PlacementTarget = grid;
+            multi.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+            multi.IsOpen = true;
+            return;
+        }
         string leftPath = Path.Combine(_folderResult.LeftPath, node.RelativePath);
         string rightPath = Path.Combine(_folderResult.RightPath, node.RelativePath);
         string clicked = fromLeft ? leftPath : rightPath;
@@ -41,6 +55,32 @@ public partial class MainWindow
         menu.PlacementTarget = (UIElement)sender;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
         menu.IsOpen = true;
+    }
+
+    /// <summary>Batch-copies multiple files to the other side; skips missing sources, keeps going on errors.</summary>
+    private async Task CopyFolderFiles(FolderNode[] nodes, bool fromLeft)
+    {
+        if (_folderResult is null) return;
+        int copied = 0, failed = 0;
+        foreach (var node in nodes)
+        {
+            try
+            {
+                string source = Path.Combine(_folderResult.LeftPath, node.RelativePath);
+                string target = Path.Combine(_folderResult.RightPath, node.RelativePath);
+                if (!fromLeft) (source, target) = (target, source);
+                if (!File.Exists(source)) { failed++; continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(source, target, overwrite: true);
+                copied++;
+            }
+            catch (Exception) { failed++; }
+        }
+        string reopen = _currentNode?.RelativePath ?? nodes.FirstOrDefault()?.RelativePath ?? "";
+        await CompareAsync();
+        var restored = _folderRows.FirstOrDefault(n => n.RelativePath == reopen);
+        if (restored is not null) LeftFolders.SelectedItem = RightFolders.SelectedItem = restored;
+        StatusLabel.Text = $"批量复制完成：{copied} 成功" + (failed > 0 ? $", {failed} 失败" : "") + "。";
     }
 
     private async Task CopyFolderFile(FolderNode node, bool fromLeft)

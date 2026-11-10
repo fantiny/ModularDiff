@@ -128,6 +128,7 @@ public partial class MainWindow
         UndoButton.IsEnabled = text && _activePane?.Buffer?.CanUndo == true;
         RedoButton.IsEnabled = text && _activePane?.Buffer?.CanRedo == true;
         MergeRightButton.IsEnabled = MergeLeftButton.IsEnabled = text && validDiff && _currentHunk >= 0 && MergeBox.SelectedItem is IBlockMerge;
+        CopyAllRightButton.IsEnabled = CopyAllLeftButton.IsEnabled = text && validDiff && _presentation is { Hunks.Count: > 0 } && MergeBox.SelectedItem is IBlockMerge;
         EditStatusLabel.Text = _leftBuffer is null ? "只读" : HasDirtyBuffers ? "● 未保存" : "已保存";
         EditStatusLabel.ToolTip = _leftBuffer is null ? "二进制、大文件或没有编辑插件时使用只读视图" : "修改先保存在内存中；点击保存图标写入磁盘";
         if (_leftBuffer is not null && _rightBuffer is not null)
@@ -141,6 +142,37 @@ public partial class MainWindow
     }
     private async void CopyLeftToRight(object sender, RoutedEventArgs e) => await CopyBlock(true);
     private async void CopyRightToLeft(object sender, RoutedEventArgs e) => await CopyBlock(false);
+    private async void CopyAllRight(object sender, RoutedEventArgs e) => await CopyAllBlocks(true);
+    private async void CopyAllLeft(object sender, RoutedEventArgs e) => await CopyAllBlocks(false);
+
+    /// <summary>Copies every difference block to the other side in one pass — like Beyond
+    /// Compare's "Copy All Left→Right". Plans all edits from one consistent snapshot, then
+    /// applies them bottom-up so lower offsets are never shifted by higher edits.</summary>
+    private async Task CopyAllBlocks(bool toRight)
+    {
+        if (_syncActive || _bufferDiff is null || _leftBuffer is null || _rightBuffer is null
+            || _presentation is null || _presentation.Hunks.Count == 0
+            || MergeBox.SelectedItem is not IBlockMerge merge) return;
+        int copied = 0;
+        try
+        {
+            var leftSnapshot = _leftBuffer.Snapshot();
+            var rightSnapshot = _rightBuffer.Snapshot();
+            var edits = new List<TextEdit>();
+            for (int hunk = _presentation.Hunks.Count - 1; hunk >= 0; hunk--)
+                edits.Add(merge.Plan(_bufferDiff, leftSnapshot, rightSnapshot, hunk,
+                    toRight ? MergeDirection.LeftToRight : MergeDirection.RightToLeft));
+            var destination = toRight ? RightCode : LeftCode;
+            foreach (var edit in edits) destination.Buffer!.Apply(edit);
+            copied = edits.Count;
+            _activePane = destination;
+            ShowDraft(); UpdateEditState();
+            _editTask = RecompareBuffers(false);
+            await _editTask;
+            StatusLabel.Text = $"已复制 {copied} 个差异块到{(toRight ? "右侧" : "左侧")}。";
+        }
+        catch (Exception ex) { StatusLabel.Text = $"批量复制失败（已处理 {copied} 块）：" + ex.Message; }
+    }
     private async Task CopyBlock(bool toRight)
     {
         if (_syncActive || _bufferDiff is null || _leftBuffer is null || _rightBuffer is null || MergeBox.SelectedItem is not IBlockMerge merge || _currentHunk < 0) return;

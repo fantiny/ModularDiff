@@ -101,6 +101,16 @@ public partial class MainWindow
             while (_rightBuffer.Text != cssRight && _rightBuffer.CanUndo && guard++ < 12) { HistoryRequested(RightCode, false); await _editTask; }
             Require(_rightBuffer.Text == cssRight, "column edits undo back to the original");
 
+            // Copy-all: two independent hunks copied in one pass land on the other side.
+            await File.WriteAllTextAsync(LeftPath.Text, "same\nleft1\nsame2\nleft2\n");
+            await File.WriteAllTextAsync(RightPath.Text, "same\nright1\nsame2\nright2\n");
+            await CompareAsync();
+            Require(_presentation is not null && _presentation.Hunks.Count == 2, "two hunks expected");
+            await CopyAllBlocks(true);
+            Require(_rightBuffer!.Text == _leftBuffer!.Text, "copy-all right must equalize: "
+                + _leftBuffer.Text.Replace("\n", "|") + " vs " + _rightBuffer.Text.Replace("\n", "|"));
+            Require(!_rightBuffer.Text.Contains("right"), "copy-all must overwrite right hunks");
+
             // Wrapping: a long row spans several visual lines, both sides share the height.
             string longText = new string('x', 500) + "\nsecond\n";
             LeftPath.Text = Path.Combine(root, "wrap-left.txt"); RightPath.Text = Path.Combine(root, "wrap-right.txt");

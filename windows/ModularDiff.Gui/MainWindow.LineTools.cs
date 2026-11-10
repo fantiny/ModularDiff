@@ -36,6 +36,11 @@ public partial class MainWindow
         Add("剪切", hasSelection, () => { SafeClipboard(() => Clipboard.SetText(pane.SelectedText())); pane.ReplaceSelection("", "Cut"); });
         Add("复制", hasSelection, () => SafeClipboard(() => Clipboard.SetText(pane.SelectedText())));
         Add("粘贴", Clipboard.ContainsText(), () => pane.ReplaceSelection(Clipboard.GetText(), "Paste"));
+        Add("全部复制左→右", TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
+            () => _ = CopyAllBlocks(true));
+        Add("全部复制右→左", TextView.Visibility == Visibility.Visible && MergeLeftButton.IsEnabled,
+            () => _ = CopyAllBlocks(false));
+        menu.Items.Add(new Separator());
         Add("复制差异块到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
             TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
             () => _ = CopyBlock(ReferenceEquals(pane, LeftCode)));
