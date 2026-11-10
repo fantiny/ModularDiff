@@ -17,7 +17,12 @@ public sealed class MainWindow : Window
     private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
     private readonly TextBlock _status = new() { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap };
-    private readonly ListBox _rows = new() { SelectionMode = SelectionMode.Multiple }, _files = new() { SelectionMode = SelectionMode.Multiple };
+    private readonly AlignedRowsView _rows = new();
+    private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
+    private readonly ScrollViewer _diffScroll = new();
+    private readonly Canvas _editorHost = new();
+    private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.White, BorderThickness = new Thickness(1), BorderBrush = Brush.Parse("#8793A4"), Padding = new Thickness(2, 0, 2, 0), Watermark = "" };
+    private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
     private readonly TabControl _tabs = new();
     private readonly TabItem _diffTab = new() { Header = "差异对齐" };
     private readonly ComboBox _algorithm = new() { Width = 130 };
@@ -33,8 +38,6 @@ public sealed class MainWindow : Window
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
-    private int _selectionAnchor = -1;
-    private bool _dragSelecting;
     private bool _lastFocusLeft = true;
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
@@ -82,26 +85,16 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("⇤", "目录：预览所选文件右到左同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.RightToLeft))));
         _toolbar.Children.Add(Button("◷", "同步历史与撤销恢复", () => Run(History)));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
-        _diffTab.Content = _rows;
+        _diffTab.Content = _diffScroll; _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
+        _editorHost.Children.Add(_cellEditor); _cellEditor.IsVisible = false;
+        _cellEditor.TextChanged += (_, _) => { if (_editingRow is { } row && !_editorLoading) CellEdited(row, _editingLeft, _cellEditor); };
+        _cellEditor.KeyDown += (_, e) => { if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape) { if (e.Key == Avalonia.Input.Key.Escape) _editorLoading = true; EndCellEdit(); e.Handled = true; } };
+        _cellEditor.LostFocus += (_, _) => EndCellEdit();
+        _rows.EditRequested += (row, left) => BeginEditRow(_rows.IndexOfRow(row), left);
+        _rows.MenuRequested += (row, left) => { if (CreateSplitMenu(row, left) is { } menu) _rows.OpenMenu(menu); };
         var editTab = new TabItem { Header = "左右编辑", Content = Columns(EditPanel(true), EditPanel(false)) };
         var folderTab = new TabItem { Header = "目录比较", Content = _files };
         _tabs.ItemsSource = new[] { _diffTab, editTab, folderTab };
-        _rows.ItemTemplate = new FuncDataTemplate<AlignedRow>((row, _) =>
-        {
-            if (row is null) return new TextBlock();
-            var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
-            grid.Children.Add(Cell(row, true)); var right = Cell(row, false); Grid.SetColumn(right, 1); grid.Children.Add(right);
-            var border = new Border { Child = grid };
-            // 右键任意位置(含行号、边距):按点击侧懒构建"换行"菜单 —— 修菜单时灵时不灵,且行号也可右键。
-            border.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
-            {
-                if (e.GetCurrentPoint(border).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
-                if (_rows.SelectedItems is { } selection && !selection.Contains(row)) _rows.SelectedItem = row;
-                bool leftSide = e.GetPosition(border).X <= border.Bounds.Width / 2;
-                border.ContextMenu = CreateSplitMenu(row, leftSide);
-            }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-            return border;
-        });
         _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
             file is null ? new TextBlock() : Columns(
                 new TextBlock { Text = file.Status == FileStatus.RightOnly ? "—" : $"{file.Status}  {file.RelativePath}", Margin = new Thickness(4) },
@@ -116,7 +109,7 @@ public sealed class MainWindow : Window
         root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status, 3); root.Children.Add(_status); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
         _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = ex.Message; } };
-        _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? "myers"; _rows.ItemsSource = null; _debounce.Start(); };
+        _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? "myers"; _rows.Rows = []; _debounce.Start(); };
         Closing += async (_, e) =>
         {
             if (_allowClose) return;
@@ -135,63 +128,6 @@ public sealed class MainWindow : Window
     private static bool SamePath(string? box, string loaded) =>
         !string.IsNullOrWhiteSpace(box) && string.Equals(Path.GetFullPath(box.Trim()), loaded, StringComparison.Ordinal);
     private static TextBox Editor() => new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 14, IsReadOnly = true, IsUndoEnabled = false };
-    private Control Cell(AlignedRow row, bool left)
-    {
-        TextCell? cell = left ? row.Left : row.Right;
-        // 与 WPF DiffPane 一致的着色:幽灵行灰底,左侧删除/右侧插入/修改各自着色(半透明,选中高亮可透出)。
-        string background = cell is null ? "#C8F2F4F7"
-            : row.IsDifferent ? (left ? (row.Right is null ? "#B3FFF0F0" : "#B3FFF0E9") : (row.Left is null ? "#B3ECF7EF" : "#B3FFF0E9"))
-            : "Transparent";
-        var number = new TextBlock { Text = cell is null ? "" : cell.LineNumber.ToString(), Foreground = Brush.Parse("#8793A4"), FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 12, TextAlignment = TextAlignment.Right, MinWidth = 40, Margin = new Thickness(6, 1, 8, 1), VerticalAlignment = VerticalAlignment.Center };
-        var editor = new TextBox { Name = "CellEditor", Text = cell?.Text ?? "", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), Margin = new Thickness(0, 1, 6, 1), IsReadOnly = cell is null, AcceptsReturn = false };
-        var ending = new TextBlock { Text = cell is { Ending: "CRLF" } ? "⏎CRLF" : cell is { Ending: "CR" } ? "⏎CR" : "", Foreground = Brush.Parse("#8793A4"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
-        editor.TextChanged += (_, _) => CellEdited(row, left, editor);
-        editor.GotFocus += (_, _) => { _rows.SelectedItem = row; _lastFocusLeft = left; };   // 聚焦单元格即选中所在行,并记住最近聚焦侧(⌗ 格式化用)
-        // 未聚焦时右键单元格不出文本编辑菜单(让整行的"换行"菜单接管);左键聚焦后右键才是编辑菜单。
-        editor.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
-        {
-            if (e.GetCurrentPoint(editor).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
-            editor.ContextMenu = editor.IsFocused ? TextMenu(editor) : null;
-        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        // 行号区:单击/Shift 范围/Cmd 点选,以及按住左键拖动连续选择多行。
-        number.PointerPressed += (_, e) =>
-        {
-            if (!e.GetCurrentPoint(number).Properties.IsLeftButtonPressed) return;
-            SelectRows(row, e.KeyModifiers);
-            _dragSelecting = true;
-            e.Pointer.Capture(number);
-            e.Handled = true;
-        };
-        number.AddHandler(Avalonia.Input.InputElement.PointerMovedEvent, (_, e) =>
-        {
-            if (!_dragSelecting) return;
-            int target = RowIndexAt(e.GetPosition(_rows));
-            if (target >= 0) SelectRange(_selectionAnchor, target);
-        });
-        number.PointerReleased += (_, e) =>
-        {
-            if (!_dragSelecting) return;
-            _dragSelecting = false;
-            e.Pointer.Capture(null);
-        };
-        var line = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-        line.Children.Add(number); Grid.SetColumn(editor, 1); line.Children.Add(editor); Grid.SetColumn(ending, 2); line.Children.Add(ending);
-        return new Border { Background = Brush.Parse(background), MinHeight = 22, Child = line };
-    }
-    private static ContextMenu TextMenu(TextBox editor)
-    {
-        var menu = new ContextMenu();
-        void Add(string header, Action action)
-        {
-            var item = new MenuItem { Header = header };
-            item.Click += (_, _) => action();
-            menu.Items.Add(item);
-        }
-        Add("撤销", editor.Undo); Add("重做", editor.Redo);
-        menu.Items.Add(new Separator());
-        Add("剪切", editor.Cut); Add("复制", editor.Copy); Add("粘贴", editor.Paste); Add("全选", editor.SelectAll);
-        return menu;
-    }
     /// <summary>按点击侧构建换行菜单;批量数按当前选中集合实时统计(右键时懒构建,不再有陈旧菜单)。</summary>
     public ContextMenu? CreateSplitMenu(AlignedRow row, bool left)
     {
@@ -210,16 +146,6 @@ public sealed class MainWindow : Window
             menu.Items.Add(item);
         }
         return menu;
-    }
-    private int RowIndexAt(Avalonia.Point point)
-    {
-        for (int i = 0; i < _rows.ItemCount; i++)
-        {
-            if (_rows.ContainerFromIndex(i) is not Control container) continue;
-            var relative = _rows.TranslatePoint(point, container);
-            if (relative is { } p && p.Y >= 0 && p.Y < container.Bounds.Height) return i;
-        }
-        return -1;
     }
     private void FormatSide()
     {
@@ -246,50 +172,22 @@ public sealed class MainWindow : Window
         try { _session.Recompare(); RefreshRows(); }
         catch (Exception ex) { _status.Text = "重对齐失败：" + ex.Message; }
     }
-    private void SelectRows(AlignedRow row, Avalonia.Input.KeyModifiers modifiers)
-    {
-        // 行号区域点击:普通单击单选,Shift 范围选择,Cmd/Ctrl 点选切换 —— 供批量右键操作。
-        if (_rows.SelectedItems is not { } selected || _rows.ItemsSource is not IReadOnlyList<AlignedRow> rows) { _rows.SelectedItem = row; return; }
-        int index = IndexOf(rows, row);
-        bool toggle = modifiers.HasFlag(Avalonia.Input.KeyModifiers.Control) || modifiers.HasFlag(Avalonia.Input.KeyModifiers.Meta);
-        if (modifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift) && _selectionAnchor >= 0)
-        {
-            SelectRange(_selectionAnchor, index);
-        }
-        else if (toggle)
-        {
-            if (selected.Contains(row)) selected.Remove(row); else selected.Add(row);
-            _selectionAnchor = index;
-        }
-        else { selected.Clear(); selected.Add(row); _selectionAnchor = index; }
-    }
-    private void SelectRange(int anchor, int target)
-    {
-        if (_rows.ItemsSource is not IReadOnlyList<AlignedRow> rows || _rows.SelectedItems is not { } selected || anchor < 0 || target < 0) return;
-        selected.Clear();
-        for (int i = Math.Min(anchor, target); i <= Math.Max(anchor, target) && i < rows.Count; i++) selected.Add(rows[i]);
-    }
-    private static int IndexOf(IReadOnlyList<AlignedRow> rows, AlignedRow row)
-    {
-        for (int i = 0; i < rows.Count; i++) if (ReferenceEquals(rows[i], row)) return i;
-        return -1;
-    }
     private int CountSplittable(bool left, ILineSplitter splitter)
     {
         string path = (left ? _session.Left : _session.Right)?.Path ?? _leftPath.Text ?? "";
-        return _rows.SelectedItems?.Cast<AlignedRow>()
+        return _rows.SelectedRows
             .Select(r => left ? r.Left : r.Right).OfType<TextCell>()
-            .Count(c => splitter.CanSplit(path, c.Text)) ?? 0;
+            .Count(c => splitter.CanSplit(path, c.Text));
     }
     private void ApplySplitBatch(bool left, ILineSplitter splitter)
     {
         if (_loading || _session.Left is null || _session.Right is null) return;
         string[] lines = (left ? _session.Left : _session.Right).Text.Split('\n');
-        var targets = _rows.SelectedItems?.Cast<AlignedRow>()
+        var targets = _rows.SelectedRows
             .Select(r => left ? r.Left : r.Right).OfType<TextCell>()
             .Where(c => c.LineNumber - 1 < lines.Length)
             .OrderByDescending(c => c.LineNumber).ToList();   // 自底向上替换,行号不失效
-        if (targets is null || targets.Count == 0) return;
+        if (targets.Count == 0) return;
         int applied = 0;
         foreach (var cell in targets)
         {
@@ -328,6 +226,31 @@ public sealed class MainWindow : Window
             if ((bool)_autoRealign.IsChecked!) Realign();
         }
         catch (Exception ex) { _status.Text = ex.Message; }
+    }
+    /// <summary>测试/交互入口:在指定行指定侧弹出行内编辑器(与视图点击同一通路)。</summary>
+    public void BeginEditRow(int index, bool left)
+    {
+        if (index < 0 || index >= _rows.RowCount) return;
+        var row = _rows.Rows[index];
+        var cell = left ? row.Left : row.Right;
+        if (cell is null) return;
+        if (_editingRow is not null) EndCellEdit();   // 换单元格前提交上一个
+        _editingRow = row; _editingLeft = left; _lastFocusLeft = left;
+        _editorLoading = true; _cellEditor.Text = cell.Text; _editorLoading = false;
+        var rect = _rows.CellRect(index, left);
+        _cellEditor.Width = rect.Width + 10; _cellEditor.Height = AlignedRowsView.RowHeight;
+        Canvas.SetLeft(_cellEditor, rect.X - 2); Canvas.SetTop(_cellEditor, rect.Y);
+        _cellEditor.IsVisible = true;
+        _cellEditor.Focus(); _cellEditor.CaretIndex = _cellEditor.Text.Length;
+        _rows.SelectRows([row]);
+    }
+    private void EndCellEdit()
+    {
+        if (_editingRow is null) return;
+        if (_editorLoading) { _cellEditor.Text = ""; _editorLoading = false; }   // Esc:还原显示
+        else if (_cellEditor.IsFocused || true) { /* TextChanged 已实时提交 */ }
+        _editingRow = null;
+        _cellEditor.IsVisible = false;
     }
     private void CellEdited(AlignedRow row, bool left, TextBox editor)
     {
@@ -384,7 +307,7 @@ public sealed class MainWindow : Window
     {
         _session.Options = BuildOptions();
         if (_session.Left is null) return;
-        _rows.ItemsSource = null; _debounce.Stop(); _debounce.Start();
+        _rows.Rows = []; _debounce.Stop(); _debounce.Start();
     }
     private ComparisonOptions BuildOptions() => new((bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, UnimportantPatterns: _unimportant);
     private void RefreshSessions()
@@ -484,7 +407,7 @@ public sealed class MainWindow : Window
             }
             if (file.IsBinary || file.Status == FileStatus.Error)
             {
-                _rows.ItemsSource = null; _tabs.SelectedIndex = 0;
+                _rows.Rows = []; _tabs.SelectedIndex = 0;
                 string summary = await BinarySummaryAsync(left, right);
                 if (file.Status == FileStatus.Error) { _diffTab.Content = _binaryInfo; _binaryInfo.Text = summary; _status.Text = $"{file.Status}：{file.Note}"; return; }
                 ShowHex(left, right, file);
@@ -505,7 +428,7 @@ public sealed class MainWindow : Window
         SessionStore.Save(_sessions);
         RefreshSessions();
     }
-    private async Task OpenFile(string left, string right) { _diffTab.Content = _rows; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    private async Task OpenFile(string left, string right) { _diffTab.Content = _diffScroll; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
     /// <summary>十六进制视图:16 字节/行并排 dump,与任一差异字节段重叠的行着色,自动定位首个差异行(单侧最多 1MB)。</summary>
     private void ShowHex(string left, string right, FileComparison file)
     {
@@ -545,10 +468,10 @@ public sealed class MainWindow : Window
             long offset = (long)row * rowBytes;
             list.Add(new(row, new(row + 1, Dump(a, offset), "LF", []), new(row + 1, Dump(b, offset), "LF", []), different[row] ? 0 : -1));
         }
-        _diffTab.Content = _rows;
-        _rows.ItemsSource = list;
+        _diffTab.Content = _diffScroll;
+        _rows.Rows = list;
         int first = Array.IndexOf(different, true);
-        if (first >= 0) { _rows.SelectedIndex = first; _rows.ScrollIntoView(list[first]); }
+        if (first >= 0) { _rows.SelectRows([list[first]]); _rows.EnsureVisible(first); }
     }
     /// <summary>图片并排视图:尺寸一致(且 ≤4096×4096)时右侧叠加半透明红色差异像素(SkiaSharp 解码,无图像库落盘)。</summary>
     private void ShowPicture(string left, string right, FileComparison file)
@@ -633,7 +556,7 @@ public sealed class MainWindow : Window
     private void Edited(bool left)
     {
         if (_loading) return;
-        try { if (_session.Left is null) return; string text = (left ? _leftEditor.Text : _rightEditor.Text) ?? ""; if ((left ? _session.Left : _session.Right)?.Text == text) return; _session.Edit(left, text); _rows.ItemsSource = null; _debounce.Stop(); _debounce.Start(); RefreshDirty(); } catch (Exception ex) { _status.Text = ex.Message; }
+        try { if (_session.Left is null) return; string text = (left ? _leftEditor.Text : _rightEditor.Text) ?? ""; if ((left ? _session.Left : _session.Right)?.Text == text) return; _session.Edit(left, text); _rows.Rows = []; _debounce.Stop(); _debounce.Start(); RefreshDirty(); } catch (Exception ex) { _status.Text = ex.Message; }
     }
     private void RefreshEditors()
     {
@@ -642,19 +565,19 @@ public sealed class MainWindow : Window
         finally { _loading = false; }
         RefreshRows();
     }
-    private void RefreshRows() { _rows.ItemsSource = _session.Presentation?.Rows; RefreshDirty(); }
+    private void RefreshRows() { _rows.Rows = _session.Presentation?.Rows ?? []; RefreshDirty(); }
     private void RefreshDirty() => _status.Text = _session.Left is null ? "请选择文件或目录" : $"{(_session.Dirty ? "● 未保存" : "已保存")} · {_session.Presentation?.Hunks.Count ?? 0} 个差异块 · {_session.Left.Path} ↔ {_session.Right?.Path}";
     private void Merge(MergeDirection direction)
     {
-        if (_rows.SelectedItem is not AlignedRow { HunkId: >= 0 } row) { _status.Text = "请在差异对齐页选中一个差异块。"; return; }
+        if (_rows.SelectedRows.FirstOrDefault(r => r.HunkId >= 0) is not { } row) { _status.Text = "请在差异对齐页选中一个差异块。"; return; }
         try { _debounce.Stop(); _session.Merge(row.HunkId, direction); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; }
     }
     private void Navigate(int direction)
     {
-        var rows = _session.Presentation?.Rows; if (rows is null) return;
-        int index = _rows.SelectedIndex, current = index >= 0 && index < rows.Count ? rows[index].HunkId : -1;
+        var rows = _rows.Rows; if (rows.Count == 0) return;
+        int index = _rows.PrimarySelected, current = index >= 0 && index < rows.Count ? rows[index].HunkId : -1;
         for (int i = index < 0 ? (direction > 0 ? 0 : rows.Count - 1) : index + direction; i >= 0 && i < rows.Count; i += direction)
-            if (rows[i].HunkId >= 0 && rows[i].HunkId != current) { _tabs.SelectedIndex = 0; _rows.SelectedIndex = i; _rows.ScrollIntoView(rows[i]); return; }
+            if (rows[i].HunkId >= 0 && rows[i].HunkId != current) { _tabs.SelectedIndex = 0; _rows.SelectRows([rows[i]]); _rows.EnsureVisible(i); return; }
     }
     private async Task<bool> Leave()
     {
