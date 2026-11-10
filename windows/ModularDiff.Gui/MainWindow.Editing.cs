@@ -35,6 +35,7 @@ public partial class MainWindow
         _editCancellation?.Cancel(); _bufferDiff = null;
         _leftBuffer = _rightBuffer = null; LeftCode.AttachBuffer(null); RightCode.AttachBuffer(null);
         UpdateEditState();
+        if (FileStatsLabel is not null) UpdateFileStats();
     }
     private async Task AttachEditors(string left, string right, CancellationToken token)
     {
@@ -48,6 +49,7 @@ public partial class MainWindow
             _leftBuffer = factory.Create(snapshots[0]); _rightBuffer = factory.Create(snapshots[1]);
             LeftCode.AttachBuffer(_leftBuffer); RightCode.AttachBuffer(_rightBuffer); _activePane = LeftCode;
             _editTask = RecompareBuffers(false); await _editTask;
+            UpdateFileStats();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         { ClearEditors(); StatusLabel.Text = "文件保持只读：" + ex.Message; }

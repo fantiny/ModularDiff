@@ -43,7 +43,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
         brush = (Brush)new BrushConverter().ConvertFromString(color)!; brush.Freeze(); Palette.Add(color, brush); return brush;
     }
     private static readonly Brush Ink = Brush("#253041"), Muted = Brush("#8793A4"), Border = Brush("#DEE3EA"), Ghost = Brush("#F2F4F7"), Selected = Brush("#D9E8FF");
-    private static readonly Brush Modified = Brush("#FFF0E9"), Deleted = Brush("#FFF0F0"), Inserted = Brush("#ECF7EF"), ChangedText = Brush("#A52D22"), ChangedBackground = Brush("#FFD4BC");
+    private static readonly Brush Modified = Brush("#FFF6D6"), Deleted = Brush("#FFF0F0"), Inserted = Brush("#ECF7EF"), ChangedText = Brush("#A52D22"), ChangedBackground = Brush("#FFD4BC");
     public bool IsLeft { get; set; }
     public bool ShowEndings { get; set; } = true;
     public double RowHeight => Math.Ceiling(_fontSize * 1.55);
@@ -199,7 +199,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
             if (cell is null)
             {
                 dc.PushClip(new RectangleGeometry(rect));
-                var hatch = new Pen(Border, .7);
+                var hatch = new Pen(Brush("#C4CCD8"), .8);
                 for (double x = 54; x < RenderSize.Width + RowHeight; x += 9) dc.DrawLine(hatch, new(x, y), new(x - RowHeight, y + RowHeight));
                 dc.Pop();
             }

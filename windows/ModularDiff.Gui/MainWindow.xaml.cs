@@ -149,6 +149,18 @@ public partial class MainWindow : Window
             _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪";
         }
     }
+    /// <summary>File facts for the status bar: line counts, encoding and line-ending style per side.</summary>
+    private void UpdateFileStats()
+    {
+        if (_leftBuffer is not null && _rightBuffer is not null)
+        {
+            static string Describe(IEditBuffer buffer) =>
+                $"{DocumentLines.Parse(buffer.Text).Count:N0} 行 · {buffer.Snapshot().Encoding.Name} · {(buffer.NewLine == "\r\n" ? "CRLF" : buffer.NewLine == "\r" ? "CR" : "LF")}";
+            FileStatsLabel.Text = $"左 {Describe(_leftBuffer)} ｜ 右 {Describe(_rightBuffer)}";
+        }
+        else FileStatsLabel.Text = "";
+    }
+
     private void UpdateSummary()
     {
         var result = TextView.Visibility == Visibility.Visible ? _fileResult : _folderResult;
@@ -315,7 +327,7 @@ public partial class MainWindow : Window
         _syncText = true; LeftCode.SetRows(presentation.Rows, !preservePosition); RightCode.SetRows(presentation.Rows, !preservePosition); _syncText = false;
         Overview.SetPresentation(presentation); UpdateOverview();
         HunkLabel.Text = $"{presentation.Hunks.Count} 个差异块";
-        UpdateEditState();
+        UpdateEditState(); UpdateFileStats();
         TextEmptyState.Visibility = presentation.Rows.Count == 0 && _leftBuffer is null ? Visibility.Visible : Visibility.Collapsed;
         TextEmptyMessage.Text = file.Status == FileStatus.Error ? file.Note ?? "文件读取错误。"
             : file.IsBinary ? "此文件使用字节比较，不生成文本视图。\n" + file.Note
