@@ -20,10 +20,10 @@ var window = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(ui
 window.Show();
 Check(window.Content is Grid && window.IsVisible, "Avalonia window initializes on headless platform");
 var deadline = DateTime.UtcNow.AddSeconds(15);
-while (!((Grid)window.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0) && DateTime.UtcNow < deadline)
+while (!(window.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && DateTime.UtcNow < deadline))
 { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10); }
 Console.WriteLine(string.Join(" | ", ((Grid)window.Content!).Children.OfType<TextBlock>().Select(t => t.Text)));
-Check(((Grid)window.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0), "GUI compare populates aligned rows");
+Check(window.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0), "GUI compare populates aligned rows");
 window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick();
 using (var frame = window.CaptureRenderedFrame())
 {
@@ -31,11 +31,12 @@ using (var frame = window.CaptureRenderedFrame())
     if (args.Length > 1) frame!.Save(args[1]);
 }
 // 差异对齐页就地编辑:改单元格 → 会话变脏 → ▶ 内存重对齐(不弹保存对话)。
-var rowsList = ((Grid)window.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().First(l => l.Items.Count > 0);
+var rowsView = window.GetVisualDescendants().OfType<AlignedRowsView>().Single();
 window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
-var cellEditor = (rowsList.ContainerFromIndex(0) as Control)?.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor");
+window.BeginEditRow(0, true);
+var cellEditor = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor" && t.IsVisible);
 Check(cellEditor is not null, "inline cell editor realized");
-var cssMenuRow = rowsList.Items.OfType<AlignedRow>().First(r => r.Left?.Text.StartsWith("--bg:") == true);
+var cssMenuRow = rowsView.Rows.First(r => r.Left?.Text.StartsWith("--bg:") == true);
 Check(window.CreateSplitMenu(cssMenuRow, false) is { ItemCount: > 0 }, "css line offers split context menu");
 cellEditor!.Text += " // edited";
 Dispatcher.UIThread.RunJobs();
@@ -44,37 +45,31 @@ var compareButton = ((Grid)window.Content!).Children.OfType<StackPanel>().Single
 compareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var realign = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
-Check(rowsList.Items.Count > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
+Check(rowsView.RowCount > 0 && ((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "refresh realigns inline edits without save prompt");
 // 多选 + 批量换行 + ⟳ 重对齐:两条 css 行各拆成两行,行数 +2。
-var cssRows = rowsList.Items.OfType<AlignedRow>().Where(r => r.Left?.Text.StartsWith("--") == true && !r.Left.Text.StartsWith("--gap:")).ToList();
+var cssRows = rowsView.Rows.Where(r => r.Left?.Text.StartsWith("--") == true && !r.Left!.Text.StartsWith("--gap:")).ToList();
 Check(cssRows.Count == 2, "two css rows present for batch split");
-rowsList.SelectedItems?.Clear();
-foreach (var r in cssRows) rowsList.SelectedItems!.Add(r);
+rowsView.SelectRows(cssRows);
 var splitItem = window.CreateSplitMenu(cssRows[0], false)!.Items.OfType<MenuItem>().First();
 Check(((string?)splitItem.Header)?.Contains("2 行") == true, "split menu reports batch row count");
 splitItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
-int before = rowsList.ItemCount;
+int before = rowsView.RowCount;
 var realignButton = window.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true);
 realignButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var batchDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < batchDone) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
-Check(rowsList.ItemCount - before == 2, $"batch split realigns to {rowsList.ItemCount - before} extra rows (expected 2)");
+Check(rowsView.RowCount - before == 2, $"batch split realigns to {rowsView.RowCount - before} extra rows (expected 2)");
 // ⚡ 自动重对齐:开启后右键换行立即重算,无需点 ⟳。
 var autoToggle = window.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>().First(b => (ToolTip.GetTip(b) as string)?.Contains("自动重对齐") == true);
 autoToggle.IsChecked = true;
-var allRows2 = rowsList.Items.OfType<AlignedRow>().ToList();
-var gapRow = allRows2.First(r => r.Left?.Text.StartsWith("--gap:") == true);
-rowsList.SelectedItems?.Clear();
-rowsList.SelectedItems!.Add(gapRow);
-rowsList.ScrollIntoView(gapRow);
-Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); window.UpdateLayout();
-int gapIndex = allRows2.IndexOf(gapRow);
+var gapRow = rowsView.Rows.First(r => r.Left?.Text.StartsWith("--gap:") == true);
+rowsView.SelectRows([gapRow]);
 var gapItem = window.CreateSplitMenu(gapRow, false)!.Items.OfType<MenuItem>().First();
-int autoBefore = rowsList.ItemCount;
+int autoBefore = rowsView.RowCount;
 gapItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
-Check(rowsList.ItemCount - autoBefore == 1, $"auto-realign split adds 1 row immediately (got {rowsList.ItemCount - autoBefore})");
+Check(rowsView.RowCount - autoBefore == 1, $"auto-realign split adds 1 row immediately (got {rowsView.RowCount - autoBefore})");
 foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
     save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var saveDone = DateTime.UtcNow.AddSeconds(5);
@@ -92,10 +87,9 @@ try
     hexWindow.Show();
     var hexDone = DateTime.UtcNow.AddSeconds(10);
     while (DateTime.UtcNow < hexDone) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10);
-        if (((Grid)hexWindow.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0)) break; }
+        if (hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
     var hexStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
-    var hexRows = ((Grid)hexWindow.Content!).Children.OfType<TabControl>().Single().Items.OfType<TabItem>().Select(t => t.Content).OfType<ListBox>().Any(l => l.Items.Count > 0);
-    Check(hexRows && hexStatus.Contains("十六进制"), "binary pair renders hex view");
+    Check(hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && hexStatus.Contains("十六进制"), "binary pair renders hex view");
     hexWindow.Close();
 }
 finally { Directory.Delete(binRoot, recursive: true); }
