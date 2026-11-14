@@ -79,7 +79,7 @@ public partial class MainWindow
         _folderResult = result; _tree = await Task.Run(() => FolderTree.Build(result, CancellationToken.None));
         foreach (var node in _tree.All.Where(n => n.IsDirectory)) if (expanded?.TryGetValue(node.RelativePath, out bool value) == true) node.IsExpanded = value;
         _fileResult = null; _textFile = null; _currentNode = null; _presentation = null; _presentationVersion++;
-        LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null); TextTab.IsEnabled = false;
+        LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         RefreshFolderRows(_tree.All.FirstOrDefault(n => n.RelativePath == selected)); SetView(false);
     }
 }

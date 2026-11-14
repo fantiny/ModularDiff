@@ -137,7 +137,7 @@ public partial class MainWindow
             RightFileTitle.Text = (_rightBuffer.IsDirty ? "● " : "") + _rightBuffer.Path;
             LeftFileTitle.ToolTip = $"{_leftBuffer.Path}\n{_leftBuffer.Snapshot().Encoding.Name} · {(_leftBuffer.IsDirty ? "未保存" : "已保存")}";
             RightFileTitle.ToolTip = $"{_rightBuffer.Path}\n{_rightBuffer.Snapshot().Encoding.Name} · {(_rightBuffer.IsDirty ? "未保存" : "已保存")}";
-            TextTab.Content = (HasDirtyBuffers ? "● " : "≡ ") + System.IO.Path.GetFileName(_leftBuffer.Path);
+            if (_activeSession is not null) _activeSession.IsDirty = HasDirtyBuffers;
         }
     }
     private async void CopyLeftToRight(object sender, RoutedEventArgs e) => await CopyBlock(true);

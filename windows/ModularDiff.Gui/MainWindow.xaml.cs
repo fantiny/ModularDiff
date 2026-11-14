@@ -1,4 +1,4 @@
-using System.IO;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -63,13 +63,17 @@ public partial class MainWindow : Window
             CompareButton.IsEnabled = false;
         }
         Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
-        InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions(); InitializeFolderOps();
+        InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions(); InitializeFolderOps(); InitializeTabs();
         _ready = true;
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
         if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
         else if (arguments.Contains("--edit-smoke-test")) Loaded += EditSmokeTest;
         else if (arguments.Contains("--smoke-test")) Loaded += SmokeTest;
-        else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) => await CompareAsync();
+        else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) =>
+        {
+            try { await CompareAndTrackSession(); }
+            catch (Exception ex) { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "md-crash.log"), ex.ToString()); StatusLabel.Text = "自动比较失败：" + ex.Message; }
+        };
         if (arguments.Contains("--wrap")) WrapToggle.IsChecked = true;
     }
     private string? Arg(string name) { int i = Array.IndexOf(_arguments, name); return i >= 0 && i + 1 < _arguments.Length ? _arguments[i + 1] : null; }
@@ -99,7 +103,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true) Target(sender).Text = dialog.FolderName;
     }
     private TextBox Target(object sender) => (string)((Button)sender).Tag == "left" ? LeftPath : RightPath;
-    private async void CompareClick(object sender, RoutedEventArgs e) => await CompareAsync();
+    private async void CompareClick(object sender, RoutedEventArgs e) => await CompareAndTrackSession();
     private async Task CompareAsync()
     {
         if (_busy || !await CanLeaveEdits()) return;
@@ -113,7 +117,7 @@ public partial class MainWindow : Window
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
-        TextTab.IsEnabled = false; FolderTab.IsEnabled = true; SetView(false);
+        FolderView.Visibility = Visibility.Visible; TextView.Visibility = Visibility.Collapsed;
         ActivityLabel.Text = "比较中…";
         try
         {
@@ -124,19 +128,19 @@ public partial class MainWindow : Window
                     UnimportantPatterns: ParseUnimportantPatterns()));
             string? module = (ModuleBox.SelectedItem as ModuleChoice)?.Id;
             var progress = new Progress<ComparisonProgress>(p => { if (_busy && !token.IsCancellationRequested) StatusLabel.Text = $"比较中 {p.Completed}/{p.Total} · {p.Path}"; });
-            StatusLabel.Text = "扫描并比较…";
             var result = await Task.Run(() => _engine.CompareAsync(request, module, progress, token), token);
             _rootRequest = request;
             if (Directory.Exists(request.LeftPath) && Directory.Exists(request.RightPath))
             {
                 var tree = await Task.Run(() => FolderTree.Build(result, token), token);
-                _folderResult = result; _tree = tree; RefreshFolderRows(); SetView(false);
+                _folderResult = result; _tree = tree; RefreshFolderRows();
             }
             else
             {
                 _fileResult = result; _textFile = result.Files.Single();
                 SetTextHeaders(result.LeftPath, result.RightPath, _textFile);
-                await RebuildPresentation(token); await AttachEditors(result.LeftPath, result.RightPath, token); TextTab.IsEnabled = true; FolderTab.IsEnabled = false; SetView(true); LeftCode.Focus();
+                await RebuildPresentation(token); await AttachEditors(result.LeftPath, result.RightPath, token);
+                SetView(true); LeftCode.Focus();
             }
             ExportButton.IsEnabled = true;
             UpdateSummary();
@@ -179,14 +183,12 @@ public partial class MainWindow : Window
     {
         FolderView.Visibility = text ? Visibility.Collapsed : Visibility.Visible;
         TextView.Visibility = text ? Visibility.Visible : Visibility.Collapsed;
-        FolderTab.IsChecked = !text; TextTab.IsChecked = text;
+        if (!text) FolderTab.IsChecked = true;
         OpenButton.IsEnabled = !text && _folderResult is not null;
         PreviousFileButton.IsEnabled = NextFileButton.IsEnabled = text && _folderResult is not null;
         ExportButton.IsEnabled = text ? _fileResult is not null : _folderResult is not null;
         UpdateSummary(); UpdateEditState();
     }
-    private void FolderTabClick(object sender, RoutedEventArgs e) => SetView(false);
-    private void TextTabClick(object sender, RoutedEventArgs e) => SetView(true);
     private void RefreshFolderRows(FolderNode? selected = null)
     {
         if (!_ready || _tree is null) return;
@@ -252,9 +254,10 @@ public partial class MainWindow : Window
         _currentNode = node; _textFile = null; _fileResult = null; _presentation = null; _presentationVersion++;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
-        TextTab.Content = "≡ " + node.Name; TextTab.IsEnabled = true; SetView(true);
-        TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
         string left = Path.Combine(root.LeftPath, node.RelativePath), right = Path.Combine(root.RightPath, node.RelativePath);
+        // Session is created after the comparison completes (see end of OpenNode) —
+        // creating it here would trigger SwitchToSession's auto-compare and race with this method.
+        TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
         SetTextHeaders(left, right, node.File);
         CancelButton.IsEnabled = true; ActivityLabel.Text = "加载文件…";
         string? empty = null;
@@ -280,6 +283,20 @@ public partial class MainWindow : Window
             SetTextHeaders(left, right, _textFile);
             await RebuildPresentation(token);
             await AttachEditors(left, right, token);
+            // Comparison done: find-or-create a session for this pair and store the results.
+            var session = _textSessions.FirstOrDefault(s =>
+                string.Equals(s.LeftPath, left, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(s.RightPath, right, StringComparison.OrdinalIgnoreCase));
+            if (session is null)
+            {
+                session = CreateSession(left, right);
+                session.Title = Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
+                BuildTabButton(session);
+            }
+            SaveSessionState(session);
+            _activeSession = session;
+            FolderTab.IsChecked = false;
+            foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
             LeftFolders.SelectedItem = RightFolders.SelectedItem = node;
             ExportButton.IsEnabled = true; UpdateSummary(); LeftCode.Focus();
         }
@@ -303,7 +320,7 @@ public partial class MainWindow : Window
         LeftFileTitle.Text = left; LeftFileTitle.ToolTip = left; RightFileTitle.Text = right; RightFileTitle.ToolTip = right;
         LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.LeftLine is not null):N0} 行 · 左侧";
         RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.RightLine is not null):N0} 行 · 右侧";
-        TextTab.Content = "≡ " + Path.GetFileName(file.RelativePath);
+        if (_activeSession is not null) _activeSession.Title = Path.GetFileName(file.RelativePath);
     }
     private static readonly HashSet<string> PictureExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
 
