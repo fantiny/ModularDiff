@@ -33,8 +33,30 @@ public sealed class AlignedRowsView : Control
     private readonly HashSet<int> _selected = [];
     private int _primary = -1, _anchor = -1;
     private bool _dragging;
+    private bool _vertical;
+    private readonly Dictionary<int, int> _bookmarks = new();
 
     public AlignedRowsView() => Focusable = true;
+    /// <summary>上下布局(true=左右两侧改为上下两栏);渲染与命中统一走 Band 几何。</summary>
+    public bool Vertical { get => _vertical; set { if (_vertical == value) return; _vertical = value; InvalidateMeasure(); InvalidateVisual(); } }
+    private Rect Band(int row, bool left)
+    {
+        if (_vertical) return new Rect(0, (row * 2 + (left ? 0 : 1)) * RowHeight, Bounds.Width, RowHeight);
+        double half = Math.Max(80, Bounds.Width / 2);
+        return new Rect(left ? 0 : half, row * RowHeight, half, RowHeight);
+    }
+    private (int Row, bool Left)? BandAt(Point point)
+    {
+        if (_vertical)
+        {
+            int slot = (int)(point.Y / RowHeight);
+            if (slot < 0 || slot / 2 >= _rows.Count) return null;
+            return (slot / 2, slot % 2 == 1);
+        }
+        int row = (int)(point.Y / RowHeight);
+        if (row < 0 || row >= _rows.Count) return null;
+        return (row, point.X >= Math.Max(80, Bounds.Width / 2));
+    }
     public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; InvalidateMeasure(); InvalidateVisual(); } }
     public int RowCount => _rows.Count;
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
@@ -68,9 +90,51 @@ public sealed class AlignedRowsView : Control
     }
     public Rect CellRect(int index, bool left)
     {
-        double half = Math.Max(80, Bounds.Width / 2);
-        double x = (left ? 0 : half) + NumberWidth;
-        return new Rect(x, index * RowHeight, half - NumberWidth, RowHeight);
+        Rect band = Band(index, left);
+        return new Rect(band.X + NumberWidth, band.Y, band.Width - NumberWidth, RowHeight);
+    }
+    private static readonly IBrush BookmarkBrush = new SolidColorBrush(Color.Parse("#8AB4FF"));
+    private void DrawBookmark(DrawingContext context, int index, int digit)
+    {
+        Rect band = Band(index, true);
+        var rect = new Rect(band.X + 1, band.Y + 3, 14, RowHeight - 6);
+        context.FillRectangle(BookmarkBrush, rect, 3);
+        var label = new FormattedText(digit.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, Brushes.White);
+        context.DrawText(label, new Point(rect.X + (rect.Width - label.Width) / 2, rect.Y + 2));
+    }
+    /// <summary>设置/清除书签(⌘⇧数字);行索引绑定,重对齐后语义上可能漂移。</summary>
+    public void ToggleBookmark(int row, int digit)
+    {
+        if (row < 0 || row >= _rows.Count || digit is < 1 or > 9) return;
+        if (!_bookmarks.Remove(row)) _bookmarks[row] = digit;
+        InvalidateVisual();
+    }
+    /// <summary>跳到书签(⌘数字);命中则选中并滚动到该行。</summary>
+    public bool GoToBookmark(int digit)
+    {
+        foreach (var (row, mark) in _bookmarks)
+            if (mark == digit)
+            {
+                _selected.Clear(); _selected.Add(row); _primary = _anchor = row;
+                EnsureVisible(row); InvalidateVisual(); SelectionChanged?.Invoke();
+                return true;
+            }
+        return false;
+    }
+    /// <summary>选中当前行所在的整个差异块(所有同 HunkId 的行)。</summary>
+    public void SelectHunk(AlignedRow row)
+    {
+        if (row.HunkId < 0) { SelectRows([row]); return; }
+        SelectRows(_rows.Where(r => r.HunkId == row.HunkId).ToList());
+    }
+    /// <summary>当前跨行文本选区的行范围与侧;无选区为 null。</summary>
+    public (int FromRow, int ToRow, bool Left)? TextSelectionRange
+    {
+        get
+        {
+            if (_textAnchor is not { } a || _textHead is not { } b || a.Left != b.Left) return null;
+            return (Math.Min(a.Row, b.Row), Math.Max(a.Row, b.Row), a.Left);
+        }
     }
     /// <summary>宿主构建好菜单后挂到视图并打开(在指针位置弹出)。</summary>
     public void OpenMenu(ContextMenu menu) { ContextMenu = menu; menu.Open(this); }
@@ -78,7 +142,7 @@ public sealed class AlignedRowsView : Control
     public new ContextMenu? ContextMenu { get => _menu; set { _menu = value; base.ContextMenu = value; } }
     private ScrollViewer? _scroller;
 
-    protected override Size MeasureOverride(Size availableSize) => new(availableSize.Width, Math.Ceiling(_rows.Count * RowHeight));
+    protected override Size MeasureOverride(Size availableSize) => new(availableSize.Width, Math.Ceiling(_rows.Count * RowHeight * (_vertical ? 2 : 1)));
     private ScrollViewer? Scroller
     {
         get
@@ -94,71 +158,72 @@ public sealed class AlignedRowsView : Control
     {
         base.Render(context);
         if (_rows.Count == 0) return;
-        double half = Math.Max(80, Bounds.Width / 2);
         var scroller = Scroller;
         double top = scroller?.Offset.Y ?? 0;
-        int first = Math.Max(0, (int)(top / RowHeight) - 1);
-        int last = Math.Min(_rows.Count, (int)((top + (scroller?.Viewport.Height ?? Bounds.Height)) / RowHeight) + 2);
+        double divisor = RowHeight * (_vertical ? 2 : 1);
+        int first = Math.Max(0, (int)(top / divisor) - 1);
+        int last = Math.Min(_rows.Count, (int)((top + (scroller?.Viewport.Height ?? Bounds.Height)) / divisor) + 2);
         for (int i = first; i < last; i++)
         {
             var row = _rows[i];
-            double y = i * RowHeight;
-            DrawSide(context, row, i, true, 0, half);
-            DrawSide(context, row, i, false, half, half);
+            DrawSide(context, row, i, true);
+            DrawSide(context, row, i, false);
+            if (_bookmarks.TryGetValue(i, out int digit)) DrawBookmark(context, i, digit);
         }
         if (_textAnchor is { } anchor && _textHead is { } head && anchor.Left == head.Left)
         {
             var (from, to) = anchor.Row <= head.Row ? (anchor, head) : (head, anchor);
-            double origin = from.Left ? 0 : half, textX = origin + NumberWidth;
             for (int i = from.Row; i <= Math.Min(to.Row, _rows.Count - 1); i++)
             {
+                Rect band = Band(i, from.Left);
+                double textX = band.X + NumberWidth;
                 double x0 = i == from.Row ? textX + from.Column * CharWidth : textX;
-                double x1 = i == to.Row ? textX + to.Column * CharWidth : origin + half;
-                context.FillRectangle(TextSelect, new Rect(Math.Min(x0, x1), i * RowHeight + 1, Math.Max(2, Math.Abs(x1 - x0)), RowHeight - 2), 2);
+                double x1 = i == to.Row ? textX + to.Column * CharWidth : band.Right;
+                context.FillRectangle(TextSelect, new Rect(Math.Min(x0, x1), band.Y + 1, Math.Max(2, Math.Abs(x1 - x0)), RowHeight - 2), 2);
             }
         }
     }
-    private void DrawSide(DrawingContext context, AlignedRow row, int index, bool left, double origin, double width)
+    private void DrawSide(DrawingContext context, AlignedRow row, int index, bool left)
     {
         TextCell? cell = left ? row.Left : row.Right;
-        double y = index * RowHeight;
+        Rect band = Band(index, left);
         IBrush? tint = cell is null ? Ghost
             : row.IsDifferent ? (left ? (row.Right is null ? Deleted : Modified) : (row.Left is null ? Inserted : Modified))
             : null;
         if (_selected.Contains(index))
         {
-            context.FillRectangle(Selected, new Rect(0, y, width * 2, RowHeight));
+            context.FillRectangle(Selected, band);
             if (tint is not null)
                 using (context.PushOpacity(0.45))
-                    context.FillRectangle(tint, new Rect(origin, y, width, RowHeight));   // 选中时差异色以 45% 叠加
+                    context.FillRectangle(tint, band);   // 选中时差异色以 45% 叠加
         }
-        else if (tint is not null) context.FillRectangle(tint, new Rect(origin, y, width, RowHeight));
+        else if (tint is not null) context.FillRectangle(tint, band);
         if (cell is null) return;
         var number = new FormattedText(cell.LineNumber.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 11, Number);
-        context.DrawText(number, new Point(origin + NumberWidth - 8 - number.Width, y + 4));
+        context.DrawText(number, new Point(band.X + NumberWidth - 8 - number.Width, band.Y + 4));
         // 性能关键:FormattedText 会对整行做排版,压缩文件的超长行(数万字符)会让每次重绘卡几秒。
         // 只对"视口内可见的前缀"排版与绘制,其余截断;词级高亮同样按可见前缀裁剪。
         double charWidth = CharWidth;
-        int visibleChars = Math.Max(1, (int)((width - NumberWidth - 10) / charWidth) + 1);
+        int visibleChars = Math.Max(1, (int)((band.Width - NumberWidth - 10) / charWidth) + 1);
         string drawn = cell.Text.Length > visibleChars ? cell.Text[..visibleChars] : cell.Text;
-        double textX = origin + NumberWidth;
+        double textX = band.X + NumberWidth;
         foreach (var span in cell.Highlights)
         {
             int start = Math.Clamp(span.Start, 0, drawn.Length), length = Math.Clamp(span.Length, 0, drawn.Length - start);
             if (length <= 0) continue;
-            context.FillRectangle(Word, new Rect(textX + start * charWidth, y + 2, length * charWidth, RowHeight - 5), 2);
+                context.FillRectangle(Word, new Rect(textX + start * charWidth, band.Y + 2, length * charWidth, RowHeight - 5), 2);
         }
         var text = new FormattedText(drawn, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink);
-        context.DrawText(text, new Point(textX, y + (RowHeight - TextSize * 1.35) / 2));   // 与居中编辑器的文本基线对齐
+        context.DrawText(text, new Point(textX, band.Y + (RowHeight - TextSize * 1.35) / 2));   // 与居中编辑器的文本基线对齐
         if (cell.Text.Length > drawn.Length)
         {
             var more = new FormattedText("…", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Number);
-            context.DrawText(more, new Point(textX + drawn.Length * charWidth, y + 3));
+            context.DrawText(more, new Point(textX + drawn.Length * charWidth, band.Y + 3));
         }
         if (cell.Ending is "CRLF" or "CR")
         {
             var marker = new FormattedText(cell.Ending == "CRLF" ? "⏎CRLF" : "⏎CR", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 10, Number);
-            context.DrawText(marker, new Point(origin + width - MarkerWidth + 4, y + 5));
+            context.DrawText(marker, new Point(band.Right - MarkerWidth + 4, band.Y + 5));
         }
     }
     private static double _charWidth;
@@ -168,10 +233,9 @@ public sealed class AlignedRowsView : Control
     {
         base.OnPointerPressed(e);
         Point point = e.GetPosition(this);
-        int index = (int)(point.Y / RowHeight);
-        if (index < 0 || index >= _rows.Count) return;
-        double half = Math.Max(80, Bounds.Width / 2);
-        bool left = point.X < half;
+        if (BandAt(point) is not { } hit) return;
+        int index = hit.Row;
+        bool left = hit.Left;
         var properties = e.GetCurrentPoint(this).Properties;
         if (properties.IsRightButtonPressed)
         {
@@ -182,7 +246,7 @@ public sealed class AlignedRowsView : Control
         }
         if (!properties.IsLeftButtonPressed) return;
         Focus();
-        if (point.X % half < NumberWidth)   // 行号列:单击/Shift 范围/Cmd 点选/拖动选择行
+        if (point.X - Band(index, left).X < NumberWidth)   // 行号列:单击/Shift 范围/Cmd 点选/拖动选择行
         {
             ClearTextSelection();
             ApplyClickSelection(index, e.KeyModifiers);
@@ -221,7 +285,8 @@ public sealed class AlignedRowsView : Control
             _textAnchor = _pressLocation;
             e.Pointer.Capture(this);
         }
-        _textHead = LocationAt(point, Math.Clamp((int)(point.Y / RowHeight), 0, _rows.Count - 1), point.X < Math.Max(80, Bounds.Width / 2));
+        if (BandAt(point) is { } location)
+            _textHead = LocationAt(point, location.Row, location.Left);
         InvalidateVisual();
     }
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -243,7 +308,7 @@ public sealed class AlignedRowsView : Control
     {
         var cell = left ? _rows[row].Left : _rows[row].Right;
         int length = cell?.Text.Length ?? 0;
-        double textX = (left ? 0 : Math.Max(80, Bounds.Width / 2)) + NumberWidth;
+        double textX = Band(row, left).X + NumberWidth;
         int column = Math.Clamp((int)((point.X - textX) / CharWidth), 0, length);
         return (row, column, left);
     }
@@ -300,6 +365,14 @@ public sealed class AlignedRowsView : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if ((e.KeyModifiers & (KeyModifiers.Meta | KeyModifiers.Control)) != 0 && e.Key is >= Key.D1 and <= Key.D9)
+        {
+            int digit = e.Key - Key.D1 + 1;
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) ToggleBookmark(Math.Max(0, _primary), digit);
+            else GoToBookmark(digit);
+            e.Handled = true;
+            return;
+        }
         if (e.Key != Key.C || (e.KeyModifiers & (KeyModifiers.Meta | KeyModifiers.Control)) == 0) return;
         string text = SelectedText();
         if (text.Length == 0) return;

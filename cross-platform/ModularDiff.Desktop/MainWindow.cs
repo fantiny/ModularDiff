@@ -55,6 +55,7 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("⟳", "重新对齐：按当前算法与忽略选项重算，不重读磁盘，保留未保存修改", Realign));
         ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
         _toolbar.Children.Add(_autoRealign);
+        _toolbar.Children.Add(Button("◱", "布局切换：左右并排 ⇄ 上下分栏", () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
         _toolbar.Children.Add(Button("⌗", "格式化本侧：按最近聚焦的一侧，应用代码格式化插件（如 CSS 规范格式化）", FormatSide));
         _toolbar.Children.Add(Button("◈", "不重要差异规则：每行一条正则，匹配文本（如 $Id$、时间戳、版本号）不产生差异块", EditRules));
         _toolbar.Children.Add(Button("💾", "保存当前比较为命名会话（左右路径 + 算法 + 忽略规则）", () => Run(SaveSession)));
@@ -100,6 +101,27 @@ public sealed class MainWindow : Window
                 var copy = new MenuItem { Header = "复制所选" };
                 copy.Click += async (_, _) => { if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(selected); };
                 menu.Items.Add(copy);
+            }
+            if (_session.Left is not null)
+            {
+                var lineCopy = new MenuItem { Header = "复制行到对侧" };
+                lineCopy.Click += (_, _) => Run(async () => { _rows.SelectRows([row]); CopyToSide(row); });
+                var selectionCopy = new MenuItem { Header = "复制选区到对侧" };
+                selectionCopy.Click += (_, _) => Run(async () => CopyToSide());
+                var section = new MenuItem { Header = "选中当前差异块" };
+                section.Click += (_, _) => _rows.SelectHunk(row);
+                var goTo = new MenuItem { Header = "转到行号…  ⌘G" };
+                goTo.Click += (_, _) => Run(GoToLineAsync);
+                var transforms = new MenuItem { Header = $"转换（{(left ? "左" : "右")}侧）" };
+                foreach (var (name, kind) in new[] { ("修剪行尾空白", 0), ("Tab → 空格", 1), ("前导空格 → Tab", 2), ("行尾 LF ⇄ CRLF", 3) })
+                {
+                    int chosen = kind;
+                    var item = new MenuItem { Header = name };
+                    item.Click += (_, _) => Run(async () => TransformSide(chosen));
+                    transforms.Items.Add(item);
+                }
+                menu.Items.Add(lineCopy); menu.Items.Add(selectionCopy); menu.Items.Add(section); menu.Items.Add(goTo);
+                menu.Items.Add(transforms); menu.Items.Add(new Separator());
             }
             if (CreateSplitMenu(row, left) is { } split)
                 foreach (var item in split.Items.OfType<MenuItem>()) menu.Items.Add(item);
@@ -149,6 +171,11 @@ public sealed class MainWindow : Window
         Closed += (_, _) => { _debounce.Stop(); _plugins.Dispose(); System.Threading.Interlocked.Decrement(ref _windowCount); };
         if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics); _toolbar.IsEnabled = false; }
         else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
+        this.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
+            { e.Handled = true; Run(GoToLineAsync); }
+        });
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
     /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
@@ -184,6 +211,82 @@ public sealed class MainWindow : Window
             menu.Items.Add(item);
         }
         return menu;
+    }
+    /// <summary>转换(0 修剪行尾空白 / 1 Tab→空格 / 2 前导空格→Tab / 3 行尾 LF⇄CRLF),作用于最近聚焦侧。</summary>
+    public void TransformSide(int kind)
+    {
+        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
+        bool left = _lastFocusLeft;
+        string text = (left ? _session.Left : _session.Right).Text;
+        try
+        {
+            string result = kind switch
+            {
+                0 => string.Join("\n", text.Split('\n').Select(l => l.TrimEnd(' ', '\t', '\r'))),
+                1 => text.Replace("\t", new string(' ', 4)),
+                2 => string.Join("\n", text.Split('\n').Select(l => { int spaces = l.TakeWhile(c => c == ' ').Count(); return new string('\t', spaces / 4) + l[Math.Min(spaces - spaces % 4, l.Length)..]; })),
+                _ => text.Contains("\r\n") ? text.Replace("\r\n", "\n") : text.Replace("\n", "\r\n"),
+            };
+            if (result == text) { _status.Text = "内容无变化。"; return; }
+            _session.Edit(left, result);
+            _debounce.Stop(); RefreshDirty();
+            string name = kind == 0 ? "修剪行尾空白" : kind == 1 ? "Tab → 空格" : kind == 2 ? "前导空格 → Tab" : "行尾风格切换";
+            if ((bool)_autoRealign.IsChecked!) Realign();
+            else _status.Text = $"已{name}（{(left ? "左" : "右")}侧）· 点 ⟳ 重新对齐";
+        }
+        catch (Exception ex) { _status.Text = "转换失败：" + ex.Message; }
+    }
+    private async Task GoToLineAsync()
+    {
+        if (_rows.RowCount == 0) { _status.Text = "请先打开文本比较。"; return; }
+        string? input = await Prompt("转到行号", $"行号（{( _lastFocusLeft ? "左" : "右")}侧，当前聚焦）", "1");
+        if (!int.TryParse(input, out int line) || line < 1) return;
+        bool left = _lastFocusLeft;
+        for (int i = 0; i < _rows.RowCount; i++)
+            if ((left ? _rows.Rows[i].Left : _rows.Rows[i].Right)?.LineNumber == line)
+            {
+                _rows.SelectRows([_rows.Rows[i]]); _rows.EnsureVisible(i); _rows.Focus();
+                return;
+            }
+        _status.Text = $"行号 {line} 不在{(left ? "左" : "右")}侧。";
+    }
+    /// <summary>把一行(或文本选区覆盖的行)复制到对侧:按对齐重建目标侧,幽灵位置落为插入,行尾沿用目标风格。</summary>
+    public void CopyToSide(AlignedRow? row = null, bool? fromLeft = null)
+    {
+        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
+        var range = _rows.TextSelectionRange;
+        int fromRow, toRow;
+        if (range is { } r) { fromRow = r.FromRow; toRow = r.ToRow; }
+        else
+        {
+            row ??= _rows.SelectedRows.FirstOrDefault();
+            if (row is null) { _status.Text = "请先选中要复制的行。"; return; }
+            int index = _rows.IndexOfRow(row);
+            if (index < 0) return;
+            fromRow = toRow = index;
+        }
+        bool sourceLeft = fromLeft ?? range?.Left ?? _lastFocusLeft;
+        bool usesCrLf = (sourceLeft ? _session.Right : _session.Left).Text.Contains("\r\n");
+        var target = new List<string>();
+        int copied = 0;
+        for (int i = 0; i < _rows.RowCount; i++)
+        {
+            var current = _rows.Rows[i];
+            bool inSelection = i >= fromRow && i <= toRow;
+            var sourceCell = sourceLeft ? current.Left : current.Right;
+            var targetCell = sourceLeft ? current.Right : current.Left;
+            if (inSelection && sourceCell is not null)
+            {
+                target.Add(usesCrLf ? sourceCell.Text : sourceCell.Text);
+                copied++;
+            }
+            else if (targetCell is not null) target.Add(targetCell.Text);
+            // 对侧为幽灵且不在选区:目标本就没有这一行,保持没有。
+        }
+        _session.Edit(!sourceLeft, string.Join("\n", target));
+        _debounce.Stop(); RefreshDirty();
+        if ((bool)_autoRealign.IsChecked!) Realign();
+        else _status.Text = $"已复制 {copied} 行到{(sourceLeft ? "右" : "左")}侧 · 点 ⟳ 重新对齐";
     }
     private void FormatSide()
     {

@@ -135,6 +135,50 @@ try
     folderWindow.Close();
 }
 finally { Directory.Delete(folderRoot, recursive: true); }
+// 编辑操作对等:转换 / 书签 / 布局切换 / 复制行到对侧(独立小窗口,全部同步 API)。
+string opsRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ops-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(opsRoot);
+try
+{
+    File.WriteAllText(Path.Combine(opsRoot, "l.txt"), "keep\n\tindented\ntrail \ntail\n");
+    File.WriteAllText(Path.Combine(opsRoot, "r.txt"), "keep\n    spaced\nplain\ntail\n");
+    var opsWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(opsRoot, "l.txt"), "--right", Path.Combine(opsRoot, "r.txt"), "--auto-compare"]);
+    opsWindow.Show();
+    var opsReady = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < opsReady) { Dispatcher.UIThread.RunJobs(); opsWindow.UpdateLayout(); Thread.Sleep(10);
+        if (opsWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var opsView = opsWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    var opsRealign = opsWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true);
+    void OpsRealign() { opsRealign.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent)); var until = DateTime.UtcNow.AddSeconds(5); while (DateTime.UtcNow < until) { Dispatcher.UIThread.RunJobs(); opsWindow.UpdateLayout(); Thread.Sleep(10); } }
+    // Tab → 空格(作用于默认聚焦的左侧)
+    opsWindow.TransformSide(1);
+    OpsRealign();
+    Check(opsView.Rows.Any(r => r.Left?.Text == "    indented"), "tabs-to-spaces transform lands on left side");
+    // 修剪行尾空白
+    opsWindow.TransformSide(0);
+    OpsRealign();
+    Check(!opsView.Rows.Any(r => r.Left?.Text == "trail "), "trailing whitespace trimmed");
+    // 布局切换:上下分栏时右侧行带在左侧行带下方
+    opsView.Vertical = true;
+    Check(Math.Abs(opsView.CellRect(0, false).Y - AlignedRowsView.RowHeight) < 0.01 && Math.Abs(opsView.CellRect(0, true).Y) < 0.01, "vertical layout stacks bands");
+    opsView.Vertical = false;
+    // 书签:设 ⌘⇧3 → ⌘3 跳转选中
+    opsView.SelectRows([opsView.Rows[^1]]);
+    opsView.ToggleBookmark(opsView.RowCount - 1, 3);
+    Check(opsView.GoToBookmark(3) && opsView.PrimarySelected == opsView.RowCount - 1, "bookmark set and goto selects row");
+    // 复制行到对侧:把左侧 "    indented" 行复制到右侧,重对齐后右侧出现同文本行
+    var sourceRow = opsView.Rows.First(r => r.Left?.Text == "    indented");
+    opsWindow.CopyToSide(sourceRow, fromLeft: true);
+    OpsRealign();
+    Check(opsView.Rows.Any(r => r.Right?.Text == "    indented"), "copy line to other side lands after realign");
+    // 保存两侧后关闭(dirty 会话避免关闭弹窗)
+    foreach (var save in opsWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+        save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var opsSave = DateTime.UtcNow.AddSeconds(5);
+    while (DateTime.UtcNow < opsSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+    opsWindow.Close();
+}
+finally { Directory.Delete(opsRoot, recursive: true); }
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);
