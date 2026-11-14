@@ -55,6 +55,15 @@ public partial class MainWindow
         Add("Tab → 空格", pane.Buffer is not null, () => ConvertTabsToSpaces(pane));
         Add("空格 → Tab（前导）", pane.Buffer is not null, () => ConvertSpacesToTabs(pane));
         Add("切换行尾风格", pane.Buffer is not null, () => ToggleLineEndings(pane));
+        // Manual alignment (Beyond Compare's Align With / Isolate)
+        if (TextView.Visibility == Visibility.Visible && pane.Buffer is not null)
+        {
+            menu.Items.Add(new Separator());
+            Add("与此行对齐…（点击另一侧目标行）", hasSelection, () => StartAlignWith(pane));
+            Add("隔离选中行（不参与匹配）", hasSelection, () => IsolateSelection(pane));
+            Add("清除所有手动对齐", _alignmentHints.Count > 0 || _isolatedLeft.Count > 0 || _isolatedRight.Count > 0,
+                () => ClearAlignmentHints());
+        }
         // File-type-specific actions from IFileTypeProvider plugins (JSON format, C# comment, XML pretty, etc.)
         if (pane.Buffer is not null)
         {

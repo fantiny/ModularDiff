@@ -662,7 +662,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Z && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         { e.Handled = true; WrapToggle.IsChecked = WrapToggle.IsChecked != true; }
         else if (e.Key == Key.N && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) { e.Handled = true; NewWindowClick(sender, e); }
-        else if (e.Key == Key.Escape) { SettingsToggle.IsChecked = false; CancelClick(sender, e); }
+        else if (e.Key == Key.Escape) { CancelAlignWith(); SettingsToggle.IsChecked = false; CancelClick(sender, e); }
         else if (e.SystemKey == Key.Left && _folderResult is not null) { SetView(false); e.Handled = true; }
         else if (e.SystemKey is Key.Up or Key.Down && TextView.Visibility == Visibility.Visible) { e.Handled = true; await NavigateFile(e.SystemKey == Key.Up ? -1 : 1); }
     }

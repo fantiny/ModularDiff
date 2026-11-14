@@ -88,8 +88,15 @@ public sealed record AlignedRow(int SourceIndex, TextCell? Left, TextCell? Right
 }
 public sealed record DiffHunk(int Id, int StartRow, int EndRow);
 public sealed record TextPresentation(IReadOnlyList<AlignedRow> Rows, IReadOnlyList<DiffHunk> Hunks, int TotalRows);
+/// <summary>Manual alignment hint: force these two lines to be paired in the presentation.</summary>
+public sealed record AlignmentHint(int LeftLine, int RightLine);
+
 public interface ITextPresentation : IPlugin
 {
     // contextLines: -1 = all, 0 = changes only, >0 = context around changed blocks.
-    TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1, CancellationToken cancellationToken = default);
+    // hints: forced alignment pairs (user-driven "Align With"); isolatedLines are excluded from matching.
+    TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<AlignmentHint>? hints = null,
+        IReadOnlyList<int>? isolatedLines = null);
 }

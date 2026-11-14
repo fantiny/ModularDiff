@@ -7,10 +7,15 @@ public sealed class SideBySidePresentation : ITextPresentation
     public string Id => "side-by-side";
     public string DisplayName => "Side by side · aligned blocks";
 
-    public TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1, CancellationToken cancellationToken = default)
+    public TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1,
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<AlignmentHint>? hints = null,
+        IReadOnlyList<int>? isolatedLines = null)
     {
         if (contextLines < -1) throw new ArgumentOutOfRangeException(nameof(contextLines));
         var rows = new List<AlignedRow>(); var hunks = new List<DiffHunk>();
+        var hintMap = hints?.ToDictionary(h => h.LeftLine, h => h.RightLine) ?? [];
+        var isolated = isolatedLines?.ToHashSet() ?? [];
         TextCell? Cell(DiffLine? line, bool left, IReadOnlyList<HighlightSpan>? spans = null, string? text = null)
         {
             int? number = left ? line?.LeftLine : line?.RightLine;
@@ -32,9 +37,32 @@ public sealed class SideBySidePresentation : ITextPresentation
                 (line.Kind == EditKind.Delete ? deletes : inserts).Add(line);
             }
             int start = rows.Count, id = hunks.Count;
-            // Similarity alignment prevents a newly inserted method from shifting every replacement.
-            // This is display alignment only; the algorithm's edit script is never rewritten.
-            foreach (var (a, b) in Align(deletes, inserts, cancellationToken))
+            // Manual alignment hints: check if any delete line has a hint pointing to an insert line,
+            // and pre-pair them (removing both from the pool). Isolated lines are also pre-removed.
+            var paired = new HashSet<DiffLine>();
+            var forced = new List<(DiffLine? Left, DiffLine? Right)>();
+            foreach (var delete in deletes)
+            {
+                if (delete.LeftLine is int dl && isolated.Contains(dl))
+                { forced.Add((delete, null)); paired.Add(delete); continue; }
+                if (delete.LeftLine is int l && hintMap.TryGetValue(l, out int targetRight))
+                {
+                    var match = inserts.FirstOrDefault(i => i.RightLine == targetRight && !paired.Contains(i));
+                    if (match is not null)
+                    { forced.Add((delete, match)); paired.Add(delete); paired.Add(match); continue; }
+                }
+            }
+            foreach (var insert in inserts)
+            {
+                if (insert.RightLine is int rl && isolated.Contains(rl))
+                { forced.Add((null, insert)); paired.Add(insert); }
+            }
+            var remainingDeletes = deletes.Where(d => !paired.Contains(d)).ToList();
+            var remainingInserts = inserts.Where(i => !paired.Contains(i)).ToList();
+            // Similarity alignment for the rest.
+            foreach (var (a, b) in Align(remainingDeletes, remainingInserts, cancellationToken))
+                forced.Add((a, b));
+            foreach (var (a, b) in forced)
             {
                 string? leftText = a?.LeftText, rightText = b?.RightText;
                 if (leftText is not null && rightText is not null && leftText.Contains(CellSeparator) && rightText.Contains(CellSeparator))
