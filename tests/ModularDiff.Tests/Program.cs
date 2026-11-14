@@ -38,6 +38,22 @@ try
     });
 
     await MenuPlanTests.Run(Test);
+
+    await Test("JSON structural comparison: key-order insensitive, value differences", async () =>
+    {
+        string dir = Path.Combine(temp, "json-cmp"); Directory.CreateDirectory(dir);
+        string a = Path.Combine(dir, "a.json"), b = Path.Combine(dir, "b.json"), c = Path.Combine(dir, "c.json");
+        await File.WriteAllTextAsync(a, "{\"b\":2,\"a\":1}");
+        await File.WriteAllTextAsync(b, "{\n  \"a\": 1,\n  \"b\": 3\n}");
+        await File.WriteAllTextAsync(c, "{\"a\":1,\"b\":2}");
+        var result = await engine.CompareAsync(new(a, b, "myers"));
+        Check(result.ModuleId == "json-structural", "auto-routing to json-structural");
+        Check(result.Files.Single().Status == FileStatus.Modified, "value difference detected");
+        result = await engine.CompareAsync(new(a, c, "myers"));
+        Check(result.Files.Single().Status == FileStatus.Equal, "key-order difference is equal");
+        Check(result.Files.Single().Note?.Contains("identical") == true, "structural identity note");
+    });
+
     MergeTests.Catalog = catalog;
     await MergeTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);

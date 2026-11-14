@@ -55,6 +55,31 @@ public partial class MainWindow
         Add("Tab → 空格", pane.Buffer is not null, () => ConvertTabsToSpaces(pane));
         Add("空格 → Tab（前导）", pane.Buffer is not null, () => ConvertSpacesToTabs(pane));
         Add("切换行尾风格", pane.Buffer is not null, () => ToggleLineEndings(pane));
+        // File-type-specific actions from IFileTypeProvider plugins (JSON format, C# comment, XML pretty, etc.)
+        if (pane.Buffer is not null)
+        {
+            string extension = System.IO.Path.GetExtension(pane.Buffer.Path);
+            var providers = _plugins.GetAll<IFileTypeProvider>()
+                .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (providers.Length > 0)
+            {
+                menu.Items.Add(new Separator());
+                foreach (var provider in providers)
+                foreach (var (label, shortcut, transform) in provider.EditActions)
+                {
+                    var action = transform;
+                    var capturedPane = pane;
+                    Add(label + (shortcut is not null ? $" ({shortcut})" : ""), true, () =>
+                    {
+                        string newText = action(new EditContext(capturedPane.Buffer!, capturedPane.SelectedRow, 0));
+                        if (newText.Length > 0 && newText != capturedPane.Buffer!.Text)
+                            capturedPane.Buffer.Apply(new Contracts.TextEdit(0, capturedPane.Buffer.Text.Length, newText, label));
+                        AfterProgrammaticEdit(capturedPane, label);
+                    });
+                }
+            }
+        }
         int line = pane.RowSourceLine(rowIndex);
         string current = pane.Line(line)?.Text ?? "";
         if (line >= 0 && current.Length > 0)
