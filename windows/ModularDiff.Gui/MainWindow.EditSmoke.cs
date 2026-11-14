@@ -102,6 +102,8 @@ public partial class MainWindow
             Require(_rightBuffer.Text == cssRight, "column edits undo back to the original");
 
             // Copy-all: two independent hunks copied in one pass land on the other side.
+            ClearEditors();   // detach buffers so CanLeaveEdits doesn't prompt
+            LeftPath.Text = Path.Combine(root, "all-left.txt"); RightPath.Text = Path.Combine(root, "all-right.txt");
             await File.WriteAllTextAsync(LeftPath.Text, "same\nleft1\nsame2\nleft2\n");
             await File.WriteAllTextAsync(RightPath.Text, "same\nright1\nsame2\nright2\n");
             await CompareAsync();
@@ -112,6 +114,7 @@ public partial class MainWindow
             Require(!_rightBuffer.Text.Contains("right"), "copy-all must overwrite right hunks");
 
             // Wrapping: a long row spans several visual lines, both sides share the height.
+            ClearEditors();   // copy-all leaves buffers dirty; detach before re-comparing
             string longText = new string('x', 500) + "\nsecond\n";
             LeftPath.Text = Path.Combine(root, "wrap-left.txt"); RightPath.Text = Path.Combine(root, "wrap-right.txt");
             await File.WriteAllTextAsync(LeftPath.Text, longText); await File.WriteAllTextAsync(RightPath.Text, new string('y', 500) + "\nsecond\n");
