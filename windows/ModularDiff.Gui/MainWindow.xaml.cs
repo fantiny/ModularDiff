@@ -578,6 +578,7 @@ public partial class MainWindow : Window
     private async void WindowKeyDown(object sender, KeyEventArgs e)
     {
         if (await EditingShortcut(e)) return;
+        if (await EditorOpsShortcut(e)) return;
         if (e.Key == Key.F5)
         {
             e.Handled = true;

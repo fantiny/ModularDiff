@@ -229,6 +229,53 @@ public sealed partial class DiffPane
         InvalidateVisual();
     }
 
+    /// <summary>Indents or outdents a range of lines: bottom-up so offsets stay valid.
+    /// Indent inserts a tab at each line start; outdent removes one tab or up to 4 spaces.</summary>
+    private void IndentLines(int first, int last, bool indent)
+    {
+        if (Buffer is null) return;
+        for (int line = last; line >= first; line--)
+        {
+            RefreshBufferCache();
+            if (line >= _documentLines.Count) continue;
+            var doc = _documentLines[line];
+            if (indent)
+                EditRequested?.Invoke(this, new(doc.Offset, 0, "\t", "Indent lines"));
+            else
+            {
+                int count = doc.Text.StartsWith('\t') ? 1 : Math.Min(4, doc.Text.TakeWhile(c => c == ' ').Count());
+                if (count > 0) EditRequested?.Invoke(this, new(doc.Offset, count, "", "Outdent lines"));
+            }
+        }
+        int caretLine = Math.Min(first, _documentLines.Count - 1);
+        SetCaret(_documentLines[Math.Max(0, caretLine)].Offset);
+    }
+
+    /// <summary>Removes one tab (or up to 4 leading spaces) at the column position on every line of a column selection.</summary>
+    private void OutdentColumnSelection(List<(int Line, int Start, int End)> selection)
+    {
+        _columnSelection = null;
+        foreach (var (line, start, _) in selection.OrderByDescending(s => s.Line))
+        {
+            RefreshBufferCache();
+            if (line >= _documentLines.Count) continue;
+            var doc = _documentLines[line];
+            // At the column boundary, remove one tab or up to 4 spaces to the left of the cursor.
+            int from = Math.Max(0, start - 1);
+            if (from < doc.Text.Length && doc.Text[from] == '\t')
+                EditRequested?.Invoke(this, new(doc.Offset + from, 1, "", "Outdent column"));
+            else
+            {
+                int count = 0;
+                for (int i = Math.Min(start, doc.Text.Length) - 1; i >= 0 && doc.Text[i] == ' ' && count < 4; i--) count++;
+                if (count > 0) EditRequested?.Invoke(this, new(doc.Offset + start - count, count, "", "Outdent column"));
+            }
+        }
+        if (selection.Count > 0 && selection[0].Line < _documentLines.Count)
+            SetCaret(_documentLines[selection[0].Line].Offset + selection[0].Start);
+        InvalidateVisual();
+    }
+
     public void ReplaceSelection(string text, string label = "Paste")
     {
         if (Buffer is null) return;
@@ -286,7 +333,17 @@ public sealed partial class DiffPane
             else if (e.Key == Key.Enter) ReplaceSelection(Buffer.NewLine, "New line");
             else if (e.Key == Key.Tab)
             {
-                if (!shift) ReplaceSelection("\t", "Indent");
+                if (_columnSelection is { } column)
+                {
+                    if (!shift) ReplaceColumnSelection(column, "\t", "Indent");
+                    else OutdentColumnSelection(column);
+                }
+                else if (_caret != _selectionAnchor && LineAt(_caret) != LineAt(_selectionAnchor))
+                {
+                    // Multi-line selection: indent or outdent every covered line at once.
+                    IndentLines(Math.Min(LineAt(_caret), LineAt(_selectionAnchor)), Math.Max(LineAt(_caret), LineAt(_selectionAnchor)), !shift);
+                }
+                else if (!shift) ReplaceSelection("\t", "Indent");
                 else
                 {
                     int index = LineAt(_caret);

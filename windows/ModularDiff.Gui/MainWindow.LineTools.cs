@@ -44,12 +44,22 @@ public partial class MainWindow
         Add("复制差异块到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
             TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
             () => _ = CopyBlock(ReferenceEquals(pane, LeftCode)));
-        // Line splitters for the clicked row (tables etc.), batched over the selection.
+        Add("复制选中行到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+            hasSelection && TextView.Visibility == Visibility.Visible,
+            () => CopySelectionToSide(ReferenceEquals(pane, LeftCode)));
+        Add("复制当前行到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+            TextView.Visibility == Visibility.Visible && pane.Buffer is not null,
+            () => CopyLineToSide(ReferenceEquals(pane, LeftCode)));
+        menu.Items.Add(new Separator());
+        Add("修剪行尾空白", pane.Buffer is not null, () => TrimTrailingWhitespace(pane));
+        Add("Tab → 空格", pane.Buffer is not null, () => ConvertTabsToSpaces(pane));
+        Add("空格 → Tab（前导）", pane.Buffer is not null, () => ConvertSpacesToTabs(pane));
+        Add("切换行尾风格", pane.Buffer is not null, () => ToggleLineEndings(pane));
         int line = pane.RowSourceLine(rowIndex);
         string current = pane.Line(line)?.Text ?? "";
         if (line >= 0 && current.Length > 0)
         {
-            string path = pane.Buffer.Path;
+            string path = pane.Buffer!.Path;
             var splitters = _plugins.GetAll<ILineSplitter>().Where(s => s.CanSplit(path, current)).ToArray();
             if (splitters.Length > 0)
             {
