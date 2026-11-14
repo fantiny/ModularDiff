@@ -46,17 +46,7 @@ public sealed class MainWindow : Window
         int cascade = System.Threading.Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移,避免完全叠加难发现
         Position = new PixelPoint(70 + (cascade % 12) * 36, 46 + (cascade % 12) * 30);
         string? Arg(string key) { int i = Array.IndexOf(args, key); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
-        _plugins = PluginCatalog.Load(Arg("--plugins") ?? DefaultPluginRoot());
-        static string DefaultPluginRoot()
-        {
-            var candidates = new[] { "../plugins", "../Resources/plugins", "../PlugIns" }
-                .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)))
-                .ToArray();
-            return candidates.FirstOrDefault(d => Directory.Exists(d)
-                    && Directory.EnumerateFiles(d, "plugin.json", SearchOption.AllDirectories).Any())
-                ?? candidates.FirstOrDefault(Directory.Exists)
-                ?? candidates[0];
-        }
+        _plugins = App.Plugins ?? PluginCatalog.Load(Arg("--plugins") ?? ResolvePluginRoot());   // shared when App is active; self-load in tests
         _session = new(_plugins);
         _leftPath.Text = Arg("--left"); _rightPath.Text = Arg("--right");
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = "myers";
@@ -161,6 +151,18 @@ public sealed class MainWindow : Window
         else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
+    /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
+    private static string ResolvePluginRoot()
+    {
+        var candidates = new[] { "../plugins", "../Resources/plugins", "../PlugIns" }
+            .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)))
+            .ToArray();
+        return candidates.FirstOrDefault(d => Directory.Exists(d)
+                && Directory.EnumerateFiles(d, "plugin.json", SearchOption.AllDirectories).Any())
+            ?? candidates.FirstOrDefault(Directory.Exists)
+            ?? candidates[0];
+    }
+
     private static bool SamePath(string? box, string loaded) =>
         !string.IsNullOrWhiteSpace(box) && string.Equals(Path.GetFullPath(box.Trim()), loaded, StringComparison.Ordinal);
     private static TextBox Editor() => new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 14, IsReadOnly = true, IsUndoEnabled = false };
