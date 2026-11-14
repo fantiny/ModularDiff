@@ -25,10 +25,9 @@ public partial class MainWindow : Window
     private IReadOnlyList<FolderNode> _folderRows = [];
     private FolderNode? _currentNode;
     private FileComparison? _textFile;
-    private TextPresentation? _presentation;
     private CancellationTokenSource? _comparisonCancellation, _detailCancellation;
     private bool _ready, _busy, _syncText, _syncFolderScroll, _syncFolderSelection;
-    private int _presentationVersion, _currentHunk = -1;
+    private int _currentHunk = -1;
     private double _codeFontSize = 14;
     private static int _windowCount;
     private sealed record ModuleChoice(string? Id, string DisplayName);
@@ -39,8 +38,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         int cascade = Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移，避免完全叠加难发现
         Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
-        _plugins = PluginCatalog.Load(Arg("--plugins") ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "plugins")));
+        _plugins = App.Plugins;   // shared catalog — loaded once at App startup, disposed on exit
         _engine = new(_plugins);
+        _session = new(_plugins);
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
         AlgorithmBox.SelectedItem = _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault(p => p.Id == "myers");
         ModuleBox.ItemsSource = new[] { new ModuleChoice(null, "自动选择") }.Concat(_plugins.GetAll<IComparisonModule>().Select(p => new ModuleChoice(p.Id, p.DisplayName))).ToArray();
@@ -112,8 +112,7 @@ public partial class MainWindow : Window
         _comparisonCancellation?.Dispose(); _comparisonCancellation = new();
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
-        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null;
-        _presentationVersion++; _presentation = null; _folderRows = [];
+        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows = [];
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
@@ -251,7 +250,7 @@ public partial class MainWindow : Window
         var cancellation = new CancellationTokenSource(); _detailCancellation = cancellation;
         var token = cancellation.Token;
         var root = _folderResult; var request = _rootRequest;
-        _currentNode = node; _textFile = null; _fileResult = null; _presentation = null; _presentationVersion++;
+        _currentNode = node; _textFile = null; _fileResult = null; _presentation = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         string left = Path.Combine(root.LeftPath, node.RelativePath), right = Path.Combine(root.RightPath, node.RelativePath);
@@ -335,7 +334,7 @@ public partial class MainWindow : Window
         }
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         if (PresentationBox.SelectedItem is not ITextPresentation presenter) throw new InvalidOperationException("没有文本展示插件。");
-        int version = ++_presentationVersion;
+        long version = _presentationVersion;   // session manages version increments internally
         int context = TextFilter.SelectedIndex switch { 1 => 0, 2 => 3, _ => -1 };
         var presentation = await Task.Run(() => presenter.Build(file.Lines, context, token), token);
         token.ThrowIfCancellationRequested();

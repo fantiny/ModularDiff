@@ -2,14 +2,22 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
 using ModularDiff.Contracts;
+using ModularDiff.Core;
 using ModularDiff.Gui.Controls;
 
 namespace ModularDiff.Gui;
 
 public partial class MainWindow
 {
-    private IEditBuffer? _leftBuffer, _rightBuffer;
-    private BufferComparison? _bufferDiff;
+    /// <summary>Single source of truth for the active comparison's edit state.
+    /// The forwarding properties below keep existing code working while all
+    /// mutations route through the session (single-writer principle).</summary>
+    private ComparisonSession _session = null!;
+    private IEditBuffer? _leftBuffer { get => _session?.Left; set { if (value is not null && _session is not null) _session.Attach(value, _session.Right ?? value); else _session?.Clear(); } }
+    private IEditBuffer? _rightBuffer { get => _session?.Right; set { if (value is not null && _session is not null) _session.Attach(_session.Left ?? value, value); else _session?.Clear(); } }
+    private BufferComparison? _bufferDiff { get => _session?.Comparison; set => _session?.SetComparison(value); }
+    private TextPresentation? _presentation { get => _session?.Presentation; set => _session?.SetPresentation(value); }
+    private long _presentationVersion { get => _session?.Version ?? 0; set { /* version managed by session mutations */ } }
     private DiffPane? _activePane;
     private CancellationTokenSource? _editCancellation;
     private Task _editTask = Task.CompletedTask;
@@ -70,7 +78,7 @@ public partial class MainWindow
     private void ShowDraft()
     {
         if (_leftBuffer is null || _rightBuffer is null) return;
-        _bufferDiff = null; _presentationVersion++; _presentation = null; _currentHunk = -1;
+        _bufferDiff = null; _presentation = null; _currentHunk = -1;
         var left = DocumentLines.Parse(_leftBuffer.Text); var right = DocumentLines.Parse(_rightBuffer.Text);
         var rows = new List<AlignedRow>();
         for (int i = 0; i < Math.Max(left.Count, right.Count); i++)

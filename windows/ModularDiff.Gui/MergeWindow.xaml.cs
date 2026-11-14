@@ -28,7 +28,7 @@ public partial class MergeWindow : Window
     public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null)
     {
         _baseArg = basePath; _leftArg = leftPath; _rightArg = rightPath;
-        _plugins = PluginCatalog.Load(Path.Combine(AppContext.BaseDirectory, "..", "plugins"));
+        _plugins = App.Plugins;   // shared catalog
         Closed += (_, _) => _plugins.Dispose();
         InitializeComponent();
         Loaded += async (_, _) =>

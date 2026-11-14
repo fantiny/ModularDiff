@@ -187,7 +187,6 @@ public partial class MainWindow
         _currentNode = session.SourceNode;
         _bufferDiff = session.BufferDiff;
         _currentHunk = session.CurrentHunk;
-        _presentationVersion++;
         _editCancellation?.Cancel();
         _leftBuffer = session.LeftBuffer;
         _rightBuffer = session.RightBuffer;
