@@ -368,12 +368,15 @@ public partial class MainWindow : Window
             }, token);
             byte[] left = await Read(result.LeftPath), right = await Read(result.RightPath);
             token.ThrowIfCancellationRequested();
-            Hex.SetContent(left, right, file.BinaryDiffs!);
+            Hex.SetContent(left, right, file.BinaryDiffs!, editablePath: result.LeftPath);
             HexHost.Visibility = Visibility.Visible;
             if (file.BinaryDiffs!.Count > 0)
                 Hex.SetVerticalOffset(Math.Max(0, file.BinaryDiffs[0].Offset / 16 * Hex.RowHeight - 120));
             HunkLabel.Text = $"{file.BinaryDiffs!.Count} 段字节差异";
-            StatusLabel.Text = $"十六进制比较 · 每侧最多加载 {limit >> 20} MB";
+            StatusLabel.Text = $"十六进制比较 · 点击左侧定位光标，输入十六进制值编辑，Ctrl+S 保存";
+            // Patch export and offset navigation via the hex view.
+            Hex.MouseRightButtonUp -= HexContextMenu;
+            Hex.MouseRightButtonUp += HexContextMenu;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -381,6 +384,38 @@ public partial class MainWindow : Window
             HexHost.Visibility = Visibility.Collapsed;
             StatusLabel.Text = "十六进制视图加载失败：" + ex.Message;
         }
+    }
+
+    private void HexContextMenu(object sender, MouseButtonEventArgs e)
+    {
+        var menu = new ContextMenu();
+        var export = new MenuItem { Header = "导出二进制差异报告…" };
+        export.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "Text report|*.txt", FileName = "binary-patch.txt" };
+            if (dialog.ShowDialog(this) == true)
+                try { System.IO.File.WriteAllText(dialog.FileName, Hex.ExportPatch()); StatusLabel.Text = "差异报告已保存：" + dialog.FileName; }
+                catch (Exception ex) { StatusLabel.Text = "导出失败：" + ex.Message; }
+        };
+        menu.Items.Add(export);
+        var goTo = new MenuItem { Header = "跳转到偏移… (Ctrl+G)" };
+        goTo.Click += (_, _) => HexGoToOffset();
+        menu.Items.Add(goTo);
+        menu.PlacementTarget = Hex;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+        menu.IsOpen = true;
+    }
+
+    private void HexGoToOffset()
+    {
+        if (!Hex.HasContent) return;
+        string? input = PromptLineNumber((int)Math.Min(Hex.Rows * 16, int.MaxValue));
+        if (input is null) return;
+        if (input.StartsWith("0x", StringComparison.OrdinalIgnoreCase) && long.TryParse(input[2..], System.Globalization.NumberStyles.HexNumber, null, out long hexOffset))
+            Hex.GoToOffset(hexOffset);
+        else if (long.TryParse(input, out long decOffset))
+            Hex.GoToOffset(decOffset);
+        else StatusLabel.Text = "无效偏移量。支持十进制或 0x 十六进制。";
     }
 
     /// <summary>Pictures render side by side; when dimensions match, differing pixels are
@@ -593,6 +628,23 @@ public partial class MainWindow : Window
     }
     private async void WindowKeyDown(object sender, KeyEventArgs e)
     {
+        // Hex view shortcuts take priority when visible
+        if (HexHost.Visibility == Visibility.Visible)
+        {
+            if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                e.Handled = true;
+                if (Hex.IsDirty && !Hex.Save()) StatusLabel.Text = "十六进制保存失败。";
+                else if (Hex.IsDirty) StatusLabel.Text = "十六进制修改已保存。";
+                return;
+            }
+            if (e.Key == Key.G && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                e.Handled = true;
+                HexGoToOffset();
+                return;
+            }
+        }
         if (await EditingShortcut(e)) return;
         if (await EditorOpsShortcut(e)) return;
         if (e.Key == Key.F5)
