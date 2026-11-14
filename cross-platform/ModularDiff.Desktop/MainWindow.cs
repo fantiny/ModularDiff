@@ -658,6 +658,20 @@ public sealed class MainWindow : Window
             using var b = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(r.Width, r.Height, SkiaSharp.SKColorType.Bgra8888, SkiaSharp.SKAlphaType.Premul));
             if (!l.CopyTo(a) || !r.CopyTo(b)) return null;
             var overlay = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(l.Width, l.Height), new Avalonia.Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888);
+            // 差异掩码 + 3×3 膨胀:单像素差异缩放后不足 2 设备像素,膨胀一圈才看得清(仅显示层)。
+            var differs = new bool[l.Width, l.Height];
+            unsafe
+            {
+                for (int y = 0; y < l.Height; y++)
+                {
+                    byte* rowA = (byte*)a.GetAddress(0, y);
+                    byte* rowB = (byte*)b.GetAddress(0, y);
+                    for (int x = 0; x < l.Width; x++)
+                        differs[x, y] = rowA[x * 4] != rowB[x * 4] || rowA[x * 4 + 1] != rowB[x * 4 + 1] || rowA[x * 4 + 2] != rowB[x * 4 + 2] || rowA[x * 4 + 3] != rowB[x * 4 + 3];
+                }
+            }
+            const byte alpha = 150;
+            byte blue = (byte)(40 * alpha / 255), green = (byte)(30 * alpha / 255), red = (byte)(255 * alpha / 255);   // 预乘 alpha(Avalonia 位图要求)
             using (var locked = overlay.Lock())
             {
                 unsafe
@@ -665,14 +679,18 @@ public sealed class MainWindow : Window
                     byte* target = (byte*)locked.Address;
                     for (int y = 0; y < l.Height; y++)
                     {
-                        byte* rowA = (byte*)a.GetAddress(0, y);
-                        byte* rowB = (byte*)b.GetAddress(0, y);
                         byte* rowO = target + y * locked.RowBytes;
                         for (int x = 0; x < l.Width; x++)
                         {
-                            rowO[x * 4] = 60; rowO[x * 4 + 1] = 50; rowO[x * 4 + 2] = 255; rowO[x * 4 + 3] = 0;
-                            if (rowA[x * 4] != rowB[x * 4] || rowA[x * 4 + 1] != rowB[x * 4 + 1] || rowA[x * 4 + 2] != rowB[x * 4 + 2] || rowA[x * 4 + 3] != rowB[x * 4 + 3])
-                                rowO[x * 4 + 3] = 110;
+                            rowO[x * 4] = 0; rowO[x * 4 + 1] = 0; rowO[x * 4 + 2] = 0; rowO[x * 4 + 3] = 0;
+                            bool near = false;
+                            for (int dy = -1; dy <= 1 && !near; dy++)
+                                for (int dx = -1; dx <= 1; dx++)
+                                {
+                                    int nx = x + dx, ny = y + dy;
+                                    if (nx >= 0 && nx < l.Width && ny >= 0 && ny < l.Height && differs[nx, ny]) { near = true; break; }
+                                }
+                            if (near) { rowO[x * 4] = blue; rowO[x * 4 + 1] = green; rowO[x * 4 + 2] = red; rowO[x * 4 + 3] = alpha; }
                         }
                     }
                 }
