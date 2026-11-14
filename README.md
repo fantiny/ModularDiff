@@ -6,14 +6,16 @@
 ## 功能特性
 
 - **文件与目录比较**：左右逐行对齐显示差异；目录视图呈现名称、大小、修改时间与状态，支持全部 / 差异 / 相同 / 仅左 / 仅右筛选和路径搜索。
+- **多会话标签页**：目录比较固定为第一个标签，每对文件自动获得独立标签（各自的缓冲、展示、滚动、差异状态），"＋"一键新建、×关闭（脏缓冲提示）、切换完整恢复状态；目录与文本视图随时自由切换。
 - **可插拔算法**：内置 Myers（最短编辑脚本）与 Patience（可读对齐）两种算法，可加载自行开发的算法插件。
-- **精细文本展示**：行内**词级多段差异高亮**、轻量语法高亮、差异块导航（F7 / Shift+F7，块复制后自动跳下一处）、概览条点击定位、仅差异 / 带上下文视图、双侧同步滚动、查找（Ctrl+F）与替换（Ctrl+H，单次编辑可整体撤销）、Alt+拖动列选择（矩形复制 / 删除 / 多行同时输入）、编辑区右键菜单、多窗口错开排列（Ctrl+N）。
+- **精细文本展示**：行内**词级多段差异高亮**、轻量语法高亮、差异块导航（F7 / Shift+F7，块复制后自动跳下一处）、概览条点击定位、仅差异 / 带上下文视图、双侧同步滚动、查找（Ctrl+F）与替换（Ctrl+H，单次编辑可整体撤销）、Alt+拖动列选择（矩形复制 / 删除 / 多行同时输入）、编辑区右键菜单、多窗口错开排列（Ctrl+N）、左右/上下布局一键切换。
+- **编辑器操作**（对标 Beyond Compare）：任意选中行复制到对侧（Ctrl+Alt+方向）、单行复制（Ctrl+L）、全部差异块一键复制（⇉/⇇）、多行缩进（Tab/Shift+Tab）、删除行（Ctrl+Shift+K）、跳转到行（Ctrl+G）、书签（Ctrl+Shift+0-9 设置 / Ctrl+0-9 跳转）、选中差异块（Ctrl+E）、文件转换右键（修剪空白 / Tab↔空格 / 行尾切换）。
 - **编码与二进制**：支持 UTF-8（有无 BOM 均可）、带 BOM 的 UTF-16 / UTF-32；二进制与超大文件自动切换为流式字节比较。
 - **编辑与合并**：左右两侧均可编辑，支持块级双向复制、每侧独立的撤销 / 重做、保存前 SHA-256 冲突检测，外部修改不会被告警前覆盖。
 - **重对齐与行工具**：编辑后可按当前算法与忽略选项立即重算对齐（⟳ 手动 / ⚡ 自动，不重读磁盘、保留未保存修改）；右键行按领域规则换行（如 CSS 多属性行拆成每属性一行，支持选区批量），⌗ 按语言格式化整侧文档（如 css-format）；行尾风格全程沿用原文件。
-- **目录文件操作**：目录行右键可直接复制文件到对侧（覆盖确认）、打开比较、在资源管理器中定位。
+- **目录文件操作**：目录行多选（Ctrl+点击）后右键批量复制到对侧；单文件右键可直接复制（覆盖确认）、打开比较、在资源管理器中定位。
 - **目录同步**：带预览的批量复制、覆盖前自动备份、持久化操作记录与历史恢复，支持双向补齐和逐项冲突决策。
-- **插件隔离加载**：每个插件包使用独立的 AssemblyLoadContext 与依赖解析，宿主只依赖契约程序集。
+- **插件隔离加载**：每个插件包使用独立的 AssemblyLoadContext 与依赖解析，宿主只依赖契约程序集；插件目录在应用启动时加载一次，所有窗口共享。
 - **命名会话与最近比较**：左右路径 + 算法 + 忽略规则一键保存为命名会话，随时重开；最近比较自动记录（去重、上限 10 条），WPF 与跨平台版共用同一存储。
 - **不重要差异规则**：正则把匹配文本（如 `$Id$`、版本号、时间戳）标记为不重要，不产生差异块——配置与代码评审利器（CLI `--unimportant`，GUI 规则框每行一条）。
 - **十六进制比较**：二进制文件并排 hex dump，差异字节红色高亮、共享偏移列、自动定位首个差异，虚拟化渲染支持大文件。
@@ -67,14 +69,14 @@ CLI 退出码：`0` 相同、`1` 有差异、`2` 错误或比较不完整、`130
 ```text
 shared/                           两个 GUI 共用的实现
   ModularDiff.Contracts/          插件契约与 UI 无关模型
-  ModularDiff.Core/               插件加载、依赖校验、比较调度
+  ModularDiff.Core/               插件加载、依赖校验、比较调度、ComparisonSession（编辑状态单一真源）、三路合并
   ModularDiff.Cli/                跨平台命令行宿主
   plugins/                        算法、比较、编辑、合并、同步、备份、格式化、行拆分与展示插件
 windows/
-  ModularDiff.Gui/                WPF 界面、Windows 对话框、右键菜单注册
+  ModularDiff.Gui/                WPF 界面（多会话标签、编辑器操作、文件转换、布局切换）
   ModularDiff.ShellExt/           Explorer 右键菜单 COM 扩展（NativeAOT 原生 DLL）
 cross-platform/
-  ModularDiff.Desktop/            Avalonia 界面与编辑会话
+  ModularDiff.Desktop/            Avalonia 界面（共享 ComparisonSession）
   ModularDiff.Desktop.Tests/      Headless 界面与集成测试
   build.ps1 / build.sh            跨平台构建、发布与 macOS 打包
 examples/                         可独立加载的插件示例
@@ -84,20 +86,28 @@ ModularDiff.sln                   全部项目（含 WPF，Windows 上构建）
 ModularDiff.CrossPlatform.sln     共享项目 + Avalonia + 测试（任意平台）
 ```
 
-三个宿主（CLI、WPF、Avalonia）只引用 Core / Contracts，不引用任何内置插件程序集；GUI 下拉框中的算法、模块、格式列表全部来自插件目录。跨平台构建不需要 Windows Desktop SDK。
+三个宿主（CLI、WPF、Avalonia）只引用 Core / Contracts，不引用任何内置插件程序集；GUI 下拉框中的算法、模块、格式列表全部来自插件目录。跨平台构建不需要 Windows Desktop SDK。插件目录在应用启动时加载一次（`App.Plugins`），所有窗口共享。
+
+**架构分层**（关注点分离）：
+
+- **Core 层**：`ComparisonSession` 是编辑状态的唯一真源——拥有缓冲、比较结果、展示、选项、算法、版本计数；`PluginCatalog` 管理插件加载与依赖隔离；`ThreeWayMerger` 提供 diff3 合合。比较函数（`CompareAsync`）是纯函数：路径输入 → 结果输出 → UI 更新，不感知 Session / Tab。
+- **应用层**：`TextSession`（WPF）管理多标签生命周期——创建/销毁/切换/状态保存恢复；事件处理器编排比较与 Session（"比较"按钮 → 找 Session → 激活 → 调 CompareAsync → 结果存入 Session）。
+- **UI 层**：WPF / Avalonia 各自实现视图绑定与交互，不含业务逻辑。
 
 ```mermaid
 flowchart LR
     CLI[CLI 宿主] --> Core[Core / PluginCatalog]
     GUI[WPF 宿主] --> Core
     Desktop[Avalonia 宿主] --> Core
-    Core --> Directory[目录比较插件]
-    Core --> File[文件比较插件]
+    Core --> Session[ComparisonSession<br/>编辑状态单一真源]
+    Session --> Directory[目录比较插件]
+    Session --> File[文件比较插件]
     Directory -->|IPluginResolver / files| File
     File -->|IDiffAlgorithm| Myers[Myers 插件]
     File -->|IDiffAlgorithm| Patience[Patience 插件]
     Patience -->|无唯一锚点时回退| Myers
-    Core --> Format[IResultFormatter / Text 和 JSON]
+    Core --> Format[IResultFormatter / Text/JSON/HTML]
+    Core --> Merge[ThreeWayMerger / diff3]
     GUI --> Presentation[ITextPresentation / SideBySide]
 ```
 
