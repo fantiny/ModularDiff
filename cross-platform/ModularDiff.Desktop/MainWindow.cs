@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using System.Globalization;
 using System.Security.Cryptography;
 using ModularDiff.Contracts;
 using ModularDiff.Core;
@@ -23,6 +24,9 @@ public sealed class MainWindow : Window
     private readonly Canvas _editorHost = new();
     private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
+    private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
+    private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
+    private bool HexMode => _hexLeft is not null;
     private readonly TabControl _tabs = new();
     private readonly TabItem _diffTab = new() { Header = "差异对齐" };
     private readonly ComboBox _algorithm = new() { Width = 130 };
@@ -83,7 +87,12 @@ public sealed class MainWindow : Window
         _cellEditor.TextChanged += (_, _) => { if (_editingRow is { } row && !_editorLoading) CellEdited(row, _editingLeft, _cellEditor); };
         _cellEditor.KeyDown += (_, e) => { if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape) { if (e.Key == Avalonia.Input.Key.Escape) _editorLoading = true; EndCellEdit(); e.Handled = true; } };
         _cellEditor.LostFocus += (_, _) => EndCellEdit();
-        _rows.EditRequested += (row, left) => BeginEditRow(_rows.IndexOfRow(row), left);
+        _rows.EditRequested += (row, left) =>
+        {
+            if (_awaitingAlignTarget) { CompleteAlign(row, left); return; }
+            if (HexMode && !left) { _status.Text = "十六进制编辑仅支持左侧。"; return; }
+            BeginEditRow(_rows.IndexOfRow(row), left);
+        };
         _rows.MenuRequested += (row, left) =>
         {
             var menu = new ContextMenu();
@@ -122,6 +131,30 @@ public sealed class MainWindow : Window
                 }
                 menu.Items.Add(lineCopy); menu.Items.Add(selectionCopy); menu.Items.Add(section); menu.Items.Add(goTo);
                 menu.Items.Add(transforms); menu.Items.Add(new Separator());
+            }
+            if (HexMode)
+            {
+                var gotoOffset = new MenuItem { Header = "转到字节偏移…" };
+                gotoOffset.Click += (_, _) => Run(GoToOffsetAsync);
+                var patch = new MenuItem { Header = "导出二进制补丁报告…" };
+                patch.Click += (_, _) => Run(ExportHexPatchAsync);
+                var saveHex = new MenuItem { Header = "保存十六进制编辑（左侧）" + (_hexDirty ? " ●" : "") };
+                saveHex.Click += (_, _) => Run(async () => SaveHexEdit());
+                menu.Items.Add(gotoOffset); menu.Items.Add(patch); menu.Items.Add(saveHex);
+                menu.Items.Add(new Separator());
+            }
+            if (!HexMode && _session.Left is not null && _session.Right is not null)
+            {
+                var align = new MenuItem { Header = "对齐到…（再点对侧行）" };
+                align.Click += (_, _) => Run(async () => StartAlignWith(row, left));
+                var isolate = new MenuItem { Header = "隔离所选行（永不配对）" };
+                isolate.Click += (_, _) => Run(async () => IsolateSelection());
+                var clearAlign = new MenuItem { Header = "清除手动对齐/隔离" };
+                clearAlign.Click += (_, _) => Run(async () => ClearAlignmentHints());
+                menu.Items.Add(align); menu.Items.Add(isolate); menu.Items.Add(clearAlign);
+                menu.Items.Add(new Separator());
+                foreach (var submenu in FileTypeMenus(row, left))
+                    menu.Items.Add(submenu);
             }
             if (CreateSplitMenu(row, left) is { } split)
                 foreach (var item in split.Items.OfType<MenuItem>()) menu.Items.Add(item);
@@ -175,6 +208,8 @@ public sealed class MainWindow : Window
         {
             if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
             { e.Handled = true; Run(GoToLineAsync); }
+            if (e.Key == Avalonia.Input.Key.Escape && _awaitingAlignTarget)
+            { _awaitingAlignTarget = false; _status.Text = "已取消手动对齐。"; e.Handled = true; }
         });
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
@@ -288,6 +323,169 @@ public sealed class MainWindow : Window
         if ((bool)_autoRealign.IsChecked!) Realign();
         else _status.Text = $"已复制 {copied} 行到{(sourceLeft ? "右" : "左")}侧 · 点 ⟳ 重新对齐";
     }
+    // ─── Align With / Isolate(引擎已支持:AlignmentHint + isolatedLines)───
+    private void StartAlignWith(AlignedRow row, bool left)
+    {
+        var cell = left ? row.Left : row.Right;
+        if (cell is null) { _status.Text = "此侧没有行可对齐。"; return; }
+        _alignSourceLine = cell.LineNumber;
+        _alignSourceIsLeft = left;
+        _awaitingAlignTarget = true;
+        _status.Text = $"对齐模式：请在另一侧点击目标行（Esc 取消）。源：{(left ? "左" : "右")}侧行 {cell.LineNumber}";
+    }
+    private void CompleteAlign(AlignedRow target, bool targetLeft)
+    {
+        _awaitingAlignTarget = false;
+        if (targetLeft == _alignSourceIsLeft) { _status.Text = "目标必须是另一侧的行。"; return; }
+        var targetCell = targetLeft ? target.Left : target.Right;
+        if (targetCell is null || _alignSourceLine < 1) { _status.Text = "目标行无效，请重新开始对齐。"; return; }
+        int leftLine = targetLeft ? targetCell.LineNumber : _alignSourceLine;
+        int rightLine = targetLeft ? _alignSourceLine : targetCell.LineNumber;
+        _session.AlignmentHints = [.. _session.AlignmentHints, new(leftLine, rightLine)];
+        _session.Recompare(); RefreshRows();
+        _status.Text = $"已手动对齐：左行 {leftLine} ↔ 右行 {rightLine}（共 {_session.AlignmentHints.Count} 条提示）";
+    }
+    private void IsolateSelection()
+    {
+        var rows = _rows.SelectedRows;
+        if (rows.Count == 0) { _status.Text = "请先选中要隔离的行。"; return; }
+        var leftLines = new List<int>(_session.IsolatedLeftLines);
+        var rightLines = new List<int>(_session.IsolatedRightLines);
+        foreach (var row in rows)
+        {
+            if (row.Left is { } l && !leftLines.Contains(l.LineNumber)) leftLines.Add(l.LineNumber);
+            if (row.Right is { } r && !rightLines.Contains(r.LineNumber)) rightLines.Add(r.LineNumber);
+        }
+        _session.IsolatedLeftLines = leftLines; _session.IsolatedRightLines = rightLines;
+        _session.Recompare(); RefreshRows();
+        _status.Text = $"已隔离 {rows.Count} 行（左 {leftLines.Count} / 右 {rightLines.Count}）";
+    }
+    /// <summary>测试/程序化入口:添加手动对齐提示并立即重排。</summary>
+    public void AddAlignmentHint(int leftLine, int rightLine)
+    {
+        _session.AlignmentHints = [.. _session.AlignmentHints, new(leftLine, rightLine)];
+        _session.Recompare(); RefreshRows();
+    }
+    /// <summary>测试/程序化入口:列出指定侧可用的文件类型操作标签。</summary>
+    public IReadOnlyList<string> FileTypeActionLabels(bool left)
+    {
+        string extension = Path.GetExtension((left ? _session.Left : _session.Right)?.Path ?? "");
+        return _plugins.GetAll<IFileTypeProvider>()
+            .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(p => p.EditActions.Select(a => p.LanguageName + ":" + a.Label)).ToList();
+    }
+    /// <summary>测试/程序化入口:执行指定侧第 index 个文件类型操作(按 FileTypeActionLabels 顺序)。</summary>
+    public void RunFileTypeAction(bool left, int index)
+    {
+        string extension = Path.GetExtension((left ? _session.Left : _session.Right)?.Path ?? "");
+        var actions = _plugins.GetAll<IFileTypeProvider>()
+            .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(p => p.EditActions).ToList();
+        if (index < 0 || index >= actions.Count) return;
+        var buffer = left ? _session.Left : _session.Right;
+        if (buffer is null) return;
+        string result = actions[index].Transform(new(buffer, 1, 1));
+        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = "内容无变化。"; return; }
+        _session.Edit(left, result);
+        _debounce.Stop(); RefreshDirty();
+        if ((bool)_autoRealign.IsChecked!) Realign();
+    }
+    private void ClearAlignmentHints()
+    {
+        _session.AlignmentHints = []; _session.IsolatedLeftLines = []; _session.IsolatedRightLines = [];
+        _session.Recompare(); RefreshRows();
+        _status.Text = "已清除全部手动对齐与隔离。";
+    }
+    // ─── 文件类型插件(IFileTypeProvider)右键子菜单:按点击侧扩展名给出语言专属操作 ───
+    private IEnumerable<MenuItem> FileTypeMenus(AlignedRow row, bool left)
+    {
+        string path = (left ? _session.Left : _session.Right)?.Path ?? "";
+        string extension = Path.GetExtension(path);
+        foreach (var provider in _plugins.GetAll<IFileTypeProvider>())
+        {
+            if (!provider.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
+            var capturedProvider = provider;
+            var submenu = new MenuItem { Header = $"{capturedProvider.LanguageName} 工具（{(left ? "左" : "右")}侧）" };
+            foreach (var (label, _, transform) in capturedProvider.EditActions)
+            {
+                var action = transform;
+                var item = new MenuItem { Header = label };
+                item.Click += (_, _) => Run(async () =>
+                {
+                    var buffer = left ? _session.Left : _session.Right;
+                    if (buffer is null) return;
+                    try
+                    {
+                        string result = action(new(buffer, (left ? _rows.SelectedRows.FirstOrDefault()?.Left : _rows.SelectedRows.FirstOrDefault()?.Right)?.LineNumber ?? 1, 1));
+                        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = "内容无变化。"; return; }
+                        _session.Edit(left, result);
+                        _debounce.Stop(); RefreshDirty();
+                        if ((bool)_autoRealign.IsChecked!) Realign();
+                        else _status.Text = $"已执行「{label}」· 点 ⟳ 重新对齐";
+                    }
+                    catch (Exception ex) { _status.Text = $"{label} 失败：{ex.Message}"; }
+                });
+                submenu.Items.Add(item);
+            }
+            yield return submenu;
+        }
+    }
+    // ─── 十六进制:偏移导航 / 补丁导出 / 就地编辑保存 ───
+    private async Task GoToOffsetAsync()
+    {
+        if (!HexMode) return;
+        string? input = await Prompt("转到字节偏移", "十六进制(0x…)或十进制", "0");
+        if (string.IsNullOrWhiteSpace(input)) return;
+        string trimmed = input.Trim();
+        if (!long.TryParse(trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? trimmed[2..] : trimmed,
+            System.Globalization.NumberStyles.HexNumber, CultureInfo.InvariantCulture, out long offset)
+            && !long.TryParse(trimmed, out offset))
+        { _status.Text = "无法解析偏移。"; return; }
+        long max = Math.Max(_hexLeft!.Length, _hexRight!.Length);
+        if (offset < 0 || offset >= max) { _status.Text = $"偏移超出范围 [0, {max})。"; return; }
+        int index = (int)(offset / 16);
+        _rows.SelectRows([_rows.Rows[index]]); _rows.EnsureVisible(index);
+        _status.Text = $"已定位偏移 0x{offset:X}（行 {index + 1}）。";
+    }
+    private async Task ExportHexPatchAsync()
+    {
+        if (!HexMode) return;
+        var a = _hexLeft!; var b = _hexRight!;
+        var report = new System.Text.StringBuilder();
+        report.AppendLine("ModularDiff Binary Patch Report");
+        report.AppendLine($"Left:  {_hexLeftPath}  ({a.Length} bytes)");
+        report.AppendLine($"Right: {_hexRightPath}  ({b.Length} bytes)");
+        int segments = 0;
+        for (int i = 0; i < Math.Max(a.Length, b.Length); )
+        {
+            bool differs = i < a.Length && i < b.Length ? a[i] != b[i] : true;
+            if (!differs) { i++; continue; }
+            int start = i;
+            while (i < Math.Max(a.Length, b.Length) && (i >= a.Length || i >= b.Length || a[i] != b[i])) i++;
+            segments++;
+            report.AppendLine($"- segment {segments}: offset 0x{start:X} length {i - start}");
+            report.AppendLine("  left : " + BitConverter.ToString(a, Math.Min(start, a.Length == 0 ? 0 : start), Math.Min(i - start, Math.Max(0, a.Length - start))).Replace('-', ' '));
+            report.AppendLine("  right: " + BitConverter.ToString(b, Math.Min(start, b.Length == 0 ? 0 : start), Math.Min(i - start, Math.Max(0, b.Length - start))).Replace('-', ' '));
+        }
+        report.AppendLine(segments == 0 ? "Files are identical." : $"{segments} differing segment(s).");
+        var target = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { SuggestedFileName = "modulardiff-binary.patch", DefaultExtension = "patch" });
+        if (target is null) return;
+        await File.WriteAllTextAsync(target.TryGetLocalPath() ?? "modulardiff-binary.patch", report.ToString());
+        _status.Text = $"补丁报告已导出（{segments} 段差异）。";
+    }
+    public void SaveHexEdit()
+    {
+        if (!HexMode) return;
+        if (!_hexDirty) { _status.Text = "没有未保存的十六进制修改。"; return; }
+        try
+        {
+            File.WriteAllBytes(_hexLeftPath, _hexLeft!);
+            _hexDirty = false;
+            _status.Text = "十六进制编辑已写入磁盘，重新比较…";
+            Run(Compare);
+        }
+        catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; }
+    }
     private void FormatSide()
     {
         if (_loading || _session.Left is null || _session.Right is null) return;
@@ -395,6 +593,7 @@ public sealed class MainWindow : Window
     }
     private void CellEdited(AlignedRow row, bool left, TextBox editor)
     {
+        if (HexMode) { HexCellEdited(row, editor); return; }
         if (_loading || _session.Left is null || _session.Right is null) return;
         var cell = left ? row.Left : row.Right;
         if (cell is null) return;
@@ -569,11 +768,11 @@ public sealed class MainWindow : Window
         SessionStore.Save(_sessions);
         RefreshSessions();
     }
-    private async Task OpenFile(string left, string right) { _diffTab.Content = _diffScroll; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    private async Task OpenFile(string left, string right) { _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
     /// <summary>十六进制视图:16 字节/行并排 dump,与任一差异字节段重叠的行着色,自动定位首个差异行(单侧最多 1MB)。</summary>
     private void ShowHex(string left, string right, FileComparison file)
     {
-        const int rowBytes = 16, cap = 1 << 20;
+        const int cap = 1 << 20;
         static byte[] Read(string path)
         {
             using var stream = File.OpenRead(path);
@@ -581,38 +780,79 @@ public sealed class MainWindow : Window
             stream.ReadAtLeast(buffer, buffer.Length);
             return buffer;
         }
-        static string Dump(byte[] buffer, long offset)
-        {
-            var hex = new System.Text.StringBuilder(16 * 3);
-            var ascii = new System.Text.StringBuilder(16);
-            for (int i = 0; i < rowBytes; i++)
-            {
-                if (offset + i < buffer.Length)
-                {
-                    byte value = buffer[offset + i];
-                    hex.Append(value.ToString("x2")).Append(' ');
-                    ascii.Append(value is >= 0x20 and < 0x7F ? (char)value : '·');
-                }
-                else { hex.Append("   "); ascii.Append(' '); }
-            }
-            return hex.ToString() + ' ' + ascii;
-        }
         var a = Read(left); var b = Read(right);
-        int rows = (int)((Math.Max(a.Length, b.Length) + rowBytes - 1) / rowBytes);
-        var different = new bool[rows];
-        foreach (var segment in file.BinaryDiffs ?? [])
-            for (long row = segment.Offset / rowBytes; row <= Math.Min(rows - 1L, (segment.Offset + segment.Length - 1) / rowBytes); row++)
-                different[row] = true;
+        _hexLeft = a; _hexRight = b; _hexLeftPath = left; _hexRightPath = right; _hexDirty = false;
+        _diffTab.Content = _diffScroll;
+        _rows.Rows = BuildHexRows(a, b);
+        int first = FirstHexDifferenceRow(a, b);
+        if (first >= 0) { _rows.SelectRows([_rows.Rows[first]]); _rows.EnsureVisible(first); }
+    }
+    private const int HexRowBytes = 16;
+    private static List<AlignedRow> BuildHexRows(byte[] a, byte[] b)
+    {
+        int rows = (int)((Math.Max(a.Length, b.Length) + HexRowBytes - 1) / HexRowBytes);
         var list = new List<AlignedRow>(rows);
         for (int row = 0; row < rows; row++)
         {
-            long offset = (long)row * rowBytes;
-            list.Add(new(row, new(row + 1, Dump(a, offset), "LF", []), new(row + 1, Dump(b, offset), "LF", []), different[row] ? 0 : -1));
+            long offset = (long)row * HexRowBytes;
+            bool differs = false;
+            for (int i = 0; i < HexRowBytes && !differs; i++)
+            {
+                long at = offset + i;
+                differs = at >= a.Length || at >= b.Length || a[at] != b[at];
+            }
+            list.Add(new(row, new(row + 1, DumpHex(a, offset), "LF", []), new(row + 1, DumpHex(b, offset), "LF", []), differs ? 0 : -1));
         }
-        _diffTab.Content = _diffScroll;
-        _rows.Rows = list;
-        int first = Array.IndexOf(different, true);
-        if (first >= 0) { _rows.SelectRows([list[first]]); _rows.EnsureVisible(first); }
+        return list;
+    }
+    private static int FirstHexDifferenceRow(byte[] a, byte[] b)
+    {
+        for (long at = 0; at < Math.Max(a.Length, b.Length); at++)
+            if (at >= a.Length || at >= b.Length || a[at] != b[at]) return (int)(at / HexRowBytes);
+        return -1;
+    }
+    private static string DumpHex(byte[] buffer, long offset)
+    {
+        var hex = new System.Text.StringBuilder(HexRowBytes * 3);
+        var ascii = new System.Text.StringBuilder(HexRowBytes);
+        for (int i = 0; i < HexRowBytes; i++)
+        {
+            if (offset + i < buffer.Length)
+            {
+                byte value = buffer[offset + i];
+                hex.Append(value.ToString("x2")).Append(' ');
+                ascii.Append(value is >= 0x20 and < 0x7F ? (char)value : '·');
+            }
+            else { hex.Append("   "); ascii.Append(' '); }
+        }
+        return hex.ToString() + ' ' + ascii;
+    }
+    /// <summary>十六进制就地编辑:单元格文本按"每 token 两个十六进制位"解析,须与该行字节数一致;ASCII 尾列不参与。</summary>
+    private void HexCellEdited(AlignedRow row, TextBox editor)
+    {
+        if (_loading || row.Left is not { } cell) return;
+        try
+        {
+            long offset = (long)(cell.LineNumber - 1) * HexRowBytes;
+            byte[] leftBytes = _hexLeft ?? throw new InvalidOperationException("十六进制模式未初始化。");
+            int rowBytes = (int)Math.Min(HexRowBytes, Math.Max(0, leftBytes.Length - offset));
+            if (rowBytes == 0) return;
+            var tokens = (editor.Text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Where(t => t.Length == 2 && Uri.IsHexDigit(t[0]) && Uri.IsHexDigit(t[1])).Take(rowBytes + 1).ToList();
+            if (tokens.Count != rowBytes)
+            {
+                _status.Text = $"需恰好 {rowBytes} 个十六进制字节(如 4d 5a …)。";
+                _editorLoading = true; editor.Text = DumpHex(leftBytes, offset); _editorLoading = false;
+                return;
+            }
+            for (int i = 0; i < rowBytes; i++) leftBytes[offset + i] = Convert.ToByte(tokens[i], 16);
+            _hexDirty = true;
+            int editedRow = cell.LineNumber - 1;
+            _rows.Rows = BuildHexRows(leftBytes, _hexRight ?? []);
+            _rows.SelectRows([_rows.Rows[editedRow]]); _rows.EnsureVisible(editedRow);
+            _status.Text = $"已修改第 {editedRow + 1} 行的 {rowBytes} 个字节 · 右键「保存十六进制编辑」写盘";
+        }
+        catch (Exception ex) { _status.Text = "十六进制编辑失败：" + ex.Message; }
     }
     /// <summary>图片并排视图:尺寸一致(且 ≤4096×4096)时右侧叠加半透明红色差异像素(SkiaSharp 解码,无图像库落盘)。</summary>
     private void ShowPicture(string left, string right, FileComparison file)

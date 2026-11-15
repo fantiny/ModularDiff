@@ -14,6 +14,10 @@ public sealed class ComparisonSession(PluginCatalog plugins)
     public BufferComparison? Comparison { get; private set; }
     public TextPresentation? Presentation { get; private set; }
     public string Algorithm { get; set; } = "myers";
+    /// <summary>手动对齐提示("对齐到"):强制这两行配对;隔离行永不配对。重比较时传给 presentation 插件。</summary>
+    public IReadOnlyList<AlignmentHint> AlignmentHints { get; set; } = [];
+    public IReadOnlyList<int> IsolatedLeftLines { get; set; } = [];
+    public IReadOnlyList<int> IsolatedRightLines { get; set; } = [];
     public ComparisonOptions Options { get; set; } = new();
     public bool Dirty => Left?.IsDirty == true || Right?.IsDirty == true;
     /// <summary>Increments on every mutation (Load/Clear/Recompare/Edit/Merge); async UI
@@ -70,7 +74,7 @@ public sealed class ComparisonSession(PluginCatalog plugins)
         Presentation = null;
         Version++;
         Comparison = Plugin<IBufferComparison>().Compare(Left.Snapshot(), Right.Snapshot(), Algorithm, Options, plugins);
-        Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines);
+        Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines, hints: AlignmentHints, isolatedLines: [.. IsolatedLeftLines, .. IsolatedRightLines]);
     }
 
     /// <summary>Replaces one side's entire text with minimal-span edit detection.</summary>
