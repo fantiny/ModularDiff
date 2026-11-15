@@ -178,63 +178,7 @@ public partial class MainWindow
         StatusLabel.Text = $"已选中差异块 {hunkId + 1}（{hunk.EndRow - hunk.StartRow + 1} 行）。";
     }
 
-    // ─── 2c: file-level text transforms (right-click menu items) ───
-
-    private void TrimTrailingWhitespace(DiffPane pane)
-    {
-        if (pane.Buffer is null) return;
-        try
-        {
-            string[] lines = pane.Buffer.Text.Split('\n');
-            for (int i = 0; i < lines.Length; i++) lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
-            pane.Buffer.Apply(new TextEdit(0, pane.Buffer.Text.Length, string.Join("\n", lines), "修剪行尾空白"));
-            AfterProgrammaticEdit(pane, "已修剪行尾空白。");
-        }
-        catch (Exception ex) { StatusLabel.Text = "修剪失败：" + ex.Message; }
-    }
-
-    private void ConvertTabsToSpaces(DiffPane pane)
-    {
-        if (pane.Buffer is null) return;
-        try
-        {
-            string text = pane.Buffer.Text.Replace("\t", new string(' ', 4));
-            pane.Buffer.Apply(new TextEdit(0, pane.Buffer.Text.Length, text, "Tab → 空格"));
-            AfterProgrammaticEdit(pane, "已将 Tab 转为空格。");
-        }
-        catch (Exception ex) { StatusLabel.Text = "转换失败：" + ex.Message; }
-    }
-
-    private void ConvertSpacesToTabs(DiffPane pane)
-    {
-        if (pane.Buffer is null) return;
-        try
-        {
-            string[] lines = pane.Buffer.Text.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
-            {
-                int spaces = lines[i].TakeWhile(c => c == ' ').Count();
-                lines[i] = new string('\t', spaces / 4) + lines[i][Math.Min(spaces - spaces % 4, lines[i].Length)..];
-            }
-            pane.Buffer.Apply(new TextEdit(0, pane.Buffer.Text.Length, string.Join("\n", lines), "空格 → Tab"));
-            AfterProgrammaticEdit(pane, "已将前导空格转为 Tab。");
-        }
-        catch (Exception ex) { StatusLabel.Text = "转换失败：" + ex.Message; }
-    }
-
-    private void ToggleLineEndings(DiffPane pane)
-    {
-        if (pane.Buffer is null) return;
-        try
-        {
-            string text = pane.Buffer.Text;
-            string converted = text.Contains("\r\n") ? text.Replace("\r\n", "\n") : text.Replace("\n", "\r\n");
-            string label = text.Contains("\r\n") ? "CRLF → LF" : "LF → CRLF";
-            pane.Buffer.Apply(new TextEdit(0, text.Length, converted, label));
-            AfterProgrammaticEdit(pane, $"已切换行尾风格：{label}。");
-        }
-        catch (Exception ex) { StatusLabel.Text = "行尾切换失败：" + ex.Message; }
-    }
+    // File transforms moved to FileTypes plugin (GenericFileTools provider).
 
     // ─── 2d: over-under layout toggle ───
 

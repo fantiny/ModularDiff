@@ -5,6 +5,30 @@ using ModularDiff.Contracts;
 
 namespace ModularDiff.FileTypes;
 
+// ─── Generic (applies to all files via "*" wildcard) ───
+
+/// <summary>Generic file transforms that apply to any file type — the host matches the "*"
+/// wildcard when no language-specific provider covers the extension. This keeps file-level
+/// operations in the plugin layer rather than hardcoded in the MainWindow.</summary>
+public sealed class GenericFileTools : IFileTypeProvider
+{
+    public string Id => "filetype-generic";
+    public string DisplayName => "Generic file tools";
+    public IReadOnlyList<string> Extensions => ["*"];
+    public string LanguageName => "Any";
+    public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
+    [
+        ("修剪行尾空白", null, ctx => string.Join("\n", ctx.Buffer.Text.Split('\n').Select(l => l.TrimEnd(' ', '\t', '\r')))),
+        ("Tab → 空格", null, ctx => ctx.Buffer.Text.Replace("\t", new string(' ', 4))),
+        ("空格 → Tab（前导）", null, ctx => string.Join("\n", ctx.Buffer.Text.Split('\n').Select(l =>
+        {
+            int spaces = l.TakeWhile(c => c == ' ').Count();
+            return new string('\t', spaces / 4) + l[Math.Min(spaces - spaces % 4, l.Length)..];
+        }))),
+        ("切换行尾风格", null, ctx => ctx.Buffer.Text.Contains("\r\n") ? ctx.Buffer.Text.Replace("\r\n", "\n") : ctx.Buffer.Text.Replace("\n", "\r\n")),
+    ];
+}
+
 // ─── JSON ───
 
 public sealed class JsonFileType : IFileTypeProvider

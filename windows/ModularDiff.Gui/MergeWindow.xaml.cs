@@ -14,10 +14,10 @@ namespace ModularDiff.Gui;
 /// side with one click; the result text stays fully editable.</summary>
 public partial class MergeWindow : Window
 {
-    private static readonly Brush Marker = Brush("#B42318");
-    private static readonly Brush MarkerBack = Brush("#FFE4E1");
-    private static readonly Brush LeftBack = Brush("#FFF4DD");
-    private static readonly Brush RightBack = Brush("#E5F4E9");
+    private static Brush Marker => Controls.Theme.ChangedText;
+    private static Brush MarkerBack => Controls.Theme.ChangedBackground;
+    private static Brush LeftBack => Controls.Theme.DiffModified;
+    private static Brush RightBack => Controls.Theme.DiffInserted;
     private readonly string? _baseArg, _leftArg, _rightArg;
     private bool _painting;
     private int _currentConflict = -1;

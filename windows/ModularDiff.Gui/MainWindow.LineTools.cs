@@ -51,10 +51,7 @@ public partial class MainWindow
             TextView.Visibility == Visibility.Visible && pane.Buffer is not null,
             () => CopyLineToSide(ReferenceEquals(pane, LeftCode)));
         menu.Items.Add(new Separator());
-        Add("修剪行尾空白", pane.Buffer is not null, () => TrimTrailingWhitespace(pane));
-        Add("Tab → 空格", pane.Buffer is not null, () => ConvertTabsToSpaces(pane));
-        Add("空格 → Tab（前导）", pane.Buffer is not null, () => ConvertSpacesToTabs(pane));
-        Add("切换行尾风格", pane.Buffer is not null, () => ToggleLineEndings(pane));
+        // File transforms come exclusively from IFileTypeProvider plugins (GenericFileTools covers all types).
         // Manual alignment (Beyond Compare's Align With / Isolate)
         if (TextView.Visibility == Visibility.Visible && pane.Buffer is not null)
         {
@@ -65,12 +62,17 @@ public partial class MainWindow
                 () => ClearAlignmentHints());
         }
         // File-type-specific actions from IFileTypeProvider plugins (JSON format, C# comment, XML pretty, etc.)
+        // Providers with "*" in Extensions are generic (match any file type).
         if (pane.Buffer is not null)
         {
             string extension = System.IO.Path.GetExtension(pane.Buffer.Path);
-            var providers = _plugins.GetAll<IFileTypeProvider>()
+            var specific = _plugins.GetAll<IFileTypeProvider>()
                 .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
-                .ToArray();
+                .ToList();
+            var generic = _plugins.GetAll<IFileTypeProvider>()
+                .Where(p => p.Extensions.Contains("*"))
+                .ToList();
+            var providers = specific.Concat(generic).ToArray();
             if (providers.Length > 0)
             {
                 menu.Items.Add(new Separator());
