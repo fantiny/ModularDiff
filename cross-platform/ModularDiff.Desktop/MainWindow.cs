@@ -248,6 +248,13 @@ public sealed class MainWindow : Window
         if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         if (Palette.SavedLanguage is { } saved && Lang.Available.Contains(saved)) Lang.Apply(saved);
         ApplyLanguage();
+        // 声明式文件(语法文法/语言包)加载失败要报告而不是静默跳过 —— 逐文件给出行列与原因。
+        if (_plugins.GetAll<ISyntaxGrammar>().SelectMany(g => g.LoadDiagnostics).Concat(Lang.LoadDiagnostics).ToList() is { Count: > 0 } issues)
+        {
+            _status.Text = $"⚠ {issues.Count} 个声明式文件加载失败（语法/语言包）· 其余正常";
+            Opened += (_, _) => Run(async () => await Ask("声明式文件诊断",
+                "以下文件已跳过，其余正常加载：\n\n" + string.Join("\n", issues), ["关闭"]));
+        }
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
     /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
