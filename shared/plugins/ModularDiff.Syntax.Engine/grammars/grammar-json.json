@@ -1,0 +1,9 @@
+{
+  "language": "JSON",
+  "extensions": [".json", ".jsonc"],
+  "rules": [
+    { "pattern": "(\"(?:[^\"\\]|\\.)*\")", "kind": "String", "priority": 0 },
+    { "pattern": "\b(-?\d+\.?\d*[eE]?[+-]?\d*)\b", "kind": "Number", "priority": 1 },
+    { "pattern": "\b(true|false|null)\b", "kind": "Keyword", "priority": 2 }
+  ]
+}

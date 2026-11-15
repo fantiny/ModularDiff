@@ -330,15 +330,24 @@ public partial class MainWindow : Window
         string? path = _textFile?.RelativePath is { } rel ? rel : _activeSession?.LeftPath;
         if (string.IsNullOrWhiteSpace(path)) { LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = null; return; }
         string extension = System.IO.Path.GetExtension(path);
-        var highlighter = _plugins.GetAll<IFileTypeProvider>()
-            .FirstOrDefault(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
-        if (highlighter is not null)
+        // Priority 1: ISyntaxGrammar plugins (declarative grammar JSON files, VS Code-style).
+        var grammar = _plugins.GetAll<ISyntaxGrammar>()
+            .FirstOrDefault(g => g.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+        if (grammar is not null)
         {
-            Func<string, IReadOnlyList<SyntaxToken>> tokenizer = line => highlighter.HighlightLine(line) ?? [];
-            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = tokenizer;
+            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = line => grammar.Tokenize(line, extension) ?? [];
+            return;
         }
-        else
-            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = null;
+        // Priority 2: IFileTypeProvider.HighlightLine (for plugins that implement their own tokenizing).
+        var provider = _plugins.GetAll<IFileTypeProvider>()
+            .FirstOrDefault(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+        if (provider is not null)
+        {
+            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = line => provider.HighlightLine(line) ?? [];
+            return;
+        }
+        // Priority 3: DiffPane's built-in C-style regex (fallback).
+        LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = null;
     }
 
     private async Task RebuildPresentation(CancellationToken token = default, bool preservePosition = false)

@@ -1,0 +1,11 @@
+{
+  "language": "YAML",
+  "extensions": [".yaml", ".yml"],
+  "rules": [
+    { "pattern": "#.*$", "kind": "Comment", "priority": 0 },
+    { "pattern": "(\"[^\"]*\"|'[^']*')", "kind": "String", "priority": 1 },
+    { "pattern": "^(\s*[\w.-]+)(?=\s*:)", "kind": "Type", "priority": 2 },
+    { "pattern": "\b(\d+\.?\d*)\b", "kind": "Number", "priority": 3 },
+    { "pattern": "\b(true|false|null|yes|no|on|off)\b", "kind": "Keyword", "priority": 4 }
+  ]
+}

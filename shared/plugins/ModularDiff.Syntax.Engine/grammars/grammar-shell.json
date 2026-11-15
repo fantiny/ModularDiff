@@ -1,0 +1,10 @@
+{
+  "language": "Shell",
+  "extensions": [".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd"],
+  "rules": [
+    { "pattern": "#.*$", "kind": "Comment", "priority": 0 },
+    { "pattern": "(\"[^\"]*\"|'[^']*')", "kind": "String", "priority": 1 },
+    { "pattern": "\b(if|then|else|elif|fi|for|while|do|done|case|esac|function|return|local|export|source|echo|exit|in|switch|param|begin|process|end|try|catch|finally|throw)\b", "kind": "Keyword", "priority": 2 },
+    { "pattern": "(\$\{?\w+\}?)", "kind": "Number", "priority": 3 }
+  ]
+}

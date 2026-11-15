@@ -1,0 +1,10 @@
+{
+  "language": "SQL",
+  "extensions": [".sql"],
+  "rules": [
+    { "pattern": "(--.*$|/\*[\s\S]*?\*/)", "kind": "Comment", "priority": 0 },
+    { "pattern": "('(?:[^']|'')*')", "kind": "String", "priority": 1 },
+    { "pattern": "\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|ALTER|DROP|INDEX|VIEW|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|ON|AS|AND|OR|NOT|NULL|IS|IN|EXISTS|BETWEEN|LIKE|ORDER|BY|GROUP|HAVING|LIMIT|OFFSET|UNION|ALL|DISTINCT|CASE|WHEN|THEN|ELSE|END|PRIMARY|KEY|FOREIGN|REFERENCES|CONSTRAINT|DEFAULT|CHECK|UNIQUE|CASCADE|BEGIN|COMMIT|ROLLBACK|TRANSACTION|GRANT|REVOKE|WITH|RECURSIVE|OVER|PARTITION|ROW|RANK|COUNT|SUM|AVG|MIN|MAX|COALESCE|CAST|CONVERT)\b", "kind": "Keyword", "priority": 2 },
+    { "pattern": "\b\d+\b", "kind": "Number", "priority": 3 }
+  ]
+}

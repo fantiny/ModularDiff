@@ -1,0 +1,11 @@
+{
+  "language": "CSS",
+  "extensions": [".css", ".scss", ".less"],
+  "rules": [
+    { "pattern": "/\*[\s\S]*?\*/", "kind": "Comment", "priority": 0 },
+    { "pattern": "(\"[^\"]*\"|'[^']*')", "kind": "String", "priority": 1 },
+    { "pattern": "@[\w-]+", "kind": "Keyword", "priority": 2 },
+    { "pattern": "([\w-]+)(?=\s*:)", "kind": "Type", "priority": 3 },
+    { "pattern": "(\d+\.?\d*(px|em|rem|%|vh|vw|s|ms|deg)?|#[0-9a-fA-F]{3,8})", "kind": "Number", "priority": 4 }
+  ]
+}

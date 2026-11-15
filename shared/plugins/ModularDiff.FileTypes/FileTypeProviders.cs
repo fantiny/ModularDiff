@@ -14,7 +14,6 @@ public sealed class JsonFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".json", ".jsonc"];
     public string LanguageName => "JSON";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new JsonSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("格式化 JSON（缩进 2）", null, ctx => Pretty(ctx.Buffer.Text, 2)),
@@ -69,7 +68,6 @@ public sealed class CSharpFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".cs", ".c", ".h", ".cpp", ".hpp", ".java", ".ts", ".tsx", ".js", ".jsx", ".swift", ".kt"];
     public string LanguageName => "C#";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new CFamilySyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("注释选中行 (//)", "Ctrl+/", ctx => CommentLines(ctx.Buffer.Text, "//")),
@@ -107,7 +105,6 @@ public sealed class XmlFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".xml", ".xaml", ".config", ".csproj", ".props", ".targets"];
     public string LanguageName => "XML";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new MarkupSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("格式化 XML（缩进 2）", null, ctx => Format(ctx.Buffer.Text)),
@@ -136,7 +133,6 @@ public sealed class YamlFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".yaml", ".yml"];
     public string LanguageName => "YAML";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new YamlSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("Tab → 空格（2 格）", null, ctx => ctx.Buffer.Text.Replace("\t", "  ")),
@@ -153,7 +149,6 @@ public sealed class MarkdownFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".md", ".markdown"];
     public string LanguageName => "Markdown";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new MarkdownSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("生成目录 (TOC)", null, ctx => GenerateToc(ctx.Buffer.Text)),
@@ -180,7 +175,6 @@ public sealed class ScriptFileType : IFileTypeProvider
     public IReadOnlyList<string> Extensions => [".sh", ".bash", ".zsh", ".ps1", ".psm1", ".bat", ".cmd", ".py", ".rb"];
     public string LanguageName => "Script";
 
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new ShellSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("注释选中行 (#)", null, ctx => Comment(ctx.Buffer.Text)),
@@ -220,7 +214,6 @@ public sealed class CssFileType : IFileTypeProvider
     public string DisplayName => "CSS tools";
     public IReadOnlyList<string> Extensions => [".css", ".scss", ".less"];
     public string LanguageName => "CSS";
-    public IReadOnlyList<SyntaxToken>? HighlightLine(string line) => new CssSyntax().Tokenize(line);
     public IReadOnlyList<(string Label, string? Shortcut, Func<EditContext, string> Transform)> EditActions =>
     [
         ("格式化 CSS（简单缩进）", null, ctx => FormatCss(ctx.Buffer.Text)),

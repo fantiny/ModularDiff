@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><EnableDynamicLoading>true</EnableDynamicLoading></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../ModularDiff.Contracts/ModularDiff.Contracts.csproj" Private="false" /></ItemGroup>
+  <ItemGroup><None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><None Include="grammars\**\*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="grammars" /></ItemGroup>
+</Project>

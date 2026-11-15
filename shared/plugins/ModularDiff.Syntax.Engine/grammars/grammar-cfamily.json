@@ -1,0 +1,10 @@
+{
+  "language": "C-family",
+  "extensions": [".cs", ".java", ".ts", ".tsx", ".js", ".jsx", ".c", ".h", ".cpp", ".hpp", ".swift", ".kt", ".go"],
+  "rules": [
+    { "pattern": "(//.*$|/\*[\s\S]*?\*/)", "kind": "Comment", "priority": 0 },
+    { "pattern": "(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')", "kind": "String", "priority": 1 },
+    { "pattern": "\b(abstract|as|async|await|base|bool|break|byte|case|catch|char|checked|class|const|continue|decimal|default|delegate|do|double|else|enum|event|explicit|extern|false|finally|fixed|float|for|foreach|get|goto|if|implicit|in|init|int|interface|internal|is|lock|long|namespace|new|null|object|operator|out|override|package|params|partial|private|protected|public|readonly|record|ref|return|sbyte|sealed|set|short|sizeof|stackalloc|static|string|struct|super|switch|this|throw|true|try|typeof|uint|ulong|unchecked|unsafe|ushort|using|var|virtual|void|volatile|where|while|yield|func|defer|go|range|select|chan|map|fallthrough|import|export|from|type|let|function|extends|implements)\b", "kind": "Keyword", "priority": 2 },
+    { "pattern": "\b(0x[0-9a-fA-F]+|\d+\.?\d*[fFdDmM]?)\b", "kind": "Number", "priority": 3 }
+  ]
+}

@@ -14,6 +14,27 @@ public sealed record FileTypeAction(string Label, string? Shortcut, Func<EditCon
 public sealed record SyntaxToken(int Start, int Length, SyntaxTokenKind Kind);
 public enum SyntaxTokenKind { Keyword, String, Comment, Number, Type, Operator }
 
+/// <summary>声明式语法规则：一条正则模式 → 一种令牌类型，按优先级依次应用（低优先级先匹配，
+/// 已被占用的字符位置不再参与后续匹配——同 RegexSyntaxHighlighter 的 claiming 策略）。</summary>
+public sealed record GrammarRule(string Pattern, SyntaxTokenKind Kind, int Priority);
+
+/// <summary>语法高亮插件：声明式规则集，按扩展名路由。规则可从 JSON 语法文件加载，
+/// 新语言无需修改宿主或引擎——添加语法文件即可（类似 VS Code 的 TextMate grammar 模式）。</summary>
+public interface ISyntaxGrammar : IPlugin
+{
+    /// <summary>此语法覆盖的扩展名（含点，如 ".py"、".go"）。</summary>
+    IReadOnlyList<string> Extensions { get; }
+
+    /// <summary>语言名称。</summary>
+    string LanguageName { get; }
+
+    /// <summary>声明式规则集（编译前的原始定义）。</summary>
+    IReadOnlyList<GrammarRule> Rules { get; }
+
+    /// <summary>对一行文本返回着色令牌；null 表示该扩展名不支持。</summary>
+    IReadOnlyList<SyntaxToken>? Tokenize(string line, string extension);
+}
+
 /// <summary>文件类型感知插件：按扩展名注册，提供语言专属的编辑操作、语法着色与结构化比较。
 /// 宿主在右键菜单、语法高亮和比较路由中自动发现并使用这些能力。</summary>
 public interface IFileTypeProvider : IPlugin
