@@ -25,6 +25,15 @@ public sealed class MainWindow : Window
     private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
     private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
+    private readonly List<(Control Target, string Key)> _localized = [];
+    private void Tip(Control target, string key) { _localized.Add((target, key)); ToolTip.SetTip(target, Lang.Get(key)); }
+    private void ApplyLanguage()
+    {
+        Title = Lang.Get("md_title");
+        _diffTab.Header = Lang.Get("md_tab_diff");
+        _diffTab.Header = Lang.Get("md_tab_diff");
+        foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
+    }
     private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
     private bool HexMode => _hexLeft is not null;
     private readonly TabControl _tabs = new();
@@ -46,7 +55,7 @@ public sealed class MainWindow : Window
     private bool _loading, _busy, _allowClose, _closePending;
     public MainWindow(string[] args)
     {
-        Title = "ModularDiff · 跨平台版"; Width = 1250; Height = 820; MinWidth = 850; MinHeight = 550;
+        Title = Lang.Get("md_title"); Width = 1250; Height = 820; MinWidth = 850; MinHeight = 550;
         int cascade = System.Threading.Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移,避免完全叠加难发现
         Position = new PixelPoint(70 + (cascade % 12) * 36, 46 + (cascade % 12) * 30);
         string? Arg(string key) { int i = Array.IndexOf(args, key); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
@@ -54,17 +63,17 @@ public sealed class MainWindow : Window
         _session = new(_plugins);
         _leftPath.Text = Arg("--left"); _rightPath.Text = Arg("--right");
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = "myers";
-        ToolTip.SetTip(_algorithm, "比较算法插件");
-        _toolbar.Children.Add(Button("▶", "比较左右路径", () => Run(Compare)));
-        _toolbar.Children.Add(Button("⟳", "重新对齐：按当前算法与忽略选项重算，不重读磁盘，保留未保存修改", Realign));
+        Tip(_algorithm, "md_tip_algo");
+        _toolbar.Children.Add(Button("▶", Lang.Get("md_tip_compare"), () => Run(Compare)));
+        _toolbar.Children.Add(Button("⟳", Lang.Get("md_tip_realign"), Realign));
         ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
         _toolbar.Children.Add(_autoRealign);
-        _toolbar.Children.Add(Button("◱", "布局切换：左右并排 ⇄ 上下分栏", () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
-        _toolbar.Children.Add(Button("⌗", "格式化本侧：按最近聚焦的一侧，应用代码格式化插件（如 CSS 规范格式化）", FormatSide));
-        _toolbar.Children.Add(Button("◈", "不重要差异规则：每行一条正则，匹配文本（如 $Id$、时间戳、版本号）不产生差异块", EditRules));
-        _toolbar.Children.Add(Button("💾", "保存当前比较为命名会话（左右路径 + 算法 + 忽略规则）", () => Run(SaveSession)));
+        _toolbar.Children.Add(Button("◱", Lang.Get("md_tip_layout"), () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
+        _toolbar.Children.Add(Button("⌗", Lang.Get("md_tip_format"), FormatSide));
+        _toolbar.Children.Add(Button("◈", Lang.Get("md_tip_rules"), EditRules));
+        _toolbar.Children.Add(Button("💾", Lang.Get("md_tip_session"), () => Run(SaveSession)));
         Button themeButton = new() { Content = Palette.IsDark ? "☀" : "🌙", MinWidth = 32, Padding = new Thickness(8, 4) };
-        ToolTip.SetTip(themeButton, "深色 / 浅色主题切换");
+        Tip(themeButton, "md_tip_theme");
         themeButton.Click += (_, _) =>
         {
             Palette.SetDark(!Palette.IsDark);
@@ -72,25 +81,41 @@ public sealed class MainWindow : Window
             themeButton.Content = Palette.IsDark ? "☀" : "🌙";
         };
         _toolbar.Children.Add(themeButton);
+        var languageBox = new ComboBox { Width = 96 };
+        languageBox.ItemsSource = Lang.Available.ToArray();
+        languageBox.SelectedItem = Lang.CurrentName;
+        languageBox.SelectionChanged += (_, _) =>
+        {
+            if (languageBox.SelectedItem is string name && !string.Equals(name, Lang.CurrentName))
+            {
+                Lang.Apply(name);
+                Palette.SaveLanguage(name);
+                ApplyLanguage();
+                _status.Text = string.Format(Lang.Get("md_lang_switched"), name);
+            }
+        };
+        Tip(languageBox, "md_tip_lang");
+        _toolbar.Children.Add(languageBox);
         ToolTip.SetTip(_sessionBox, "命名会话：选择后载入并比较"); ToolTip.SetTip(_recentBox, "最近比较（自动记录，去重，最多 10 条）");
         _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_sessionBox.SelectedIndex >= 0 && _sessions.Named.Count > _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex]); _sessionBox.SelectedIndex = -1; });
         _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_recentBox.SelectedIndex >= 0 && _sessions.Recent.Count > _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex]); _recentBox.SelectedIndex = -1; });
         _toolbar.Children.Add(_sessionBox); _toolbar.Children.Add(_recentBox); RefreshSessions();
-        _toolbar.Children.Add(Button("⇄", "交换左右路径", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
+        _toolbar.Children.Add(Button("⇄", Lang.Get("md_tip_swap"), () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
-        ToolTip.SetTip(_ignoreEol, "忽略行尾差异（CRLF/LF/CR 与末行换行）"); ToolTip.SetTip(_ignoreWhitespace, "忽略行内所有空白差异"); ToolTip.SetTip(_ignoreCase, "忽略大小写差异（不变文化）");
+        Tip(_ignoreEol, "md_tip_eol"); Tip(_ignoreWhitespace, "md_tip_ws"); Tip(_ignoreCase, "md_tip_case");
         _toolbar.Children.Add(_ignoreEol); _toolbar.Children.Add(_ignoreWhitespace); _toolbar.Children.Add(_ignoreCase);
         _ignoreEol.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreWhitespace.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreCase.IsCheckedChanged += (_, _) => ApplyOptions();
-        _toolbar.Children.Add(Button("↑", "上一个差异块", () => Navigate(-1)));
-        _toolbar.Children.Add(Button("↓", "下一个差异块", () => Navigate(1)));
-        _toolbar.Children.Add(Button("→", "选中差异块：左复制到右（保存后写入磁盘）", () => Merge(MergeDirection.LeftToRight)));
-        _toolbar.Children.Add(Button("←", "选中差异块：右复制到左（保存后写入磁盘）", () => Merge(MergeDirection.RightToLeft)));
-        _toolbar.Children.Add(Button("⇉", "全部差异块：左复制到右（一次规划、自底向上应用）", () => Run(() => CopyAllBlocks(true))));
-        _toolbar.Children.Add(Button("⇇", "全部差异块：右复制到左（一次规划、自底向上应用）", () => Run(() => CopyAllBlocks(false))));
-        _toolbar.Children.Add(Button("⇥", "目录：预览所选文件左到右同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.LeftToRight))));
-        _toolbar.Children.Add(Button("⇤", "目录：预览所选文件右到左同步；未选择时预览全部差异", () => Run(() => Sync(SyncMode.RightToLeft))));
-        _toolbar.Children.Add(Button("◷", "同步历史与撤销恢复", () => Run(History)));
+        _toolbar.Children.Add(Button("↑", Lang.Get("md_tip_prev"), () => Navigate(-1)));
+        _toolbar.Children.Add(Button("↓", Lang.Get("md_tip_next"), () => Navigate(1)));
+        _toolbar.Children.Add(Button("→", Lang.Get("md_tip_merge_l2r"), () => Merge(MergeDirection.LeftToRight)));
+        _toolbar.Children.Add(Button("←", Lang.Get("md_tip_merge_r2l"), () => Merge(MergeDirection.RightToLeft)));
+        _toolbar.Children.Add(Button("⇉", Lang.Get("md_tip_copyall_l2r"), () => Run(() => CopyAllBlocks(true))));
+        _toolbar.Children.Add(Button("⇇", Lang.Get("md_tip_copyall_r2l"), () => Run(() => CopyAllBlocks(false))));
+        _toolbar.Children.Add(Button("⇥", Lang.Get("md_tip_sync_l2r"), () => Run(() => Sync(SyncMode.LeftToRight))));
+        _toolbar.Children.Add(Button("⇤", Lang.Get("md_tip_sync_r2l"), () => Run(() => Sync(SyncMode.RightToLeft))));
+        _toolbar.Children.Add(Button("◷", Lang.Get("md_tip_history"), () => Run(History)));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
+        _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Content = _diffScroll; _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
         _editorHost.Children.Add(_cellEditor); _cellEditor.IsVisible = false;
         _cellEditor.TextChanged += (_, _) => { if (_editingRow is { } row && !_editorLoading) CellEdited(row, _editingLeft, _cellEditor); };
@@ -107,28 +132,28 @@ public sealed class MainWindow : Window
             var menu = new ContextMenu();
             if (_session.Presentation?.Hunks.Count > 0)
             {
-                var allRight = new MenuItem { Header = "全部复制 左→右" };
+                var allRight = new MenuItem { Header = Lang.Get("md_menu_copy_all_l") };
                 allRight.Click += (_, _) => Run(() => CopyAllBlocks(true));
-                var allLeft = new MenuItem { Header = "全部复制 右→左" };
+                var allLeft = new MenuItem { Header = Lang.Get("md_menu_copy_all_r") };
                 allLeft.Click += (_, _) => Run(() => CopyAllBlocks(false));
                 menu.Items.Add(allRight); menu.Items.Add(allLeft); menu.Items.Add(new Separator());
             }
             string selected = _rows.SelectedText();
             if (selected.Length > 0)
             {
-                var copy = new MenuItem { Header = "复制所选" };
+                var copy = new MenuItem { Header = Lang.Get("md_menu_copy_selection") };
                 copy.Click += async (_, _) => { if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(selected); };
                 menu.Items.Add(copy);
             }
             if (_session.Left is not null)
             {
-                var lineCopy = new MenuItem { Header = "复制行到对侧" };
+                var lineCopy = new MenuItem { Header = Lang.Get("md_menu_copy_line") };
                 lineCopy.Click += (_, _) => Run(async () => { _rows.SelectRows([row]); CopyToSide(row); });
-                var selectionCopy = new MenuItem { Header = "复制选区到对侧" };
+                var selectionCopy = new MenuItem { Header = Lang.Get("md_menu_copy_sel_to_side") };
                 selectionCopy.Click += (_, _) => Run(async () => CopyToSide());
-                var section = new MenuItem { Header = "选中当前差异块" };
+                var section = new MenuItem { Header = Lang.Get("md_menu_select_hunk") };
                 section.Click += (_, _) => _rows.SelectHunk(row);
-                var goTo = new MenuItem { Header = "转到行号…  ⌘G" };
+                var goTo = new MenuItem { Header = Lang.Get("md_menu_goto_line") };
                 goTo.Click += (_, _) => Run(GoToLineAsync);
                 var transforms = new MenuItem { Header = $"转换（{(left ? "左" : "右")}侧）" };
                 foreach (var (name, kind) in new[] { ("修剪行尾空白", 0), ("Tab → 空格", 1), ("前导空格 → Tab", 2), ("行尾 LF ⇄ CRLF", 3) })
@@ -143,22 +168,22 @@ public sealed class MainWindow : Window
             }
             if (HexMode)
             {
-                var gotoOffset = new MenuItem { Header = "转到字节偏移…" };
+                var gotoOffset = new MenuItem { Header = Lang.Get("md_menu_goto_offset") };
                 gotoOffset.Click += (_, _) => Run(GoToOffsetAsync);
-                var patch = new MenuItem { Header = "导出二进制补丁报告…" };
+                var patch = new MenuItem { Header = Lang.Get("md_menu_export_patch") };
                 patch.Click += (_, _) => Run(ExportHexPatchAsync);
-                var saveHex = new MenuItem { Header = "保存十六进制编辑（左侧）" + (_hexDirty ? " ●" : "") };
+                var saveHex = new MenuItem { Header = Lang.Get("md_menu_save_hex") + (_hexDirty ? " ●" : "") };
                 saveHex.Click += (_, _) => Run(async () => SaveHexEdit());
                 menu.Items.Add(gotoOffset); menu.Items.Add(patch); menu.Items.Add(saveHex);
                 menu.Items.Add(new Separator());
             }
             if (!HexMode && _session.Left is not null && _session.Right is not null)
             {
-                var align = new MenuItem { Header = "对齐到…（再点对侧行）" };
+                var align = new MenuItem { Header = Lang.Get("md_menu_align") };
                 align.Click += (_, _) => Run(async () => StartAlignWith(row, left));
-                var isolate = new MenuItem { Header = "隔离所选行（永不配对）" };
+                var isolate = new MenuItem { Header = Lang.Get("md_menu_isolate") };
                 isolate.Click += (_, _) => Run(async () => IsolateSelection());
-                var clearAlign = new MenuItem { Header = "清除手动对齐/隔离" };
+                var clearAlign = new MenuItem { Header = Lang.Get("md_menu_clear_align") };
                 clearAlign.Click += (_, _) => Run(async () => ClearAlignmentHints());
                 menu.Items.Add(align); menu.Items.Add(isolate); menu.Items.Add(clearAlign);
                 menu.Items.Add(new Separator());
@@ -169,8 +194,8 @@ public sealed class MainWindow : Window
                 foreach (var item in split.Items.OfType<MenuItem>()) menu.Items.Add(item);
             if (menu.ItemCount > 0) _rows.OpenMenu(menu);
         };
-        var editTab = new TabItem { Header = "左右编辑", Content = Columns(EditPanel(true), EditPanel(false)) };
-        var folderTab = new TabItem { Header = "目录比较", Content = _files };
+        var editTab = new TabItem { Header = Lang.Get("md_tab_edit"), Content = Columns(EditPanel(true), EditPanel(false)) };
+        var folderTab = new TabItem { Header = Lang.Get("md_tab_folder"), Content = _files };
         _tabs.ItemsSource = new[] { _diffTab, editTab, folderTab };
         _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
             file is null ? new TextBlock() : Columns(
@@ -221,6 +246,8 @@ public sealed class MainWindow : Window
             { _awaitingAlignTarget = false; _status.Text = "已取消手动对齐。"; e.Handled = true; }
         });
         if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
+        if (Palette.SavedLanguage is { } saved && Lang.Available.Contains(saved)) Lang.Apply(saved);
+        ApplyLanguage();
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
     /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
@@ -380,9 +407,11 @@ public sealed class MainWindow : Window
     public IReadOnlyList<string> FileTypeActionLabels(bool left)
     {
         string extension = Path.GetExtension((left ? _session.Left : _session.Right)?.Path ?? "");
-        return _plugins.GetAll<IFileTypeProvider>()
-            .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
-            .SelectMany(p => p.EditActions.Select(a => p.LanguageName + ":" + a.Label)).ToList();
+        var providers = _plugins.GetAll<IFileTypeProvider>()
+            .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (providers.Count == 0)   // 无专属提供者 → 通配 "*" 的通用文件工具
+            providers = _plugins.GetAll<IFileTypeProvider>().Where(p => p.Extensions.Contains("*", StringComparer.Ordinal)).ToList();
+        return providers.SelectMany(p => p.EditActions.Select(a => p.LanguageName + ":" + a.Label)).ToList();
     }
     /// <summary>测试/程序化入口:执行指定侧第 index 个文件类型操作(按 FileTypeActionLabels 顺序)。</summary>
     public void RunFileTypeAction(bool left, int index)
@@ -411,9 +440,12 @@ public sealed class MainWindow : Window
     {
         string path = (left ? _session.Left : _session.Right)?.Path ?? "";
         string extension = Path.GetExtension(path);
+        bool anySpecific = _plugins.GetAll<IFileTypeProvider>().Any(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
         foreach (var provider in _plugins.GetAll<IFileTypeProvider>())
         {
-            if (!provider.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
+            bool wildcard = provider.Extensions.Contains("*", StringComparer.Ordinal);
+            if (wildcard && anySpecific) continue;                 // 专属提供者优先;通配只在无专属时出现
+            if (!wildcard && !provider.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
             var capturedProvider = provider;
             var submenu = new MenuItem { Header = $"{capturedProvider.LanguageName} 工具（{(left ? "左" : "右")}侧）" };
             foreach (var (label, _, transform) in capturedProvider.EditActions)
@@ -780,6 +812,7 @@ public sealed class MainWindow : Window
     }
     private async Task OpenFile(string left, string right)
     {
+        _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false;
         await _session.LoadAsync(left, right);
         WireSyntax(left, right);
@@ -794,6 +827,9 @@ public sealed class MainWindow : Window
     private Func<string, IReadOnlyList<SyntaxToken>?>? SyntaxFor(string path)
     {
         string extension = Path.GetExtension(path);
+        // 与 WPF 同优先级链:声明式语法文法插件 → 文件类型插件 HighlightLine → 无着色。
+        var grammar = _plugins.GetAll<ISyntaxGrammar>().FirstOrDefault(g => g.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+        if (grammar is not null) return line => grammar.Tokenize(line, extension);
         var provider = _plugins.GetAll<IFileTypeProvider>().FirstOrDefault(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
         return provider is null ? null : line => provider.HighlightLine(line);
     }
@@ -810,6 +846,7 @@ public sealed class MainWindow : Window
         }
         var a = Read(left); var b = Read(right);
         _hexLeft = a; _hexRight = b; _hexLeftPath = left; _hexRightPath = right; _hexDirty = false;
+        _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Content = _diffScroll;
         _rows.Rows = BuildHexRows(a, b);
         int first = FirstHexDifferenceRow(a, b);

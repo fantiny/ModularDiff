@@ -7,7 +7,7 @@ namespace ModularDiff.Desktop;
 /// 🌙 切换即整体换肤;选择持久化到 ~/Library/Application Support/ModularDiff/Settings.json。</summary>
 public static class Palette
 {
-    public static bool IsDark { get; private set; } = Load();
+    public static bool IsDark { get; private set; } = Load().Dark;
 
     // —— 视图基色 ——
     public static IBrush Ink => Get(!IsDark ? "#253041" : "#C9D1D9");
@@ -29,32 +29,34 @@ public static class Palette
     public static IBrush Type => Get(!IsDark ? "#952DA1" : "#D2A8FF");
     public static IBrush Operator => Get(!IsDark ? "#253041" : "#C9D1D9");
 
-    public static void SetDark(bool dark)
+    public static string? SavedLanguage { get; private set; } = Load().Language;
+
+    public static void SetDark(bool dark) { IsDark = dark; Persist(); Changed?.Invoke(); }
+    public static void SaveLanguage(string language) { SavedLanguage = language; Persist(); }
+    private static void Persist()
     {
-        if (IsDark == dark) return;
-        IsDark = dark;
         try
         {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, "Settings.json"), JsonSerializer.Serialize(new Settings(dark)));
+            File.WriteAllText(Path.Combine(directory, "Settings.json"), JsonSerializer.Serialize(new Settings(IsDark, SavedLanguage)));
         }
         catch { /* 持久化失败不影响本次切换 */ }
-        Changed?.Invoke();
     }
 
     /// <summary>主题切换通知(视图等自绘控件借此触发重绘)。</summary>
     public static event Action? Changed;
     private static readonly Dictionary<string, IBrush> Cache = [];
     private static IBrush Get(string color) => Cache.TryGetValue(color, out var brush) ? brush : Cache[color] = new SolidColorBrush(Color.Parse(color));
-    private static bool Load()
+    private static (bool Dark, string? Language) Load()
     {
         try
         {
             string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Settings.json");
-            return File.Exists(path) && JsonSerializer.Deserialize<Settings>(File.ReadAllText(path))?.Dark == true;
+            var settings = File.Exists(path) ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(path)) : null;
+            return (settings?.Dark == true, settings?.Language);
         }
-        catch { return false; }
+        catch { return (false, null); }
     }
-    private sealed record Settings(bool Dark);
+    private sealed record Settings(bool Dark, string? Language = null);
 }

@@ -1,11 +1,34 @@
 {
   "language": "Markdown",
-  "extensions": [".md", ".markdown"],
+  "extensions": [
+    ".md",
+    ".markdown"
+  ],
   "rules": [
-    { "pattern": "^(#{1,6}\s+.*)", "kind": "Keyword", "priority": 0 },
-    { "pattern": "(`[^`]+`)", "kind": "String", "priority": 1 },
-    { "pattern": "(\[[^\]]+\]\([^)]+\))", "kind": "Type", "priority": 2 },
-    { "pattern": "(\*\*[^*]+\*\*)", "kind": "Operator", "priority": 3 },
-    { "pattern": "(\*[^*]+\*)", "kind": "Comment", "priority": 4 }
+    {
+      "pattern": "^(#{1,6}\\s+.*)",
+      "kind": "Keyword",
+      "priority": 0
+    },
+    {
+      "pattern": "(`[^`]+`)",
+      "kind": "String",
+      "priority": 1
+    },
+    {
+      "pattern": "(\\[[^\\]]+\\]\\([^)]+\\))",
+      "kind": "Type",
+      "priority": 2
+    },
+    {
+      "pattern": "(\\*\\*[^*]+\\*\\*)",
+      "kind": "Operator",
+      "priority": 3
+    },
+    {
+      "pattern": "(\\*[^*]+\\*)",
+      "kind": "Comment",
+      "priority": 4
+    }
   ]
 }

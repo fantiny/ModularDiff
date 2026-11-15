@@ -279,6 +279,29 @@ try
     syntaxWindow.Close();
 }
 finally { Directory.Delete(mergeRoot, recursive: true); }
+// 多语言 + 通配符文件工具。
+Check(ModularDiff.Desktop.Lang.Available.Count >= 4, $"language packs loaded ({string.Join(",", ModularDiff.Desktop.Lang.Available)})");
+string chineseTitle = ModularDiff.Desktop.Lang.Get("md_title");
+ModularDiff.Desktop.Lang.Apply("English");
+Check(ModularDiff.Desktop.Lang.Get("md_title") != chineseTitle && ModularDiff.Desktop.Lang.Get("md_title").Contains("Cross-platform"), "language switch translates UI keys");
+ModularDiff.Desktop.Lang.Apply("中文");
+Check(ModularDiff.Desktop.Lang.Get("md_menu_goto_line").Contains("转到行号"), "fallback chain resolves untranslated keys via zh-CN");
+string wildRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-wild-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(wildRoot);
+try
+{
+    File.WriteAllText(Path.Combine(wildRoot, "a.txt"), "one  \ntwo\t\n");   // .txt 无专属提供者 → 通配 "*" 生效
+    File.WriteAllText(Path.Combine(wildRoot, "b.txt"), "one\ntwo\n");
+    var wildWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(wildRoot, "a.txt"), "--right", Path.Combine(wildRoot, "b.txt"), "--auto-compare"]);
+    wildWindow.Show();
+    var wildReady = DateTime.UtcNow.AddSeconds(8);
+    while (DateTime.UtcNow < wildReady) { Dispatcher.UIThread.RunJobs(); wildWindow.UpdateLayout(); Thread.Sleep(10);
+        if (wildWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var wildLabels = wildWindow.FileTypeActionLabels(true);
+    Check(wildLabels.Any(l => l.Contains("Any") && l.Contains("修剪")), $"wildcard generic tools offered for .txt ({string.Join(",", wildLabels)})");
+    wildWindow.Close();
+}
+finally { Directory.Delete(wildRoot, recursive: true); }
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);

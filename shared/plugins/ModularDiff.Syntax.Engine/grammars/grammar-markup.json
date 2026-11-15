@@ -1,9 +1,30 @@
 {
   "language": "HTML/XML",
-  "extensions": [".html", ".htm", ".xml", ".xaml", ".config", ".csproj", ".props", ".targets"],
+  "extensions": [
+    ".html",
+    ".htm",
+    ".xml",
+    ".xaml",
+    ".config",
+    ".csproj",
+    ".props",
+    ".targets"
+  ],
   "rules": [
-    { "pattern": "<!--[\s\S]*?-->", "kind": "Comment", "priority": 0 },
-    { "pattern": "(<[/\w][^>]*>)", "kind": "Keyword", "priority": 1 },
-    { "pattern": "(\"[^\"]*\")", "kind": "String", "priority": 2 }
+    {
+      "pattern": "<!--[\\s\\S]*?-->",
+      "kind": "Comment",
+      "priority": 0
+    },
+    {
+      "pattern": "(<[/\\w][^>]*>)",
+      "kind": "Keyword",
+      "priority": 1
+    },
+    {
+      "pattern": "(\"[^\"]*\")",
+      "kind": "String",
+      "priority": 2
+    }
   ]
 }
