@@ -1,121 +1,121 @@
+using System.IO;
+using System.Text.Json;
 using System.Windows.Media;
 
 namespace ModularDiff.Gui.Controls;
 
-/// <summary>Centralized color palette: all rendering colors come from here so dark mode is a
-/// single switch. Controls reference Theme.Current instead of hardcoding brushes.</summary>
+/// <summary>Declarative theme engine: loads theme-*.json files from the themes/ directory
+/// (same pattern as grammar files). Each JSON file defines a named color palette; users add
+/// custom themes by dropping a file — no recompilation. All controls reference Theme properties,
+/// so a theme switch is a single Apply() call.</summary>
 public static class Theme
 {
-    public static bool IsDark { get; private set; }
+    private static readonly Dictionary<string, Dictionary<string, string>> Themes = new(StringComparer.OrdinalIgnoreCase);
+    private static Dictionary<string, Brush> _colors = [];
+    public static string CurrentName { get; private set; } = "Light";
     public static event Action? Changed;
 
-    // ─── shared palette ───
-    public static Brush WindowBackground { get; private set; } = Brush("#F1F3F7");
-    public static Brush PanelBackground { get; private set; } = Brushes.White;
-    public static Brush PanelHeader { get; private set; } = Brush("#E8ECF2");
-    public static Brush Border { get; private set; } = Brush("#DDE3EC");
-    public static Brush Ink { get; private set; } = Brush("#253041");
-    public static Brush Muted { get; private set; } = Brush("#8793A4");
-    public static Brush Accent { get; private set; } = Brush("#3569AE");
-    public static Brush AccentText { get; private set; } = Brushes.White;
+    // ─── brush properties (all route through _colors loaded from JSON) ───
+    public static Brush WindowBackground => Get("WindowBackground");
+    public static Brush PanelBackground => Get("PanelBackground");
+    public static Brush PanelHeader => Get("PanelHeader");
+    public static Brush Border => Get("Border");
+    public static Brush Ink => Get("Ink");
+    public static Brush Muted => Get("Muted");
+    public static Brush Accent => Get("Accent");
+    public static Brush AccentText => Get("AccentText");
+    public static Brush DiffModified => Get("DiffModified");
+    public static Brush DiffDeleted => Get("DiffDeleted");
+    public static Brush DiffInserted => Get("DiffInserted");
+    public static Brush DiffGhost => Get("DiffGhost");
+    public static Brush DiffSelected => Get("DiffSelected");
+    public static Brush ChangedText => Get("ChangedText");
+    public static Brush ChangedBackground => Get("ChangedBackground");
+    public static Brush ModifiedBar => Get("ModifiedBar");
+    public static Brush DeletedBar => Get("DeletedBar");
+    public static Brush InsertedBar => Get("InsertedBar");
+    public static Brush SyntaxKeyword => Get("SyntaxKeyword");
+    public static Brush SyntaxString => Get("SyntaxString");
+    public static Brush SyntaxComment => Get("SyntaxComment");
+    public static Brush SyntaxNumber => Get("SyntaxNumber");
+    public static Brush SyntaxType => Get("SyntaxType");
+    public static Brush Gutter => Get("Gutter");
+    public static Brush Caret => Get("Caret");
 
-    // ─── diff colors ───
-    public static Brush DiffModified { get; private set; } = Brush("#FFF6D6");
-    public static Brush DiffDeleted { get; private set; } = Brush("#FFF0F0");
-    public static Brush DiffInserted { get; private set; } = Brush("#ECF7EF");
-    public static Brush DiffGhost { get; private set; } = Brush("#F2F4F7");
-    public static Brush DiffSelected { get; private set; } = Brush("#D9E8FF");
-    public static Brush ChangedText { get; private set; } = Brush("#A52D22");
-    public static Brush ChangedBackground { get; private set; } = Brush("#FFD4BC");
+    public static IReadOnlyList<string> Available => [.. Themes.Keys];
 
-    // ─── markers ───
-    public static Brush ModifiedBar { get; private set; } = Brush("#EAA05B");
-    public static Brush DeletedBar { get; private set; } = Brush("#D76565");
-    public static Brush InsertedBar { get; private set; } = Brush("#65A67F");
-
-    // ─── syntax ───
-    public static Brush SyntaxKeyword { get; private set; } = Brush("#2E60AA");
-    public static Brush SyntaxString { get; private set; } = Brush("#98632C");
-    public static Brush SyntaxComment { get; private set; } = Brush("#6A8473");
-    public static Brush SyntaxNumber { get; private set; } = Brush("#7A3E9D");
-    public static Brush SyntaxType { get; private set; } = Brush("#0B7285");
-
-    // ─── gutter ───
-    public static Brush Gutter { get; private set; } = Brush("#F7F8FA");
-    public static Brush Caret { get; private set; } = Brush("#254E86");
-
-    // ─── hex ───
-    public static Brush HexMuted { get; private set; } = Brush("#8793A4");
-    public static Brush HexDiff { get; private set; } = Brush("#A52D22");
-
-    private static readonly Brush Light = Brush("#F1F3F7");
-
-    public static void SetDark(bool dark)
+    static Theme()
     {
-        if (IsDark == dark) return;
-        IsDark = dark;
-        if (dark)
+        // Scan for theme-*.json in the themes/ directory beside the exe.
+        string themesDir = Path.Combine(AppContext.BaseDirectory, "themes");
+        if (Directory.Exists(themesDir))
+            foreach (string file in Directory.GetFiles(themesDir, "theme-*.json"))
+                LoadTheme(file);
+        // Always ensure at least a default light theme is available.
+        if (!Themes.ContainsKey("Light"))
+            Themes["Light"] = BuiltInLight();
+        if (!Themes.ContainsKey("Dark"))
+            Themes["Dark"] = BuiltInDark();
+        Apply("Light");
+    }
+
+    private static void LoadTheme(string path)
+    {
+        try
         {
-            WindowBackground = Brush("#1E1E2E");
-            PanelBackground = Brush("#2A2A3C");
-            PanelHeader = Brush("#333348");
-            Border = Brush("#3D3D52");
-            Ink = Brush("#CDD6F4");
-            Muted = Brush("#6C7086");
-            Accent = Brush("#89B4FA");
-            AccentText = Brush("#1E1E2E");
-            DiffModified = Brush("#4A4A38");
-            DiffDeleted = Brush("#453038");
-            DiffInserted = Brush("#2F4A3A");
-            DiffGhost = Brush("#333344");
-            DiffSelected = Brush("#3B4A6B");
-            ChangedText = Brush("#F38BA8");
-            ChangedBackground = Brush("#5B3A48");
-            ModifiedBar = Brush("#FAB387");
-            DeletedBar = Brush("#EBA0AC");
-            InsertedBar = Brush("#A6E3A1");
-            SyntaxKeyword = Brush("#89B4FA");
-            SyntaxString = Brush("#F9E2AF");
-            SyntaxComment = Brush("#6C7086");
-            SyntaxNumber = Brush("#F5C2E7");
-            SyntaxType = Brush("#94E2D5");
-            Gutter = Brush("#252535");
-            Caret = Brush("#89B4FA");
-            HexMuted = Brush("#6C7086");
-            HexDiff = Brush("#F38BA8");
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            string name = doc.RootElement.GetProperty("name").GetString() ?? "Custom";
+            var colors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in doc.RootElement.GetProperty("colors").EnumerateObject())
+                colors[prop.Name] = prop.Value.GetString() ?? "#000000";
+            Themes[name] = colors;
         }
-        else
-        {
-            WindowBackground = Brush("#F1F3F7");
-            PanelBackground = Brushes.White;
-            PanelHeader = Brush("#E8ECF2");
-            Border = Brush("#DDE3EC");
-            Ink = Brush("#253041");
-            Muted = Brush("#8793A4");
-            Accent = Brush("#3569AE");
-            AccentText = Brushes.White;
-            DiffModified = Brush("#FFF6D6");
-            DiffDeleted = Brush("#FFF0F0");
-            DiffInserted = Brush("#ECF7EF");
-            DiffGhost = Brush("#F2F4F7");
-            DiffSelected = Brush("#D9E8FF");
-            ChangedText = Brush("#A52D22");
-            ChangedBackground = Brush("#FFD4BC");
-            ModifiedBar = Brush("#EAA05B");
-            DeletedBar = Brush("#D76565");
-            InsertedBar = Brush("#65A67F");
-            SyntaxKeyword = Brush("#2E60AA");
-            SyntaxString = Brush("#98632C");
-            SyntaxComment = Brush("#6A8473");
-            SyntaxNumber = Brush("#7A3E9D");
-            SyntaxType = Brush("#0B7285");
-            Gutter = Brush("#F7F8FA");
-            Caret = Brush("#254E86");
-            HexMuted = Brush("#8793A4");
-            HexDiff = Brush("#A52D22");
-        }
+        catch { /* malformed theme files are skipped; other themes still load */ }
+    }
+
+    public static void Apply(string name)
+    {
+        if (!Themes.TryGetValue(name, out var colors)) return;
+        CurrentName = name;
+        _colors = colors.ToDictionary(kvp => kvp.Key, kvp => Parse(kvp.Value), StringComparer.OrdinalIgnoreCase);
         Changed?.Invoke();
     }
 
-    private static Brush Brush(string color) => (Brush)new BrushConverter().ConvertFromString(color)!;
+    /// <summary>Toggle between light and dark (the most common use case).</summary>
+    public static void SetDark(bool dark) => Apply(dark ? "Dark" : "Light");
+
+    private static Brush Get(string name) =>
+        _colors.TryGetValue(name, out var brush) ? brush : Brushes.Black;
+
+    private static Brush Parse(string hex) =>
+        (Brush)new BrushConverter().ConvertFromString(hex)!;
+
+    // ─── built-in fallbacks (only used if theme files are missing) ───
+    private static Dictionary<string, string> BuiltInLight() => new()
+    {
+        ["WindowBackground"] = "#F1F3F7", ["PanelBackground"] = "#FFFFFF", ["PanelHeader"] = "#E8ECF2",
+        ["Border"] = "#DDE3EC", ["Ink"] = "#253041", ["Muted"] = "#8793A4",
+        ["Accent"] = "#3569AE", ["AccentText"] = "#FFFFFF",
+        ["DiffModified"] = "#FFF6D6", ["DiffDeleted"] = "#FFF0F0", ["DiffInserted"] = "#ECF7EF",
+        ["DiffGhost"] = "#F2F4F7", ["DiffSelected"] = "#D9E8FF",
+        ["ChangedText"] = "#A52D22", ["ChangedBackground"] = "#FFD4BC",
+        ["ModifiedBar"] = "#EAA05B", ["DeletedBar"] = "#D76565", ["InsertedBar"] = "#65A67F",
+        ["SyntaxKeyword"] = "#2E60AA", ["SyntaxString"] = "#98632C", ["SyntaxComment"] = "#6A8473",
+        ["SyntaxNumber"] = "#7A3E9D", ["SyntaxType"] = "#0B7285",
+        ["Gutter"] = "#F7F8FA", ["Caret"] = "#254E86",
+    };
+
+    private static Dictionary<string, string> BuiltInDark() => new()
+    {
+        ["WindowBackground"] = "#1E1E2E", ["PanelBackground"] = "#2A2A3C", ["PanelHeader"] = "#333348",
+        ["Border"] = "#3D3D52", ["Ink"] = "#CDD6F4", ["Muted"] = "#6C7086",
+        ["Accent"] = "#89B4FA", ["AccentText"] = "#1E1E2E",
+        ["DiffModified"] = "#4A4A38", ["DiffDeleted"] = "#453038", ["DiffInserted"] = "#2F4A3A",
+        ["DiffGhost"] = "#333344", ["DiffSelected"] = "#3B4A6B",
+        ["ChangedText"] = "#F38BA8", ["ChangedBackground"] = "#5B3A48",
+        ["ModifiedBar"] = "#FAB387", ["DeletedBar"] = "#EBA0AC", ["InsertedBar"] = "#A6E3A1",
+        ["SyntaxKeyword"] = "#89B4FA", ["SyntaxString"] = "#F9E2AF", ["SyntaxComment"] = "#6C7086",
+        ["SyntaxNumber"] = "#F5C2E7", ["SyntaxType"] = "#94E2D5",
+        ["Gutter"] = "#252535", ["Caret"] = "#89B4FA",
+    };
 }

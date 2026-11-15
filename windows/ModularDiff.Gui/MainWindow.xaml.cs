@@ -579,11 +579,11 @@ public partial class MainWindow : Window
     }
     private void ThemeToggleClick(object sender, RoutedEventArgs e)
     {
-        ModularDiff.Gui.Controls.Theme.SetDark(!ModularDiff.Gui.Controls.Theme.IsDark);
-        ThemeToggle.Content = ModularDiff.Gui.Controls.Theme.IsDark ? "" : "";
+        ModularDiff.Gui.Controls.Theme.SetDark(ModularDiff.Gui.Controls.Theme.CurrentName != "Dark");
+        ThemeToggle.Content = ModularDiff.Gui.Controls.Theme.CurrentName == "Dark" ? "\uE708" : "\uE706";
         Background = ModularDiff.Gui.Controls.Theme.WindowBackground;
         LeftCode.InvalidateVisual(); RightCode.InvalidateVisual();
-        StatusLabel.Text = ModularDiff.Gui.Controls.Theme.IsDark ? "已切换到深色主题。" : "已切换到浅色主题。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Theme.CurrentName == "Dark" ? "已切换到深色主题。" : "已切换到浅色主题。";
     }
 
     private void ShowEolClick(object sender, RoutedEventArgs e)

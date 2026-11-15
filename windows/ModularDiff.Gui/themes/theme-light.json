@@ -1,0 +1,15 @@
+{
+  "name": "Light",
+  "colors": {
+    "WindowBackground": "#F1F3F7", "PanelBackground": "#FFFFFF", "PanelHeader": "#E8ECF2",
+    "Border": "#DDE3EC", "Ink": "#253041", "Muted": "#8793A4",
+    "Accent": "#3569AE", "AccentText": "#FFFFFF",
+    "DiffModified": "#FFF6D6", "DiffDeleted": "#FFF0F0", "DiffInserted": "#ECF7EF",
+    "DiffGhost": "#F2F4F7", "DiffSelected": "#D9E8FF",
+    "ChangedText": "#A52D22", "ChangedBackground": "#FFD4BC",
+    "ModifiedBar": "#EAA05B", "DeletedBar": "#D76565", "InsertedBar": "#65A67F",
+    "SyntaxKeyword": "#2E60AA", "SyntaxString": "#98632C", "SyntaxComment": "#6A8473",
+    "SyntaxNumber": "#7A3E9D", "SyntaxType": "#0B7285",
+    "Gutter": "#F7F8FA", "Caret": "#254E86"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Dark",
+  "colors": {
+    "WindowBackground": "#1E1E2E", "PanelBackground": "#2A2A3C", "PanelHeader": "#333348",
+    "Border": "#3D3D52", "Ink": "#CDD6F4", "Muted": "#6C7086",
+    "Accent": "#89B4FA", "AccentText": "#1E1E2E",
+    "DiffModified": "#4A4A38", "DiffDeleted": "#453038", "DiffInserted": "#2F4A3A",
+    "DiffGhost": "#333344", "DiffSelected": "#3B4A6B",
+    "ChangedText": "#F38BA8", "ChangedBackground": "#5B3A48",
+    "ModifiedBar": "#FAB387", "DeletedBar": "#EBA0AC", "InsertedBar": "#A6E3A1",
+    "SyntaxKeyword": "#89B4FA", "SyntaxString": "#F9E2AF", "SyntaxComment": "#6C7086",
+    "SyntaxNumber": "#F5C2E7", "SyntaxType": "#94E2D5",
+    "Gutter": "#252535", "Caret": "#89B4FA"
+  }
+}
