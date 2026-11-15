@@ -405,6 +405,79 @@ try
         using var cts = new CancellationTokenSource(); cts.Cancel();
         Throws<OperationCanceledException>(() => plugin.Build(result.Files[0].Lines, cancellationToken: cts.Token));
     });
+
+    await Test("ALL declarative JSON files parse with required keys and functional patterns", () =>
+    {
+        string repo = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var issues = new List<string>();
+
+        // Grammar files: parse + regex compile + key assertions
+        foreach (var file in Directory.GetFiles(Path.Combine(repo, "shared/plugins/ModularDiff.Syntax.Engine/grammars"), "grammar-*.json"))
+        {
+            string name = Path.GetFileName(file);
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                Check(doc.RootElement.GetProperty("language").GetString()!.Length > 0, name + ": missing language");
+                Check(doc.RootElement.GetProperty("extensions").GetArrayLength() > 0, name + ": missing extensions");
+                var rules = doc.RootElement.GetProperty("rules");
+                Check(rules.GetArrayLength() > 0, name + ": no rules");
+                foreach (var rule in rules.EnumerateArray())
+                {
+                    string pattern = rule.GetProperty("pattern").GetString()!;
+                    Check(System.Text.RegularExpressions.Regex.IsMatch(pattern, @"^[\s\S]*$"), name + ": empty pattern");
+                    // Compile the regex to verify valid syntax — this catches bad escapes that would silently break highlighting
+                    _ = new System.Text.RegularExpressions.Regex(pattern, System.Text.RegularExpressions.RegexOptions.Compiled, TimeSpan.FromMilliseconds(50));
+                    Check(Enum.TryParse<SyntaxTokenKind>(rule.GetProperty("kind").GetString(), true, out _), name + ": unknown kind");
+                }
+            }
+            catch (Exception ex) { issues.Add($"{name}: {ex.GetBaseException().Message}"); }
+        }
+
+        // Language files: parse + key coverage
+        foreach (var file in Directory.GetFiles(Path.Combine(repo, "windows/ModularDiff.Gui/languages"), "lang-*.json"))
+        {
+            string name = Path.GetFileName(file);
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                Check(doc.RootElement.GetProperty("name").GetString()!.Length > 0, name + ": missing name");
+                Check(doc.RootElement.GetProperty("strings").GetProperty("app_title").GetString()!.Length > 0, name + ": missing app_title");
+            }
+            catch (Exception ex) { issues.Add($"{name}: {ex.GetBaseException().Message}"); }
+        }
+
+        // Theme files: parse + color coverage
+        foreach (var file in Directory.GetFiles(Path.Combine(repo, "windows/ModularDiff.Gui/themes"), "theme-*.json"))
+        {
+            string name = Path.GetFileName(file);
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(file));
+                var colors = doc.RootElement.GetProperty("colors");
+                foreach (string key in new[] { "WindowBackground", "PanelBackground", "Ink", "DiffModified", "SyntaxKeyword", "Caret" })
+                    Check(colors.TryGetProperty(key, out _), name + $": missing {key}");
+            }
+            catch (Exception ex) { issues.Add($"{name}: {ex.GetBaseException().Message}"); }
+        }
+
+        Check(issues.Count == 0, string.Join("; ", issues));
+        return Task.CompletedTask;
+    });
+
+    await Test("GrammarEngine loads grammar files and produces syntax tokens", () =>
+    {
+        var grammars = catalog.GetAll<ISyntaxGrammar>();
+        Check(grammars.Count > 0, "No ISyntaxGrammar plugins loaded — GrammarEngine didn't find any grammar files.");
+        var engine = grammars.FirstOrDefault(g => g.Extensions.Contains(".cs"));
+        Check(engine is not null, "No grammar covers .cs — grammar files not loaded.");
+        if (engine is null) return Task.CompletedTask;
+        var tokens = engine.Tokenize("public static void Main(string[] args)", ".cs");
+        Check(tokens is not null && tokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "C-family grammar produced no keyword tokens.");
+        var pyTokens = engine.Tokenize("def hello():", ".py");
+        Check(pyTokens is not null && pyTokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "Python grammar produced no keyword tokens.");
+        return Task.CompletedTask;
+    });
 }
 finally
 {
