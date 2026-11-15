@@ -31,6 +31,10 @@ public interface ISyntaxGrammar : IPlugin
     /// <summary>声明式规则集（编译前的原始定义）。</summary>
     IReadOnlyList<GrammarRule> Rules { get; }
 
+    /// <summary>加载声明式语法文件时的错误（文件名 + 行号 + 原因）；空列表 = 全部正常。
+    /// 宿主在启动时汇总显示，用户可直接修正文件。</summary>
+    IReadOnlyList<string> LoadDiagnostics { get; }
+
     /// <summary>对一行文本返回着色令牌；null 表示该扩展名不支持。</summary>
     IReadOnlyList<SyntaxToken>? Tokenize(string line, string extension);
 }

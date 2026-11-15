@@ -40,6 +40,7 @@ public partial class MainWindow : Window
         Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
         _plugins = App.Plugins;
         LocalizeUI();   // shared catalog — loaded once at App startup, disposed on exit
+        ReportDeclarativeFileIssues();
         _engine = new(_plugins);
         _session = new(_plugins);
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
@@ -586,6 +587,26 @@ public partial class MainWindow : Window
         int current = System.Linq.Enumerable.ToList(available).IndexOf(ModularDiff.Gui.Controls.Lang.CurrentName); int next = (current + 1) % available.Count;
         ModularDiff.Gui.Controls.Lang.Apply(available[next]);
         LocalizeUI();
+    }
+
+    /// <summary>Surfaces grammar/theme/language file load errors to the user instead of silently
+    /// skipping them — each engine reports file, line, column so problems are immediately fixable.</summary>
+    private void ReportDeclarativeFileIssues()
+    {
+        var issues = new List<string>();
+        // Grammar files (via ISyntaxGrammar.LoadDiagnostics — works for any syntax plugin)
+        foreach (var grammar in _plugins.GetAll<ISyntaxGrammar>())
+            issues.AddRange(grammar.LoadDiagnostics);
+        // Language packs
+        issues.AddRange(Controls.Lang.LoadDiagnostics);
+        // Theme files
+        issues.AddRange(Controls.Theme.LoadDiagnostics);
+        if (issues.Count > 0)
+        {
+            string joined = string.Join("\n  ", issues);
+            StatusLabel.Text = $"⚠ {issues.Count} 个声明式文件加载失败（语法/主题/语言包）";
+            MessageBox.Show(this, "以下文件已跳过，其余正常加载：\n  " + joined, "声明式文件诊断", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     /// <summary>Routes the most visible UI text through the active language pack so a switch is instant.</summary>

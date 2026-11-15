@@ -15,6 +15,9 @@ public static class Lang
     public static event Action? Changed;
 
     public static IReadOnlyList<string> Available => [.. Packs.Keys];
+    /// <summary>Per-file load errors (e.g. "lang-fr.json: line 3 — missing 'strings'").</summary>
+    private static readonly List<string> _loadDiagnostics = [];
+    public static IReadOnlyList<string> LoadDiagnostics => _loadDiagnostics;
 
     /// <summary>Get a localized string; returns the key itself if no translation found.</summary>
     public static string Get(string key) =>
@@ -41,7 +44,14 @@ public static class Lang
                 strings[prop.Name] = prop.Value.GetString() ?? "";
             Packs[name] = strings;
         }
-        catch { /* malformed language files are skipped */ }
+        catch (System.Text.Json.JsonException ex)
+        {
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行 — {ex.Message}");
+        }
+        catch (KeyNotFoundException ex)
+        {
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
+        }
     }
 
     public static void Apply(string name)

@@ -9,7 +9,8 @@ namespace ModularDiff.Syntax.Engine;
 /// <summary>Generic declarative syntax engine: reads grammar-*.json files from the package
 /// directory, compiles regex rules, and tokenizes lines per extension. Adding a language
 /// means dropping a new grammar JSON file — no engine changes, no recompilation.
-/// Implements both ISyntaxGrammar (pure syntax) and IFileTypeProvider (integration).</summary>
+/// Malformed files are reported in LoadDiagnostics (file, line, column) instead of silently
+/// skipped, so the host can surface an actionable warning to the user.</summary>
 public sealed class GrammarEngine : ISyntaxGrammar
 {
     private readonly Dictionary<string, List<(Regex Pattern, SyntaxTokenKind Kind)>> _compiled = new(StringComparer.OrdinalIgnoreCase);
@@ -20,15 +21,30 @@ public sealed class GrammarEngine : ISyntaxGrammar
     public IReadOnlyList<string> Extensions => [.. _compiled.Keys];
     public string LanguageName => "Auto";
     public IReadOnlyList<GrammarRule> Rules { get; } = [];
+    /// <summary>Per-file load errors (e.g. "grammar-python.json: Invalid escape at line 8 col 5").</summary>
+    private readonly List<string> _loadDiagnostics = [];
+    public IReadOnlyList<string> LoadDiagnostics => _loadDiagnostics;
 
     public GrammarEngine()
     {
+        var diagnostics = _loadDiagnostics;
         string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? ".";
         string grammarDir = Path.Combine(dir, "grammars");
         if (!Directory.Exists(grammarDir)) grammarDir = dir;
         foreach (string file in Directory.GetFiles(grammarDir, "grammar-*.json"))
             try { Load(File.ReadAllText(file)); }
-            catch { /* skip malformed grammar files; other grammars still load */ }
+            catch (JsonException ex)
+            {
+                diagnostics.Add($"{Path.GetFileName(file)}: 第 {ex.LineNumber + 1} 行第 {ex.BytePositionInLine} 列 — {ex.Message}");
+            }
+            catch (ArgumentException ex) // bad regex pattern
+            {
+                diagnostics.Add($"{Path.GetFileName(file)}: 正则无效 — {ex.Message}");
+            }
+            catch (KeyNotFoundException ex)
+            {
+                diagnostics.Add($"{Path.GetFileName(file)}: 缺少必需字段 — {ex.Message}");
+            }
     }
 
     private void Load(string json)
@@ -48,7 +64,10 @@ public sealed class GrammarEngine : ISyntaxGrammar
             string kindStr = rule.GetProperty("kind").GetString() ?? "Default";
             int priority = rule.TryGetProperty("priority", out var p) ? p.GetInt32() : 5;
             if (Enum.TryParse<SyntaxTokenKind>(kindStr, true, out var kind))
-                rules.Add((priority, pattern, kind));
+                _ = new Regex(pattern, RegexOptions.Compiled, TimeSpan.FromMilliseconds(50)); // fail fast on bad escapes
+            else
+                throw new KeyNotFoundException($"rules[].kind '{kindStr}' 不是有效的 SyntaxTokenKind");
+            rules.Add((priority, pattern, kind));
         }
         foreach (string extension in _compiled.Keys.Where(e => _languageNames[e] == language).ToList())
         {

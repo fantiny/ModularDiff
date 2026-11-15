@@ -43,6 +43,9 @@ public static class Theme
     public static Brush Caret => Get("Caret");
 
     public static IReadOnlyList<string> Available => [.. Themes.Keys];
+    /// <summary>Per-file load errors (e.g. "theme-nord.json: line 5 — invalid color").</summary>
+    private static readonly List<string> _loadDiagnostics = [];
+    public static IReadOnlyList<string> LoadDiagnostics => _loadDiagnostics;
 
     static Theme()
     {
@@ -70,7 +73,18 @@ public static class Theme
                 colors[prop.Name] = prop.Value.GetString() ?? "#000000";
             Themes[name] = colors;
         }
-        catch { /* malformed theme files are skipped; other themes still load */ }
+        catch (System.Text.Json.JsonException ex)
+        {
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行 — {ex.Message}");
+        }
+        catch (KeyNotFoundException ex)
+        {
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
+        }
+        catch (FormatException ex)
+        {
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 颜色值无效 — {ex.Message}");
+        }
     }
 
     public static void Apply(string name)
