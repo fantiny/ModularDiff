@@ -317,6 +317,37 @@ try
     wildWindow.Close();
 }
 finally { Directory.Delete(wildRoot, recursive: true); }
+// 声明式文件加载诊断:塞一个坏语法 JSON → GrammarEngine 报行列,其余正常。
+string badGrammarRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-badgrammar-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(badGrammarRoot);
+try
+{
+    foreach (var dir in Directory.GetDirectories(pluginsPath))   // 复制真实插件根(勿硬编码 Unix 路径,Windows 会落到盘符根)
+    {
+        string target = Path.Combine(badGrammarRoot, Path.GetFileName(dir));
+        Directory.CreateDirectory(target);
+        foreach (var entry in Directory.GetFileSystemEntries(dir))
+        {
+            string name = Path.GetFileName(entry);
+            if (Directory.Exists(entry)) Directory.CreateDirectory(Path.Combine(target, name));   // grammars 等子目录:建壳,内部文件逐个拷
+            else File.Copy(entry, Path.Combine(target, name));
+        }
+        string grammarSource = Path.Combine(dir, "grammars");
+        if (Directory.Exists(grammarSource))
+            foreach (var file in Directory.GetFiles(grammarSource, "*.json"))
+                File.Copy(file, Path.Combine(target, "grammars", Path.GetFileName(file)));
+    }
+    File.WriteAllText(Path.Combine(badGrammarRoot, "ModularDiff.Syntax.Engine", "grammars", "grammar-broken.json"),
+        "{\n  \"language\": \"Broken\", \"extensions\": [\".broken\"],\n  \"rules\": [ { \"pattern\": \"[unclosed\", \"kind\": \"Keyword\" } ]\n}");
+    using (var badCatalog = PluginCatalog.Load(badGrammarRoot))
+    {
+        Check(badCatalog.Diagnostics.Count == 0, $"broken grammar does not kill the package ({string.Join(";", badCatalog.Diagnostics)})");
+        var engine = badCatalog.GetAll<ISyntaxGrammar>().Single();
+        Check((engine.Tokenize("class Calculator {}", ".cs")?.Count ?? 0) > 0, "other grammars still tokenize alongside the broken one");
+        Check(engine.LoadDiagnostics.Any(d => d.Contains("grammar-broken.json")), $"diagnostics name the broken file ({string.Join(",", engine.LoadDiagnostics)})");
+    }
+}
+finally { try { Directory.Delete(badGrammarRoot, recursive: true); } catch { } }   // Windows 下已加载插件 DLL 仍锁定,删除失败不判失败
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);

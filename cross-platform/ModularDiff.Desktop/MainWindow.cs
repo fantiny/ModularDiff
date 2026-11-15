@@ -234,9 +234,16 @@ public sealed class MainWindow : Window
         if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics); _toolbar.IsEnabled = false; }
         else
         {
-            // 声明式文件(语言包/主题)的加载诊断:非致命,提示但不禁用工具栏。
-            var declarative = Lang.Diagnostics.Concat(Palette.Diagnostics).ToList();
-            _status.Text = declarative.Count > 0 ? string.Join("\n", declarative) : $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
+            // 声明式文件(语法文法/语言包/主题)加载失败要报告而不是静默跳过 —— 状态栏计数,对话框逐文件给出行列与原因。
+            var issues = _plugins.GetAll<ISyntaxGrammar>().SelectMany(g => g.LoadDiagnostics)
+                .Concat(Lang.LoadDiagnostics).Concat(Palette.Diagnostics).ToList();
+            if (issues.Count > 0)
+            {
+                _status.Text = $"⚠ {issues.Count} 个声明式文件加载失败（语法/语言包/主题）· 其余正常";
+                Opened += (_, _) => Run(async () => await Ask("声明式文件诊断",
+                    "以下文件已跳过，其余正常加载：\n\n" + string.Join("\n", issues), ["关闭"]));
+            }
+            else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
         }
         this.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, (_, e) =>
         {
