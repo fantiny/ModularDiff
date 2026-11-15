@@ -2,4 +2,5 @@
   <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF></PropertyGroup>
   <ItemGroup><ProjectReference Include="../../shared/ModularDiff.Core/ModularDiff.Core.csproj" /></ItemGroup>
   <ItemGroup><Content Include="themes\*.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><Content Include="languages\*.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>

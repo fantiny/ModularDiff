@@ -38,7 +38,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         int cascade = Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移，避免完全叠加难发现
         Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
-        _plugins = App.Plugins;   // shared catalog — loaded once at App startup, disposed on exit
+        _plugins = App.Plugins;
+        LocalizeUI();   // shared catalog — loaded once at App startup, disposed on exit
         _engine = new(_plugins);
         _session = new(_plugins);
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
@@ -577,6 +578,30 @@ public partial class MainWindow : Window
         var node = files[(index + direction + files.Length) % files.Length];
         await OpenNode(node);
     }
+
+    private void LangToggleClick(object sender, RoutedEventArgs e)
+    {
+        var available = ModularDiff.Gui.Controls.Lang.Available;
+        if (available.Count == 0) return;
+        int current = System.Linq.Enumerable.ToList(available).IndexOf(ModularDiff.Gui.Controls.Lang.CurrentName); int next = (current + 1) % available.Count;
+        ModularDiff.Gui.Controls.Lang.Apply(available[next]);
+        LocalizeUI();
+    }
+
+    /// <summary>Routes the most visible UI text through the active language pack so a switch is instant.</summary>
+    private void LocalizeUI()
+    {
+        // Lang is a static class — use it directly.
+        Title = ModularDiff.Gui.Controls.Lang.Get("app_title");
+        FolderTab.Content = ModularDiff.Gui.Controls.Lang.Get("folder_tab");
+        SaveLeftButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("save_left");
+        SaveRightButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("save_right");
+        CompareButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("compare_button");
+        CancelButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("cancel_button");
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_ready");
+        LangToggle.Content = ModularDiff.Gui.Controls.Lang.CurrentCode == "zh-CN" ? "EN" : "中文";
+    }
+
     private void ThemeToggleClick(object sender, RoutedEventArgs e)
     {
         ModularDiff.Gui.Controls.Theme.SetDark(ModularDiff.Gui.Controls.Theme.CurrentName != "Dark");
