@@ -46,9 +46,15 @@ public sealed class App : Application
     }
     private static string ResolvePluginRoot()
     {
-        var candidates = new[] { "../plugins", "../Resources/plugins", "../PlugIns" }
-            .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)));
-        return candidates.FirstOrDefault(Directory.Exists) ?? candidates.First();
+        // APFS 大小写不敏感:"../plugins" 会命中 PlugIns(只有 appex)。
+        // 必须以"目录里真的有 plugin.json"为准,不能只看 Directory.Exists。
+        var candidates = new[] { "../Resources/plugins", "../plugins", "../PlugIns" }
+            .Select(rel => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, rel)))
+            .Where(Directory.Exists)
+            .ToList();
+        return candidates.FirstOrDefault(d => Directory.EnumerateFiles(d, "plugin.json", SearchOption.AllDirectories).Any())
+            ?? candidates.FirstOrDefault()
+            ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Resources", "plugins"));
     }
 }
 internal static class SingleInstance
