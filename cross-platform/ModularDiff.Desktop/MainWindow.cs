@@ -63,6 +63,15 @@ public sealed class MainWindow : Window
         _toolbar.Children.Add(Button("⌗", "格式化本侧：按最近聚焦的一侧，应用代码格式化插件（如 CSS 规范格式化）", FormatSide));
         _toolbar.Children.Add(Button("◈", "不重要差异规则：每行一条正则，匹配文本（如 $Id$、时间戳、版本号）不产生差异块", EditRules));
         _toolbar.Children.Add(Button("💾", "保存当前比较为命名会话（左右路径 + 算法 + 忽略规则）", () => Run(SaveSession)));
+        Button themeButton = new() { Content = Palette.IsDark ? "☀" : "🌙", MinWidth = 32, Padding = new Thickness(8, 4) };
+        ToolTip.SetTip(themeButton, "深色 / 浅色主题切换");
+        themeButton.Click += (_, _) =>
+        {
+            Palette.SetDark(!Palette.IsDark);
+            RequestedThemeVariant = Palette.IsDark ? Avalonia.Styling.ThemeVariant.Dark : Avalonia.Styling.ThemeVariant.Light;
+            themeButton.Content = Palette.IsDark ? "☀" : "🌙";
+        };
+        _toolbar.Children.Add(themeButton);
         ToolTip.SetTip(_sessionBox, "命名会话：选择后载入并比较"); ToolTip.SetTip(_recentBox, "最近比较（自动记录，去重，最多 10 条）");
         _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_sessionBox.SelectedIndex >= 0 && _sessions.Named.Count > _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex]); _sessionBox.SelectedIndex = -1; });
         _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_recentBox.SelectedIndex >= 0 && _sessions.Recent.Count > _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex]); _recentBox.SelectedIndex = -1; });
@@ -211,6 +220,7 @@ public sealed class MainWindow : Window
             if (e.Key == Avalonia.Input.Key.Escape && _awaitingAlignTarget)
             { _awaitingAlignTarget = false; _status.Text = "已取消手动对齐。"; e.Handled = true; }
         });
+        if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
     /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
@@ -768,7 +778,25 @@ public sealed class MainWindow : Window
         SessionStore.Save(_sessions);
         RefreshSessions();
     }
-    private async Task OpenFile(string left, string right) { _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false; await _session.LoadAsync(left, right); RefreshEditors(); _tabs.SelectedIndex = 0; }
+    private async Task OpenFile(string left, string right)
+    {
+        _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false;
+        await _session.LoadAsync(left, right);
+        WireSyntax(left, right);
+        RefreshEditors(); _tabs.SelectedIndex = 0;
+    }
+    /// <summary>按扩展名把 IFileTypeProvider.HighlightLine 接到视图两侧的语法着色。</summary>
+    private void WireSyntax(string leftPath, string rightPath)
+    {
+        _rows.SyntaxLeft = SyntaxFor(leftPath);
+        _rows.SyntaxRight = SyntaxFor(rightPath);
+    }
+    private Func<string, IReadOnlyList<SyntaxToken>?>? SyntaxFor(string path)
+    {
+        string extension = Path.GetExtension(path);
+        var provider = _plugins.GetAll<IFileTypeProvider>().FirstOrDefault(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+        return provider is null ? null : line => provider.HighlightLine(line);
+    }
     /// <summary>十六进制视图:16 字节/行并排 dump,与任一差异字节段重叠的行着色,自动定位首个差异行(单侧最多 1MB)。</summary>
     private void ShowHex(string left, string right, FileComparison file)
     {

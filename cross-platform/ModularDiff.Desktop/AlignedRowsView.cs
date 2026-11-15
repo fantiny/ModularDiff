@@ -17,15 +17,6 @@ public sealed class AlignedRowsView : Control
     private const double NumberWidth = 46, TextSize = 13, MarkerWidth = 54;
     private static readonly FontFamily Mono = new("Cascadia Code,Menlo,DejaVu Sans Mono,monospace");
     private static readonly Typeface Typeface = new(Mono);
-    private static readonly IBrush Number = new SolidColorBrush(Color.Parse("#8793A4"));
-    private static readonly IBrush Ink = new SolidColorBrush(Color.Parse("#253041"));
-    private static readonly IBrush Ghost = new SolidColorBrush(Color.Parse("#F2F4F7"));
-    private static readonly IBrush Deleted = new SolidColorBrush(Color.Parse("#FFF0F0"));
-    private static readonly IBrush Inserted = new SolidColorBrush(Color.Parse("#ECF7EF"));
-    private static readonly IBrush Modified = new SolidColorBrush(Color.Parse("#FFF0E9"));
-    private static readonly IBrush Selected = new SolidColorBrush(Color.Parse("#D9E8FF"));
-    private static readonly IBrush Word = new SolidColorBrush(Color.Parse("#FFD4BC"));
-    private static readonly IBrush TextSelect = new SolidColorBrush(Color.FromArgb(0x80, 0x33, 0x99, 0xFF));
 
     private IReadOnlyList<AlignedRow> _rows = [];
     private (int Row, int Column, bool Left)? _textAnchor, _textHead;
@@ -36,7 +27,11 @@ public sealed class AlignedRowsView : Control
     private bool _vertical;
     private readonly Dictionary<int, int> _bookmarks = new();
 
-    public AlignedRowsView() => Focusable = true;
+    public AlignedRowsView()
+    {
+        Focusable = true;
+        Palette.Changed += InvalidateVisual;
+    }
     /// <summary>上下布局(true=左右两侧改为上下两栏);渲染与命中统一走 Band 几何。</summary>
     public bool Vertical { get => _vertical; set { if (_vertical == value) return; _vertical = value; InvalidateMeasure(); InvalidateVisual(); } }
     private Rect Band(int row, bool left)
@@ -62,6 +57,8 @@ public sealed class AlignedRowsView : Control
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
     public int PrimarySelected => _primary;
     /// <summary>行文本区左键(请求就地编辑):(行, 作用左/右侧)。</summary>
+    /// <summary>语法着色(按侧):null=默认墨色。宿主按文件扩展名从 IFileTypeProvider 接入。</summary>
+    public Func<string, IReadOnlyList<SyntaxToken>?>? SyntaxLeft, SyntaxRight;
     public event Action<AlignedRow, bool>? EditRequested;
     /// <summary>右键任意位置(宿主按行+侧构建换行等菜单,并调用 OpenMenu 挂到本控件)。</summary>
     public event Action<AlignedRow, bool>? MenuRequested;
@@ -93,12 +90,11 @@ public sealed class AlignedRowsView : Control
         Rect band = Band(index, left);
         return new Rect(band.X + NumberWidth, band.Y, band.Width - NumberWidth, RowHeight);
     }
-    private static readonly IBrush BookmarkBrush = new SolidColorBrush(Color.Parse("#8AB4FF"));
     private void DrawBookmark(DrawingContext context, int index, int digit)
     {
         Rect band = Band(index, true);
         var rect = new Rect(band.X + 1, band.Y + 3, 14, RowHeight - 6);
-        context.FillRectangle(BookmarkBrush, rect, 3);
+        context.FillRectangle(Palette.Bookmark, rect, 3);
         var label = new FormattedText(digit.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 9, Brushes.White);
         context.DrawText(label, new Point(rect.X + (rect.Width - label.Width) / 2, rect.Y + 2));
     }
@@ -179,7 +175,7 @@ public sealed class AlignedRowsView : Control
                 double textX = band.X + NumberWidth;
                 double x0 = i == from.Row ? textX + from.Column * CharWidth : textX;
                 double x1 = i == to.Row ? textX + to.Column * CharWidth : band.Right;
-                context.FillRectangle(TextSelect, new Rect(Math.Min(x0, x1), band.Y + 1, Math.Max(2, Math.Abs(x1 - x0)), RowHeight - 2), 2);
+                context.FillRectangle(Palette.TextSelection, new Rect(Math.Min(x0, x1), band.Y + 1, Math.Max(2, Math.Abs(x1 - x0)), RowHeight - 2), 2);
             }
         }
     }
@@ -187,19 +183,19 @@ public sealed class AlignedRowsView : Control
     {
         TextCell? cell = left ? row.Left : row.Right;
         Rect band = Band(index, left);
-        IBrush? tint = cell is null ? Ghost
-            : row.IsDifferent ? (left ? (row.Right is null ? Deleted : Modified) : (row.Left is null ? Inserted : Modified))
+        IBrush? tint = cell is null ? Palette.Ghost
+            : row.IsDifferent ? (left ? (row.Right is null ? Palette.Deleted : Palette.Modified) : (row.Left is null ? Palette.Inserted : Palette.Modified))
             : null;
         if (_selected.Contains(index))
         {
-            context.FillRectangle(Selected, band);
+            context.FillRectangle(Palette.Selected, band);
             if (tint is not null)
                 using (context.PushOpacity(0.45))
                     context.FillRectangle(tint, band);   // 选中时差异色以 45% 叠加
         }
         else if (tint is not null) context.FillRectangle(tint, band);
         if (cell is null) return;
-        var number = new FormattedText(cell.LineNumber.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 11, Number);
+        var number = new FormattedText(cell.LineNumber.ToString(CultureInfo.InvariantCulture), CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 11, Palette.Number);
         context.DrawText(number, new Point(band.X + NumberWidth - 8 - number.Width, band.Y + 4));
         // 性能关键:FormattedText 会对整行做排版,压缩文件的超长行(数万字符)会让每次重绘卡几秒。
         // 只对"视口内可见的前缀"排版与绘制,其余截断;词级高亮同样按可见前缀裁剪。
@@ -211,23 +207,53 @@ public sealed class AlignedRowsView : Control
         {
             int start = Math.Clamp(span.Start, 0, drawn.Length), length = Math.Clamp(span.Length, 0, drawn.Length - start);
             if (length <= 0) continue;
-                context.FillRectangle(Word, new Rect(textX + start * charWidth, band.Y + 2, length * charWidth, RowHeight - 5), 2);
+                context.FillRectangle(Palette.Word, new Rect(textX + start * charWidth, band.Y + 2, length * charWidth, RowHeight - 5), 2);
         }
-        var text = new FormattedText(drawn, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink);
-        context.DrawText(text, new Point(textX, band.Y + (RowHeight - TextSize * 1.35) / 2));   // 与居中编辑器的文本基线对齐
+        // 语法着色:令牌分彩段绘制(等宽字体按字符宽推进,避免逐字符排版开销)
+        var syntax = (left ? SyntaxLeft : SyntaxRight)?.Invoke(cell.Text);
+        double y = band.Y + (RowHeight - TextSize * 1.35) / 2;   // 与居中编辑器的文本基线对齐
+        if (syntax is { Count: > 0 })
+        {
+            int cursor = 0;
+            foreach (var token in syntax)
+            {
+                int start = Math.Clamp(token.Start, 0, drawn.Length), length = Math.Clamp(token.Length, 0, drawn.Length - start);
+                if (start > cursor)
+                    context.DrawText(new FormattedText(drawn[cursor..start], CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Ink), new Point(textX + cursor * charWidth, y));
+                if (length > 0)
+                    context.DrawText(new FormattedText(drawn[start..(start + length)], CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, TokenBrush(token.Kind)), new Point(textX + start * charWidth, y));
+                cursor = Math.Max(cursor, start + length);
+            }
+            if (cursor < drawn.Length)
+                context.DrawText(new FormattedText(drawn[cursor..], CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Ink), new Point(textX + cursor * charWidth, y));
+        }
+        else
+        {
+            var text = new FormattedText(drawn, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Ink);
+            context.DrawText(text, new Point(textX, y));
+        }
         if (cell.Text.Length > drawn.Length)
         {
-            var more = new FormattedText("…", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Number);
+            var more = new FormattedText("…", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Number);
             context.DrawText(more, new Point(textX + drawn.Length * charWidth, band.Y + 3));
         }
         if (cell.Ending is "CRLF" or "CR")
         {
-            var marker = new FormattedText(cell.Ending == "CRLF" ? "⏎CRLF" : "⏎CR", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 10, Number);
+            var marker = new FormattedText(cell.Ending == "CRLF" ? "⏎CRLF" : "⏎CR", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, 10, Palette.Number);
             context.DrawText(marker, new Point(band.Right - MarkerWidth + 4, band.Y + 5));
         }
     }
+    private static IBrush TokenBrush(SyntaxTokenKind kind) => kind switch
+    {
+        SyntaxTokenKind.Keyword => Palette.Keyword,
+        SyntaxTokenKind.String => Palette.String,
+        SyntaxTokenKind.Comment => Palette.Comment,
+        SyntaxTokenKind.Number => Palette.NumberBrush,
+        SyntaxTokenKind.Type => Palette.Type,
+        _ => Palette.Operator,
+    };
     private static double _charWidth;
-    private static double CharWidth => _charWidth != 0 ? _charWidth : _charWidth = new FormattedText("M", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Ink).Width;
+    private static double CharWidth => _charWidth != 0 ? _charWidth : _charWidth = new FormattedText("M", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Ink).Width;
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {

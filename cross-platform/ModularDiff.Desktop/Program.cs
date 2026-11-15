@@ -27,6 +27,17 @@ public sealed class App : Application
 
             // 单实例多窗口：Finder/服务重复调用时把参数转发给已运行实例,由它开新窗口(macOS 的 open --args 不会送达已运行应用)。
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnLastWindowClose;
+            // git mergetool 模式:专用进程、不开多窗口 IPC;窗口关闭时写 MERGED 并按冲突状态给退出码(0=干净 / 1=有冲突)。
+            int mergeDash = Array.IndexOf(args, "--git-merge");
+            if (mergeDash >= 0 && args.Length - mergeDash - 1 >= 4)
+            {
+                var mergeWindow = new MergeWindow(args[mergeDash + 1], args[mergeDash + 2], args[mergeDash + 3])
+                { GitOutputPath = args[mergeDash + 4] };
+                mergeWindow.GitMergeCompleted += resolved => Environment.ExitCode = resolved ? 0 : 1;
+                desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
+                desktop.MainWindow = mergeWindow;
+                return;
+            }
             if (SingleInstance.TryForward(args)) { Environment.Exit(0); return; }
             SingleInstance.Start(ipcArgs => Dispatcher.UIThread.Post(() => new MainWindow(ipcArgs).Show()));
             desktop.MainWindow = new MainWindow(args);

@@ -20,7 +20,7 @@ var window = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(ui
 window.Show();
 Check(window.Content is Grid && window.IsVisible, "Avalonia window initializes on headless platform");
 var deadline = DateTime.UtcNow.AddSeconds(15);
-while (!(window.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && DateTime.UtcNow < deadline))
+while (!window.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && DateTime.UtcNow < deadline)
 { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10); }
 Console.WriteLine(string.Join(" | ", ((Grid)window.Content!).Children.OfType<TextBlock>().Select(t => t.Text)));
 Check(window.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0), "GUI compare populates aligned rows");
@@ -179,6 +179,106 @@ try
     opsWindow.Close();
 }
 finally { Directory.Delete(opsRoot, recursive: true); }
+// Align With/Isolate + 文件类型操作 + 十六进制就地编辑(程序化钩子)。
+string ftRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ft-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(ftRoot);
+try
+{
+    // 对齐提示:默认相似配对 p↔P/q↔Q,提示后强制 p↔Q。
+    File.WriteAllText(Path.Combine(ftRoot, "al.txt"), "a\np\nq\nz\n");
+    File.WriteAllText(Path.Combine(ftRoot, "ar.txt"), "a\nP\nQ\nz\n");
+    var alignWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(ftRoot, "al.txt"), "--right", Path.Combine(ftRoot, "ar.txt"), "--auto-compare"]);
+    alignWindow.Show();
+    var alignReady = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < alignReady) { Dispatcher.UIThread.RunJobs(); alignWindow.UpdateLayout(); Thread.Sleep(10);
+        if (alignWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var alignView = alignWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    var pairedBefore = alignView.Rows.First(r => r.Left?.Text == "p").Right?.Text;
+    alignWindow.AddAlignmentHint(2, 3);   // 左行2(p) ↔ 右行3(Q)
+    var alignView2 = alignWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    var after = alignView2.Rows.First(r => r.Left?.Text == "p").Right?.Text;
+    Check(after == "Q", $"alignment hint re-pairs p with Q (before={pairedBefore}, after={after})");
+    foreach (var save in alignWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+        save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var alignSave = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < alignSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+    alignWindow.Close();
+
+    // 文件类型插件:.json 侧出现 JSON 工具;执行"压缩 JSON"改变内容
+    File.WriteAllText(Path.Combine(ftRoot, "l.json"), "{\n  \"b\": 1,\n  \"a\": 2\n}\n");
+    File.WriteAllText(Path.Combine(ftRoot, "r.json"), "{\"b\":1,\"a\":2}");
+    var jsonWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(ftRoot, "l.json"), "--right", Path.Combine(ftRoot, "r.json"), "--auto-compare"]);
+    jsonWindow.Show();
+    var jsonReady = DateTime.UtcNow.AddSeconds(10);
+    while (DateTime.UtcNow < jsonReady) { Dispatcher.UIThread.RunJobs(); jsonWindow.UpdateLayout(); Thread.Sleep(10);
+        if (jsonWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var labels = jsonWindow.FileTypeActionLabels(true);
+    Check(labels.Any(l => l.Contains("JSON") && l.Contains("压缩")), $"json filetype actions offered ({string.Join(",", labels)})");
+    int compactIndex = labels.Select((l, i) => (l, i)).First(t => t.l.Contains("压缩")).i;
+    jsonWindow.RunFileTypeAction(true, compactIndex);
+    jsonWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true)
+        .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var jsonRealign = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < jsonRealign) { Dispatcher.UIThread.RunJobs(); jsonWindow.UpdateLayout(); Thread.Sleep(10); }
+    var jsonView = jsonWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    Check(jsonView.Rows.Any(r => r.Left?.Text.Trim() == "{\"b\":1,\"a\":2}"), "compact-json transform ran on left side");
+    foreach (var save in jsonWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+        save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var jsonSave = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < jsonSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+    jsonWindow.Close();
+}
+finally { try { Directory.Delete(ftRoot, recursive: true); } catch { } }
+// 三方合并窗口 + 语法着色 + 深色主题。
+string mergeRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-merge-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(mergeRoot);
+try
+{
+    File.WriteAllText(Path.Combine(mergeRoot, "base.txt"), "common\nkeep\n");
+    File.WriteAllText(Path.Combine(mergeRoot, "local.txt"), "common\nmine\n");
+    File.WriteAllText(Path.Combine(mergeRoot, "remote.txt"), "common\ntheirs\n");
+    File.WriteAllText(Path.Combine(mergeRoot, "merged.txt"), "");
+    MergeWindow mergeWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins) { GitOutputPath = Path.Combine(mergeRoot, "merged.txt") };
+    mergeWindow.Show();
+    var mergeReady = DateTime.UtcNow.AddSeconds(8);
+    while (DateTime.UtcNow < mergeReady) { Dispatcher.UIThread.RunJobs(); mergeWindow.UpdateLayout(); Thread.Sleep(10);
+        if ((mergeWindow.Content as Grid)?.Children.OfType<TextBox>().Any(t => t.Text?.Contains("<<<<<<<") == true) == true) break; }
+    mergeWindow.Repaint();
+    Check(mergeWindow.ConflictCount == 1, $"one conflict detected (got {mergeWindow.ConflictCount})");
+    mergeWindow.Take(useRight: false);   // 采用左侧(mine)
+    Check(mergeWindow.ConflictCount == 0, "conflict resolved by taking left");
+    bool? completion = null;
+    mergeWindow.GitMergeCompleted += resolved => completion = resolved;
+    mergeWindow.SaveToOutput();
+    mergeWindow.Close();
+    var mergeClosed = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < mergeClosed) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+    Check(File.ReadAllText(Path.Combine(mergeRoot, "merged.txt")).Replace("\r\n", "\n").TrimEnd('\n') + "\n" == "common\nmine\n", "git merge output written (took left)");
+    Check(completion == true, "GitMergeCompleted reports conflict-free");
+
+    // 语法着色接线:.cs 侧有 provider,函数返回关键字令牌
+    File.WriteAllText(Path.Combine(mergeRoot, "a.cs"), "class A { string s; }\n");
+    File.WriteAllText(Path.Combine(mergeRoot, "b.cs"), "class B { int i; }\n");
+    var syntaxWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(mergeRoot, "a.cs"), "--right", Path.Combine(mergeRoot, "b.cs"), "--auto-compare"]);
+    syntaxWindow.Show();
+    var syntaxReady = DateTime.UtcNow.AddSeconds(8);
+    while (DateTime.UtcNow < syntaxReady) { Dispatcher.UIThread.RunJobs(); syntaxWindow.UpdateLayout(); Thread.Sleep(10);
+        if (syntaxWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var syntaxView = syntaxWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    Check(syntaxView.SyntaxLeft is not null, "syntax provider wired for .cs side");
+    var tokens = syntaxView.SyntaxLeft!("class A { string s; }");
+    Check(tokens is { Count: > 0 } && tokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "csharp highlighter returns keyword tokens");
+    // 深色主题切换:调色板翻转 + 持久化
+    bool wasDark = ModularDiff.Desktop.Palette.IsDark;
+    ModularDiff.Desktop.Palette.SetDark(!wasDark);
+    Check(ModularDiff.Desktop.Palette.IsDark != wasDark, "palette toggles");
+    string settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Settings.json");
+    Check(File.Exists(settingsPath), "theme persisted to settings.json");
+    ModularDiff.Desktop.Palette.SetDark(wasDark);   // 还原
+    Dispatcher.UIThread.RunJobs(); syntaxWindow.UpdateLayout();
+    syntaxWindow.Close();
+}
+finally { Directory.Delete(mergeRoot, recursive: true); }
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);
@@ -193,6 +293,18 @@ try
         if (hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
     var hexStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
     Check(hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && hexStatus.Contains("十六进制"), "binary pair renders hex view");
+    // 就地编辑:把左侧第 8 字节改成与右侧相同的 0x7b → 保存 → 两文件一致
+    hexWindow.BeginEditRow(0, true);
+    var hexEditor = hexWindow.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor" && t.IsVisible);
+    Check(hexEditor is not null, "hex inline editor visible");
+    hexEditor!.Text = "4d 5a 90 00 03 ff fe 7b e9 80 11 b8";
+    Dispatcher.UIThread.RunJobs();
+    hexWindow.SaveHexEdit();
+    var hexSaved = DateTime.UtcNow.AddSeconds(5);
+    while (DateTime.UtcNow < hexSaved) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); Thread.Sleep(10); }
+    Check(File.ReadAllBytes(Path.Combine(binRoot, "a.bin"))[7] == 0x7b, "hex edit written to disk");
+    var identicalStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
+    Check(identicalStatus.Contains("相同"), $"reloaded hex shows identical (status: {identicalStatus[..Math.Min(70, identicalStatus.Length)]})");
     hexWindow.Close();
 }
 finally { Directory.Delete(binRoot, recursive: true); }
