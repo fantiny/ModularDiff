@@ -323,9 +323,28 @@ public partial class MainWindow : Window
     }
     private static readonly HashSet<string> PictureExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
 
+    /// <summary>Routes the current file's extension to a syntax highlighter from the
+    /// IFileTypeProvider plugins and installs it on both DiffPanes.</summary>
+    private void UpdateSyntaxHighlighter()
+    {
+        string? path = _textFile?.RelativePath is { } rel ? rel : _activeSession?.LeftPath;
+        if (string.IsNullOrWhiteSpace(path)) { LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = null; return; }
+        string extension = System.IO.Path.GetExtension(path);
+        var highlighter = _plugins.GetAll<IFileTypeProvider>()
+            .FirstOrDefault(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase));
+        if (highlighter is not null)
+        {
+            Func<string, IReadOnlyList<SyntaxToken>> tokenizer = line => highlighter.HighlightLine(line) ?? [];
+            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = tokenizer;
+        }
+        else
+            LeftCode.SyntaxHighlighter = RightCode.SyntaxHighlighter = null;
+    }
+
     private async Task RebuildPresentation(CancellationToken token = default, bool preservePosition = false)
     {
         var file = _textFile; if (file is null) return;
+        UpdateSyntaxHighlighter();
         if (file.IsBinary)
         {
             if (PictureExtensions.Contains(Path.GetExtension(_fileResult?.LeftPath ?? ""))) await ShowPictureAsync(file);
@@ -549,6 +568,15 @@ public partial class MainWindow : Window
         var node = files[(index + direction + files.Length) % files.Length];
         await OpenNode(node);
     }
+    private void ThemeToggleClick(object sender, RoutedEventArgs e)
+    {
+        ModularDiff.Gui.Controls.Theme.SetDark(!ModularDiff.Gui.Controls.Theme.IsDark);
+        ThemeToggle.Content = ModularDiff.Gui.Controls.Theme.IsDark ? "" : "";
+        Background = ModularDiff.Gui.Controls.Theme.WindowBackground;
+        LeftCode.InvalidateVisual(); RightCode.InvalidateVisual();
+        StatusLabel.Text = ModularDiff.Gui.Controls.Theme.IsDark ? "已切换到深色主题。" : "已切换到浅色主题。";
+    }
+
     private void ShowEolClick(object sender, RoutedEventArgs e)
     { LeftCode.ShowEndings = RightCode.ShowEndings = ShowEol.IsChecked == true; LeftCode.InvalidateVisual(); RightCode.InvalidateVisual(); }
     private void WrapChanged(object sender, RoutedEventArgs e)

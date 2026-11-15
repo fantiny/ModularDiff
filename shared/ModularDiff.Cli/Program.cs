@@ -14,6 +14,7 @@ try
               ModularDiff.Cli plugins [--plugins PATH]
               ModularDiff.Cli compare LEFT RIGHT [options]
               ModularDiff.Cli merge BASE LEFT RIGHT [--output PATH]
+              ModularDiff.Cli git setup [--gui PATH] [--global]   Configure as git difftool/mergetool
 
             Options:
               --algorithm myers|patience    Algorithm plugin ID (default myers)
@@ -35,7 +36,37 @@ try
         return 0;
     }
     var command = args[0];
-    if (command is not ("plugins" or "compare" or "merge")) throw new ArgumentException($"Unknown command: {command}");
+    if (command is not ("plugins" or "compare" or "merge" or "git")) throw new ArgumentException($"Unknown command: {command}");
+    if (command == "git")
+    {
+        if (args.Length < 2 || args[1] is not "setup") throw new ArgumentException("Usage: ModularDiff.Cli git setup [--gui PATH] [--global]");
+        string cliExe = Environment.ProcessPath ?? throw new IOException("Cannot determine CLI path.");
+        string guiExe = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(cliExe)!, "..", "gui", "ModularDiff.Gui.exe"));
+        for (int i = 2; i < args.Length - 1; i++)
+            if (args[i] == "--gui") guiExe = Path.GetFullPath(args[i + 1]);
+        string scope = args.Contains("--global") ? " --global" : "";
+        string cli = cliExe.Replace("\\", "/");
+        string gui = guiExe.Replace("\\", "/");
+        void GitConfig(string key, string value)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("git", $"config{scope} {key} \"{value}\"")
+            { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            using var proc = System.Diagnostics.Process.Start(psi)!;
+            proc.WaitForExit(5000);
+            if (proc.ExitCode != 0) Console.Error.WriteLine($"git config {key}: {proc.StandardError.ReadToEnd().Trim()}");
+        }
+        GitConfig("difftool.modulardiff.cmd", $"\\\"{cli}\\\" compare \\\"$LOCAL\\\" \\\"$REMOTE\\\"");
+        GitConfig("difftool.prompt", "false");
+        GitConfig("diff.tool", "modulardiff");
+        GitConfig("mergetool.modulardiff.cmd", $"\\\"{gui}\\\" --git-merge \\\"$BASE\\\" \\\"$LOCAL\\\" \\\"$REMOTE\\\" \\\"$MERGED\\\"");
+        GitConfig("mergetool.modulardiff.trustExitCode", "true");
+        GitConfig("merge.tool", "modulardiff");
+        Console.WriteLine("Git integration configured" + (args.Contains("--global") ? " (global)" : " (local)") + ":");
+        Console.WriteLine($"  diff.tool   = modulardiff");
+        Console.WriteLine($"  merge.tool  = modulardiff");
+        Console.WriteLine("Run 'git difftool' or resolve a conflict to try it.");
+        return 0;
+    }
     int start = command == "merge" ? 4 : command == "compare" ? 3 : 1;
     if (command == "merge" && args.Length < 4) throw new ArgumentException("merge requires BASE LEFT RIGHT paths.");
     if (args.Length < start) throw new ArgumentException("compare requires LEFT and RIGHT paths.");

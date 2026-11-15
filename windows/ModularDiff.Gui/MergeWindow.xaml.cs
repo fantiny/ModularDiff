@@ -23,14 +23,30 @@ public partial class MergeWindow : Window
     private int _currentConflict = -1;
     private List<(int Start, int Middle, int End)> _conflicts = [];
 
+    /// <summary>Git mergetool support: when set, the window auto-saves to this path on close
+    /// and fires GitMergeCompleted with the resolution state.</summary>
+    public string? GitOutputPath { get; init; }
+    public event Action<bool>? GitMergeCompleted;
+
     private readonly PluginCatalog _plugins;
 
     public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null)
     {
         _baseArg = basePath; _leftArg = leftPath; _rightArg = rightPath;
-        _plugins = App.Plugins;   // shared catalog
-        Closed += (_, _) => _plugins.Dispose();
+        _plugins = App.Plugins;   // shared catalog, disposed by App
         InitializeComponent();
+        if (GitOutputPath is not null)
+            Closing += (_, _) =>
+            {
+                try
+                {
+                    var text = new TextRange(Result.Document.ContentStart, Result.Document.ContentEnd).Text;
+                    string resolved = text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
+                    File.WriteAllText(GitOutputPath, resolved);
+                    GitMergeCompleted?.Invoke(_conflicts.Count == 0);
+                }
+                catch { GitMergeCompleted?.Invoke(false); }
+            };
         Loaded += async (_, _) =>
         {
             if (_baseArg is not null) BasePath.Text = _baseArg;

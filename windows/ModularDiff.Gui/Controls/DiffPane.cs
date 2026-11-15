@@ -42,10 +42,24 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
         if (Palette.TryGetValue(color, out var brush)) return brush;
         brush = (Brush)new BrushConverter().ConvertFromString(color)!; brush.Freeze(); Palette.Add(color, brush); return brush;
     }
-    private static readonly Brush Ink = Brush("#253041"), Muted = Brush("#8793A4"), Border = Brush("#DEE3EA"), Ghost = Brush("#F2F4F7"), Selected = Brush("#D9E8FF");
-    private static readonly Brush Modified = Brush("#FFF6D6"), Deleted = Brush("#FFF0F0"), Inserted = Brush("#ECF7EF"), ChangedText = Brush("#A52D22"), ChangedBackground = Brush("#FFD4BC");
+    // Colors route through the Theme so dark mode is a single switch.
+    private static Brush Ink => Theme.Ink;
+    private static Brush Muted => Theme.Muted;
+    private static Brush Border => Theme.Border;
+    private static Brush Ghost => Theme.DiffGhost;
+    private static Brush Selected => Theme.DiffSelected;
+    private static Brush Modified => Theme.DiffModified;
+    private static Brush Deleted => Theme.DiffDeleted;
+    private static Brush Inserted => Theme.DiffInserted;
+    private static Brush ChangedText => Theme.ChangedText;
+    private static Brush ChangedBackground => Theme.ChangedBackground;
     public bool IsLeft { get; set; }
     public bool ShowEndings { get; set; } = true;
+
+    /// <summary>External syntax highlighter: maps a line to colored spans. When null, the
+    /// built-in C-style keyword regex is used. The host sets this based on the file extension
+    /// and the available IFileTypeProvider plugins.</summary>
+    public Func<string, IReadOnlyList<Contracts.SyntaxToken>>? SyntaxHighlighter { get; set; }
     public double RowHeight => Math.Ceiling(_fontSize * 1.55);
     public int SelectedRow => _selected;
     public IReadOnlyList<AlignedRow> Rows => _rows;
@@ -177,7 +191,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
     protected override void OnRender(DrawingContext dc)
     {
         base.OnRender(dc);
-        dc.DrawRectangle(Brushes.White, null, new Rect(RenderSize));
+        dc.DrawRectangle(Theme.PanelBackground, null, new Rect(RenderSize));
         if (_rows.Count == 0) { DrawFinalCaretRow(dc); dc.DrawLine(new Pen(Border, 1), new(54, 0), new(54, RenderSize.Height)); return; }
         int first = FirstVisibleRow;
         for (int i = first; i < _rows.Count; i++)
@@ -247,13 +261,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
             string slice = expanded[charStart..charEnd];
             double textX = 64;
             var formatted = Format(slice, Ink);
-            try
-            {
-                foreach (Match match in Syntax.Matches(slice))
-                    formatted.SetForegroundBrush(match.Value.StartsWith("//", StringComparison.Ordinal) ? Brush("#6A8473")
-                        : match.Value.StartsWith('"') ? Brush("#98632C") : Brush("#2E60AA"), match.Index, match.Length);
-            }
-            catch (RegexMatchTimeoutException) { /* Highlighting is optional; content still renders. */ }
+            ApplySyntax(formatted, slice);
             foreach (var span in cell.Highlights)
             {
                 int from = Math.Clamp(positions[Math.Clamp(span.Start, 0, cell.Text.Length)], colStart, colEnd);
@@ -310,13 +318,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
             return;
         }
         var formatted = Format(text, Ink);
-        try
-        {
-            foreach (Match match in Syntax.Matches(text))
-                formatted.SetForegroundBrush(match.Value.StartsWith("//", StringComparison.Ordinal) ? Brush("#6A8473")
-                    : match.Value.StartsWith('"') ? Brush("#98632C") : Brush("#2E60AA"), match.Index, match.Length);
-        }
-        catch (RegexMatchTimeoutException) { /* Highlighting is optional; content still renders. */ }
+        ApplySyntax(formatted, text);
         foreach (var span in cell.Highlights)
         {
             int start = positions[Math.Clamp(span.Start, 0, cell.Text.Length)];
@@ -336,6 +338,37 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
         }
     }
     private FormattedText Format(string text, Brush brush, double? size = null) => new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Typeface, size ?? _fontSize, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+
+    /// <summary>Applies syntax coloring to a formatted text run: uses the external
+    /// SyntaxHighlighter when set (per-file-type plugins), otherwise the built-in regex.</summary>
+    private void ApplySyntax(FormattedText formatted, string text)
+    {
+        if (SyntaxHighlighter is not null)
+        {
+            foreach (var token in SyntaxHighlighter(text))
+                formatted.SetForegroundBrush(TokenBrush(token.Kind), token.Start, token.Length);
+            return;
+        }
+        try
+        {
+            foreach (Match match in Syntax.Matches(text))
+                formatted.SetForegroundBrush(match.Value.StartsWith("//", StringComparison.Ordinal) ? Brush("#6A8473")
+                    : match.Value.StartsWith('"') ? Brush("#98632C") : Brush("#2E60AA"), match.Index, match.Length);
+        }
+        catch (RegexMatchTimeoutException) { /* Highlighting is optional; content still renders. */ }
+    }
+
+    private static Brush TokenBrush(Contracts.SyntaxTokenKind kind) => kind switch
+    {
+        Contracts.SyntaxTokenKind.Keyword => Theme.SyntaxKeyword,
+        Contracts.SyntaxTokenKind.String => Theme.SyntaxString,
+        Contracts.SyntaxTokenKind.Comment => Theme.SyntaxComment,
+        Contracts.SyntaxTokenKind.Number => Theme.SyntaxNumber,
+        Contracts.SyntaxTokenKind.Type => Theme.SyntaxType,
+        Contracts.SyntaxTokenKind.Operator => Theme.Muted,
+        _ => Theme.Ink,
+    };
+
     protected override Size MeasureOverride(Size availableSize) => new(double.IsInfinity(availableSize.Width) ? 600 : availableSize.Width, double.IsInfinity(availableSize.Height) ? 500 : availableSize.Height);
     protected override Size ArrangeOverride(Size finalSize)
     {

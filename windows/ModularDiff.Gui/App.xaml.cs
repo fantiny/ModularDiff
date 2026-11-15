@@ -32,6 +32,14 @@ public partial class App : Application
                 new MergeWindow(args[1], args[2], args[3]).Show();
                 return;
             }
+            if (args.Length == 5 && args[0] == "--git-merge")
+            {
+                // Git mergetool protocol: BASE LOCAL REMOTE MERGED — auto-save to MERGED, exit by conflict state.
+                var merge = new MergeWindow(args[1], args[2], args[3]) { GitOutputPath = args[4] };
+                merge.GitMergeCompleted += resolved => { Shutdown(resolved ? 0 : 1); };
+                merge.Show();
+                return;
+            }
             new MainWindow(args).Show();
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ModularDiff startup error"); Shutdown(2); }
