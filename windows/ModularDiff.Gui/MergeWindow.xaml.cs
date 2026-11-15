@@ -20,11 +20,14 @@ public partial class MergeWindow : Window
     private static Brush RightBack => Controls.Theme.DiffInserted;
     private readonly string? _baseArg, _leftArg, _rightArg;
     private bool _painting;
+    private bool _everMerged;
     private int _currentConflict = -1;
     private List<(int Start, int Middle, int End)> _conflicts = [];
 
     /// <summary>Git mergetool support: when set, the window auto-saves to this path on close
-    /// and fires GitMergeCompleted with the resolution state.</summary>
+    /// and fires GitMergeCompleted with the resolution state. Closing before any merge ran
+    /// is fail-closed: MERGED is left untouched (git keeps its own conflict version) and the
+    /// exit code stays non-zero — an empty result never silently counts as "resolved".</summary>
     public string? GitOutputPath { get; init; }
     public event Action<bool>? GitMergeCompleted;
 
@@ -38,6 +41,7 @@ public partial class MergeWindow : Window
         if (GitOutputPath is not null)
             Closing += (_, _) =>
             {
+                if (!_everMerged) { GitMergeCompleted?.Invoke(false); return; }
                 try
                 {
                     var text = new TextRange(Result.Document.ContentStart, Result.Document.ContentEnd).Text;
@@ -89,6 +93,7 @@ public partial class MergeWindow : Window
                 Result.Document.Blocks.Add(new Paragraph(new Run(line)) { Margin = new(0, 0, 0, 0) });
             _painting = false;
             PaintConflicts();
+            _everMerged = true;
             StatusLabel.Text = merged.Clean ? "合并完成：无冲突，结果可直接保存。" : $"合并完成：{merged.Conflicts} 处冲突（黄色=左侧，绿色=右侧），逐个决策后保存。";
         }
         catch (Exception ex) { StatusLabel.Text = "合并失败：" + ex.Message; }

@@ -6,7 +6,17 @@ using Avalonia.Themes.Fluent;
 namespace ModularDiff.Desktop;
 internal static class Program
 {
-    [STAThread] public static void Main(string[] args) => AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
+    [STAThread]
+    public static void Main(string[] args)
+    {
+        // 未处理异常 → 确定性退出码 1:git mergetool 模式下崩溃绝不能以 0 退出(会被当作"合并成功")。
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            System.Diagnostics.Trace.WriteLine($"ModularDiff unhandled exception: {e.ExceptionObject}");
+            Environment.ExitCode = 1;
+        };
+        AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
+    }
 }
 public sealed class App : Application
 {
@@ -24,6 +34,7 @@ public sealed class App : Application
             for (int i = 0; i < args.Length - 1; i++)
                 if (args[i] == "--plugins") { pluginArg = args[i + 1]; break; }
             Plugins = ModularDiff.Core.PluginCatalog.Load(pluginArg ?? ResolvePluginRoot());
+            desktop.Exit += (_, _) => Plugins?.Dispose();   // 共享目录随进程退出销毁,不由单个窗口 Dispose
 
             // 单实例多窗口：Finder/服务重复调用时把参数转发给已运行实例,由它开新窗口(macOS 的 open --args 不会送达已运行应用)。
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnLastWindowClose;

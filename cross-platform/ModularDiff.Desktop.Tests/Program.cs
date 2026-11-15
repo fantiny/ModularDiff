@@ -150,12 +150,14 @@ try
     var opsView = opsWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
     var opsRealign = opsWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true);
     void OpsRealign() { opsRealign.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent)); var until = DateTime.UtcNow.AddSeconds(5); while (DateTime.UtcNow < until) { Dispatcher.UIThread.RunJobs(); opsWindow.UpdateLayout(); Thread.Sleep(10); } }
-    // Tab → 空格(作用于默认聚焦的左侧)
-    opsWindow.TransformSide(1);
+    // 文本转换走插件发现(.txt → 通配 GenericFileTools):Tab → 空格、修剪行尾空白
+    var opsLabels = opsWindow.FileTypeActionLabels(true);
+    Check(opsLabels.Any(l => l.Contains("Tab → 空格")) && opsLabels.Any(l => l.Contains("修剪")), $"generic transforms discovered from plugin ({string.Join(",", opsLabels)})");
+    opsWindow.RunFileTypeAction(true, opsLabels.Select((l, i) => (l, i)).First(t => t.l.Contains("Tab → 空格")).i);
     OpsRealign();
     Check(opsView.Rows.Any(r => r.Left?.Text == "    indented"), "tabs-to-spaces transform lands on left side");
     // 修剪行尾空白
-    opsWindow.TransformSide(0);
+    opsWindow.RunFileTypeAction(true, opsLabels.Select((l, i) => (l, i)).First(t => t.l.Contains("修剪")).i);
     OpsRealign();
     Check(!opsView.Rows.Any(r => r.Left?.Text == "trail "), "trailing whitespace trimmed");
     // 布局切换:上下分栏时右侧行带在左侧行带下方
@@ -256,6 +258,15 @@ try
     Check(File.ReadAllText(Path.Combine(mergeRoot, "merged.txt")).Replace("\r\n", "\n").TrimEnd('\n') + "\n" == "common\nmine\n", "git merge output written (took left)");
     Check(completion == true, "GitMergeCompleted reports conflict-free");
 
+    // M1 回归:从未执行合并就关闭 → fail-closed,不覆盖 MERGED(git 保留自己的冲突版本),回报未解决
+    File.WriteAllText(Path.Combine(mergeRoot, "merged2.txt"), "<<<<<<< git conflict version\n");
+    MergeWindow earlyWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins) { GitOutputPath = Path.Combine(mergeRoot, "merged2.txt") };
+    bool? earlyCompletion = null;
+    earlyWindow.GitMergeCompleted += resolved => earlyCompletion = resolved;
+    earlyWindow.SaveToOutput();   // 尚未合并(Opened 自动合并在 Show 之后才会发生)
+    Check(earlyCompletion == false && File.ReadAllText(Path.Combine(mergeRoot, "merged2.txt")) == "<<<<<<< git conflict version\n",
+        "premature close is fail-closed: MERGED untouched, exit state unresolved");
+
     // 语法着色接线:.cs 侧有 provider,函数返回关键字令牌
     File.WriteAllText(Path.Combine(mergeRoot, "a.cs"), "class A { string s; }\n");
     File.WriteAllText(Path.Combine(mergeRoot, "b.cs"), "class B { int i; }\n");
@@ -272,6 +283,10 @@ try
     bool wasDark = ModularDiff.Desktop.Palette.IsDark;
     ModularDiff.Desktop.Palette.SetDark(!wasDark);
     Check(ModularDiff.Desktop.Palette.IsDark != wasDark, "palette toggles");
+    // TH1 回归:颜色取自声明式 theme-dark.json(与 WPF 同文件,#4A4A38),而非内置兜底(#3B2E20)
+    ModularDiff.Desktop.Palette.SetDark(true);
+    string darkModified = ModularDiff.Desktop.Palette.Modified.ToString() ?? "";
+    Check(darkModified.Contains("4A4A38", StringComparison.OrdinalIgnoreCase), $"dark palette colors come from theme-dark.json (got {darkModified})");
     string settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Settings.json");
     Check(File.Exists(settingsPath), "theme persisted to settings.json");
     ModularDiff.Desktop.Palette.SetDark(wasDark);   // 还原

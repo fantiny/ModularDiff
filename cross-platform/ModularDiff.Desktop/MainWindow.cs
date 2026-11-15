@@ -14,6 +14,7 @@ namespace ModularDiff.Desktop;
 public sealed class MainWindow : Window
 {
     private readonly PluginCatalog _plugins;
+    private readonly bool _ownsPlugins;
     private readonly ComparisonSession _session;
     private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
@@ -30,7 +31,6 @@ public sealed class MainWindow : Window
     private void ApplyLanguage()
     {
         Title = Lang.Get("md_title");
-        _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Header = Lang.Get("md_tab_diff");
         foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
     }
@@ -59,10 +59,11 @@ public sealed class MainWindow : Window
         int cascade = System.Threading.Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移,避免完全叠加难发现
         Position = new PixelPoint(70 + (cascade % 12) * 36, 46 + (cascade % 12) * 30);
         string? Arg(string key) { int i = Array.IndexOf(args, key); return i >= 0 && i + 1 < args.Length ? args[i + 1] : null; }
+        _ownsPlugins = App.Plugins is null;   // 共享目录归 App 管(多窗口复用);仅自加载时窗口才负责 Dispose
         _plugins = App.Plugins ?? PluginCatalog.Load(Arg("--plugins") ?? ResolvePluginRoot());   // shared when App is active; self-load in tests
         _session = new(_plugins);
         _leftPath.Text = Arg("--left"); _rightPath.Text = Arg("--right");
-        _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = "myers";
+        _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = FirstAlgorithmId();
         Tip(_algorithm, "md_tip_algo");
         _toolbar.Children.Add(Button("▶", Lang.Get("md_tip_compare"), () => Run(Compare)));
         _toolbar.Children.Add(Button("⟳", Lang.Get("md_tip_realign"), Realign));
@@ -155,16 +156,10 @@ public sealed class MainWindow : Window
                 section.Click += (_, _) => _rows.SelectHunk(row);
                 var goTo = new MenuItem { Header = Lang.Get("md_menu_goto_line") };
                 goTo.Click += (_, _) => Run(GoToLineAsync);
-                var transforms = new MenuItem { Header = $"转换（{(left ? "左" : "右")}侧）" };
-                foreach (var (name, kind) in new[] { ("修剪行尾空白", 0), ("Tab → 空格", 1), ("前导空格 → Tab", 2), ("行尾 LF ⇄ CRLF", 3) })
-                {
-                    int chosen = kind;
-                    var item = new MenuItem { Header = name };
-                    item.Click += (_, _) => Run(async () => TransformSide(chosen));
-                    transforms.Items.Add(item);
-                }
                 menu.Items.Add(lineCopy); menu.Items.Add(selectionCopy); menu.Items.Add(section); menu.Items.Add(goTo);
-                menu.Items.Add(transforms); menu.Items.Add(new Separator());
+                menu.Items.Add(new Separator());
+                // 文本转换(修剪空白/Tab/行尾等)由 IFileTypeProvider 插件提供 —— GenericFileTools 通配 "*" 覆盖全部扩展名,
+                // 走下方 FileTypeMenus 的插件发现,宿主不再硬编码转换实现。
             }
             if (HexMode)
             {
@@ -224,7 +219,7 @@ public sealed class MainWindow : Window
         root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status, 3); root.Children.Add(_status); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
         _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = ex.Message; } };
-        _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? "myers"; _rows.Rows = []; _debounce.Start(); };
+        _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? FirstAlgorithmId(); _rows.Rows = []; _debounce.Start(); };
         Closing += async (_, e) =>
         {
             if (_allowClose) return;
@@ -235,9 +230,14 @@ public sealed class MainWindow : Window
             catch (Exception ex) { _status.Text = "保存失败，窗口保持打开：" + ex.Message; }
             finally { _closePending = false; }
         };
-        Closed += (_, _) => { _debounce.Stop(); _plugins.Dispose(); System.Threading.Interlocked.Decrement(ref _windowCount); };
+        Closed += (_, _) => { _debounce.Stop(); if (_ownsPlugins) _plugins.Dispose(); System.Threading.Interlocked.Decrement(ref _windowCount); };
         if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics); _toolbar.IsEnabled = false; }
-        else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
+        else
+        {
+            // 声明式文件(语言包/主题)的加载诊断:非致命,提示但不禁用工具栏。
+            var declarative = Lang.Diagnostics.Concat(Palette.Diagnostics).ToList();
+            _status.Text = declarative.Count > 0 ? string.Join("\n", declarative) : $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
+        }
         this.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, (_, e) =>
         {
             if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
@@ -250,6 +250,8 @@ public sealed class MainWindow : Window
         ApplyLanguage();
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
+    /// <summary>默认比较算法:取目录中第一个算法插件("myers" 仅为空目录时的兜底,不再硬编码为指定算法)。</summary>
+    private string FirstAlgorithmId() => _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault()?.Id ?? "myers";
     /// <summary>Fallback plugin root when App hasn't initialized (headless tests).</summary>
     private static string ResolvePluginRoot()
     {
@@ -283,30 +285,6 @@ public sealed class MainWindow : Window
             menu.Items.Add(item);
         }
         return menu;
-    }
-    /// <summary>转换(0 修剪行尾空白 / 1 Tab→空格 / 2 前导空格→Tab / 3 行尾 LF⇄CRLF),作用于最近聚焦侧。</summary>
-    public void TransformSide(int kind)
-    {
-        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
-        bool left = _lastFocusLeft;
-        string text = (left ? _session.Left : _session.Right).Text;
-        try
-        {
-            string result = kind switch
-            {
-                0 => string.Join("\n", text.Split('\n').Select(l => l.TrimEnd(' ', '\t', '\r'))),
-                1 => text.Replace("\t", new string(' ', 4)),
-                2 => string.Join("\n", text.Split('\n').Select(l => { int spaces = l.TakeWhile(c => c == ' ').Count(); return new string('\t', spaces / 4) + l[Math.Min(spaces - spaces % 4, l.Length)..]; })),
-                _ => text.Contains("\r\n") ? text.Replace("\r\n", "\n") : text.Replace("\n", "\r\n"),
-            };
-            if (result == text) { _status.Text = "内容无变化。"; return; }
-            _session.Edit(left, result);
-            _debounce.Stop(); RefreshDirty();
-            string name = kind == 0 ? "修剪行尾空白" : kind == 1 ? "Tab → 空格" : kind == 2 ? "前导空格 → Tab" : "行尾风格切换";
-            if ((bool)_autoRealign.IsChecked!) Realign();
-            else _status.Text = $"已{name}（{(left ? "左" : "右")}侧）· 点 ⟳ 重新对齐";
-        }
-        catch (Exception ex) { _status.Text = "转换失败：" + ex.Message; }
     }
     private async Task GoToLineAsync()
     {
@@ -349,7 +327,7 @@ public sealed class MainWindow : Window
             var targetCell = sourceLeft ? current.Right : current.Left;
             if (inSelection && sourceCell is not null)
             {
-                target.Add(usesCrLf ? sourceCell.Text : sourceCell.Text);
+                target.Add(usesCrLf ? sourceCell.Text + "\r" : sourceCell.Text);   // 目标侧 CRLF 时补 '\r'(单元格文本不含行尾符)
                 copied++;
             }
             else if (targetCell is not null) target.Add(targetCell.Text);
@@ -403,23 +381,23 @@ public sealed class MainWindow : Window
         _session.AlignmentHints = [.. _session.AlignmentHints, new(leftLine, rightLine)];
         _session.Recompare(); RefreshRows();
     }
-    /// <summary>测试/程序化入口:列出指定侧可用的文件类型操作标签。</summary>
-    public IReadOnlyList<string> FileTypeActionLabels(bool left)
+    /// <summary>按点击侧的扩展名发现文件类型插件:专属提供者优先,无专属时回退通配 "*" 的通用工具。</summary>
+    private List<IFileTypeProvider> ProvidersFor(bool left)
     {
         string extension = Path.GetExtension((left ? _session.Left : _session.Right)?.Path ?? "");
         var providers = _plugins.GetAll<IFileTypeProvider>()
             .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)).ToList();
         if (providers.Count == 0)   // 无专属提供者 → 通配 "*" 的通用文件工具
             providers = _plugins.GetAll<IFileTypeProvider>().Where(p => p.Extensions.Contains("*", StringComparer.Ordinal)).ToList();
-        return providers.SelectMany(p => p.EditActions.Select(a => p.LanguageName + ":" + a.Label)).ToList();
+        return providers;
     }
+    /// <summary>测试/程序化入口:列出指定侧可用的文件类型操作标签。</summary>
+    public IReadOnlyList<string> FileTypeActionLabels(bool left) =>
+        ProvidersFor(left).SelectMany(p => p.EditActions.Select(a => p.LanguageName + ":" + a.Label)).ToList();
     /// <summary>测试/程序化入口:执行指定侧第 index 个文件类型操作(按 FileTypeActionLabels 顺序)。</summary>
     public void RunFileTypeAction(bool left, int index)
     {
-        string extension = Path.GetExtension((left ? _session.Left : _session.Right)?.Path ?? "");
-        var actions = _plugins.GetAll<IFileTypeProvider>()
-            .Where(p => p.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
-            .SelectMany(p => p.EditActions).ToList();
+        var actions = ProvidersFor(left).SelectMany(p => p.EditActions).ToList();
         if (index < 0 || index >= actions.Count) return;
         var buffer = left ? _session.Left : _session.Right;
         if (buffer is null) return;
@@ -479,9 +457,11 @@ public sealed class MainWindow : Window
         string? input = await Prompt("转到字节偏移", "十六进制(0x…)或十进制", "0");
         if (string.IsNullOrWhiteSpace(input)) return;
         string trimmed = input.Trim();
-        if (!long.TryParse(trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? trimmed[2..] : trimmed,
-            System.Globalization.NumberStyles.HexNumber, CultureInfo.InvariantCulture, out long offset)
-            && !long.TryParse(trimmed, out offset))
+        // 仅 0x 前缀按十六进制解析;纯数字按十进制(此前十进制输入被先按 hex 解析,回退分支永不命中)。
+        bool hex = trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+        if (!long.TryParse(hex ? trimmed[2..] : trimmed,
+            hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.Integer,
+            CultureInfo.InvariantCulture, out long offset))
         { _status.Text = "无法解析偏移。"; return; }
         long max = Math.Max(_hexLeft!.Length, _hexRight!.Length);
         if (offset < 0 || offset >= max) { _status.Text = $"偏移超出范围 [0, {max})。"; return; }
@@ -701,10 +681,10 @@ public sealed class MainWindow : Window
     {
         if (!await Leave()) return;
         _leftPath.Text = session.Left; _rightPath.Text = session.Right;
-        _algorithm.SelectedItem = session.Algorithm ?? "myers";
+        _algorithm.SelectedItem = session.Algorithm ?? FirstAlgorithmId();
         _ignoreCase.IsChecked = session.IgnoreCase; _ignoreWhitespace.IsChecked = session.IgnoreWhitespace; _ignoreEol.IsChecked = session.IgnoreEol;
         _unimportant = session.UnimportantPatterns ?? [];
-        _session.Algorithm = session.Algorithm ?? "myers";
+        _session.Algorithm = session.Algorithm ?? FirstAlgorithmId();
         _session.Options = BuildOptions();
         await Compare();
     }
@@ -769,8 +749,9 @@ public sealed class MainWindow : Window
             return;
         }
         if (!await Leave()) return;
-        string left = Path.GetFullPath(_leftPath.Text ?? ""), right = Path.GetFullPath(_rightPath.Text ?? "");
         if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");
+        string left = Path.GetFullPath(_leftPath.Text.Trim()), right = Path.GetFullPath(_rightPath.Text.Trim());
+        _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
         _status.Text = "比较中…";
         var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options)));
         _session.Clear(); RefreshEditors();
@@ -794,7 +775,9 @@ public sealed class MainWindow : Window
                 if (file.Status == FileStatus.Error) { _diffTab.Content = _binaryInfo; _binaryInfo.Text = summary; _status.Text = $"{file.Status}：{file.Note}"; return; }
                 ShowHex(left, right, file);
                 string verdict = summary.Split('\n').LastOrDefault(l => l.TrimStart().StartsWith("结论")) ?? "";
-                _status.Text = $"十六进制视图（16 字节/行，着色行含差异字节）· {verdict.Trim()}";
+                const long hexCap = 1 << 20;
+                string capNote = Math.Max(new FileInfo(left).Length, new FileInfo(right).Length) > hexCap ? " · 超过 1MB，仅显示前 1MB" : "";
+                _status.Text = $"十六进制视图（16 字节/行，着色行含差异字节）{capNote} · {verdict.Trim()}";
                 RecordRecent(left, right);
                 return;
             }

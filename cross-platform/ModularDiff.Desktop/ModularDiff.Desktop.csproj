@@ -8,5 +8,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\windows\ModularDiff.Gui\languages\*.json" Link="languages\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\windows\ModularDiff.Gui\themes\*.json" Link="themes\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

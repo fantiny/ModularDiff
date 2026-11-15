@@ -30,8 +30,11 @@ public sealed class AlignedRowsView : Control
     public AlignedRowsView()
     {
         Focusable = true;
-        Palette.Changed += InvalidateVisual;
+        // 订阅与可视树生命周期绑定:脱离时必须退订静态事件,否则窗口关闭后控件被 Palette 永久强引用(泄漏+重绘)。
+        AttachedToVisualTree += (_, _) => { Palette.Changed -= OnPaletteChanged; Palette.Changed += OnPaletteChanged; };
+        DetachedFromVisualTree += (_, _) => Palette.Changed -= OnPaletteChanged;
     }
+    private void OnPaletteChanged() => InvalidateVisual();
     /// <summary>上下布局(true=左右两侧改为上下两栏);渲染与命中统一走 Band 几何。</summary>
     public bool Vertical { get => _vertical; set { if (_vertical == value) return; _vertical = value; InvalidateMeasure(); InvalidateVisual(); } }
     private Rect Band(int row, bool left)
@@ -52,7 +55,7 @@ public sealed class AlignedRowsView : Control
         if (row < 0 || row >= _rows.Count) return null;
         return (row, point.X >= Math.Max(80, Bounds.Width / 2));
     }
-    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; InvalidateMeasure(); InvalidateVisual(); } }
+    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; ResetPointerState(); InvalidateMeasure(); InvalidateVisual(); } }
     public int RowCount => _rows.Count;
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
     public int PrimarySelected => _primary;
@@ -80,7 +83,8 @@ public sealed class AlignedRowsView : Control
     public void EnsureVisible(int index)
     {
         if (Scroller is not { } scroller || index < 0 || index >= _rows.Count) return;
-        double top = index * RowHeight, bottom = top + RowHeight;
+        double bandStep = RowHeight * (_vertical ? 2 : 1);   // 上下布局中一行占两条 band(左上/右下)
+        double top = index * bandStep, bottom = top + bandStep;
         if (top < scroller.Offset.Y) scroller.Offset = new(scroller.Offset.X, top);
         else if (bottom > scroller.Offset.Y + scroller.Viewport.Height)
             scroller.Offset = new(scroller.Offset.X, bottom - scroller.Viewport.Height);
@@ -292,7 +296,8 @@ public sealed class AlignedRowsView : Control
         base.OnPointerMoved(e);
         if (_dragging)
         {
-            int index = Math.Clamp((int)(e.GetPosition(this).Y / RowHeight), 0, _rows.Count - 1);
+            int slot = (int)(e.GetPosition(this).Y / RowHeight);
+            int index = Math.Clamp(_vertical ? slot / 2 : slot, 0, _rows.Count - 1);
             if (index != _primary)
             {
                 _selected.Clear();
@@ -325,10 +330,19 @@ public sealed class AlignedRowsView : Control
         _pressPoint = null;
         e.Handled = true;
         if (_textSelecting) { _textSelecting = false; e.Pointer.Capture(null); return; }   // 拖选结束,保留文本选区
+        if (location.Row >= _rows.Count) return;   // 按住期间行集被替换:越界即放弃本次点击,不误编辑错误行
         ClearTextSelection();
         _selected.Clear(); _selected.Add(location.Row); _primary = _anchor = location.Row;
         InvalidateVisual(); SelectionChanged?.Invoke();
         EditRequested?.Invoke(_rows[location.Row], location.Left);
+    }
+    /// <summary>行集替换(重对齐/新文件)时丢弃进行中的指针交互:陈旧的按下/拖选状态指向旧行号,会误编辑甚至越界。</summary>
+    private void ResetPointerState()
+    {
+        _pressPending = false;
+        _pressPoint = null;
+        _textSelecting = false;
+        _dragging = false;
     }
     private (int Row, int Column, bool Left) LocationAt(Point point, int row, bool left)
     {

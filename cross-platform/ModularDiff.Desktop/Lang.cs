@@ -15,6 +15,10 @@ public static class Lang
 
     public static IReadOnlyList<string> Available => [.. Packs.Keys];
 
+    /// <summary>语言包加载错误(文件名+行号+原因);空列表 = 全部正常。宿主启动时汇总提示,不再静默跳过。</summary>
+    private static readonly List<string> _diagnostics = [];
+    public static IReadOnlyList<string> Diagnostics => _diagnostics;
+
     /// <summary>取本地化字符串;当前语言缺失时回退中文包,再缺失返回键名。</summary>
     public static string Get(string key)
     {
@@ -43,7 +47,18 @@ public static class Lang
                 strings[prop.Name] = prop.Value.GetString() ?? "";
             Packs[name] = strings;
         }
-        catch { /* 格式不对的语言包直接跳过 */ }
+        catch (JsonException ex)
+        {
+            _diagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行第 {ex.BytePositionInLine} 列 — {ex.Message}");
+        }
+        catch (KeyNotFoundException ex)
+        {
+            _diagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
+        }
     }
 
     public static void Apply(string name)

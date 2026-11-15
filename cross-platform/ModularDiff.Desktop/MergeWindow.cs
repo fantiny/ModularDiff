@@ -16,12 +16,15 @@ public sealed class MergeWindow : Window
     private readonly TextBlock _status = new() { Text = "填三个文件路径(或由 git mergetool 传入),点 ▶ 合并。", TextWrapping = TextWrapping.Wrap };
     private List<(int Start, int Middle, int End)> _conflicts = [];
     private int _currentConflict = -1;
+    private bool _everMerged;
     public string? GitOutputPath { get; init; }
     public int ConflictCount => _conflicts.Count;
-    /// <summary>把当前结果写入 git 的 MERGED 路径并回报完成状态(Closing 与测试都走这里;行尾按系统惯例)。</summary>
+    /// <summary>把当前结果写入 git 的 MERGED 路径并回报完成状态(Closing 与测试都走这里;行尾按系统惯例)。
+    /// 从未执行过合并就关闭时 fail-closed:不写 MERGED(git 保留自己的冲突版本),退出码非 0 表示未解决。</summary>
     public void SaveToOutput()
     {
         if (GitOutputPath is null) return;
+        if (!_everMerged) { GitMergeCompleted?.Invoke(false); return; }
         try
         {
             File.WriteAllText(GitOutputPath, (_result.Text ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
@@ -76,6 +79,7 @@ public sealed class MergeWindow : Window
             string composed = merged.Compose(Path.GetFileName(_left.Text!), Path.GetFileName(_right.Text!), newLine);
             _result.Text = composed.Replace("\r\n", "\n");
             Repaint();
+            _everMerged = true;
         }
         catch (Exception ex) { _status.Text = "合并失败：" + ex.Message; }
     }
