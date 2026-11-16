@@ -364,6 +364,100 @@ try
     }
 }
 finally { try { Directory.Delete(badGrammarRoot, recursive: true); } catch { } }   // Windows 下已加载插件 DLL 仍锁定,删除失败不判失败
+// ─── 对抗性用例:退化路径、边界条件、生命周期 ───
+// A1 重对齐后编辑覆盖层必须收起(行集合被替换,悬空覆盖层是缺陷)
+var adversarial = window.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+window.BeginEditRow(0, true);
+Dispatcher.UIThread.RunJobs();
+var overlayWhileEditing = window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Name == "CellEditor" && t.IsVisible);
+window.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true)
+    .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+var advPump = DateTime.UtcNow.AddSeconds(3);
+while (DateTime.UtcNow < advPump) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
+Check(overlayWhileEditing && !window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Name == "CellEditor" && t.IsVisible),
+    "editor overlay collapses after realign replaces rows");
+// A2 BeginEditRow 指向幽灵行(对侧缺失)必须无操作且不崩
+int ghostIndex = Enumerable.Range(0, adversarial.RowCount).FirstOrDefault(i => adversarial.Rows[i].Right is null, -1);
+if (ghostIndex >= 0)
+{
+    window.BeginEditRow(ghostIndex, false);
+    Check(!window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Name == "CellEditor" && t.IsVisible), "begin-edit on ghost row is a no-op");
+}
+// A3 越界索引/幽灵侧行号不崩
+window.BeginEditRow(99999, true);
+adversarial.SelectRows([]);
+// A4 CRLF 保留:换行插件拆 CRLF 行 → 新行 Ending 仍为 CRLF
+string crlfRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-crlf-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(crlfRoot);
+try
+{
+    File.WriteAllText(Path.Combine(crlfRoot, "l.css"), "body{margin:0;color:red;}\r\n");
+    File.WriteAllText(Path.Combine(crlfRoot, "r.css"), "body{\r\nmargin:0;\r\ncolor:red;\r\n}\r\n");
+    var crlfWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(crlfRoot, "l.css"), "--right", Path.Combine(crlfRoot, "r.css"), "--auto-compare"]);
+    crlfWindow.Show();
+    var crlfReady = DateTime.UtcNow.AddSeconds(8);
+    while (DateTime.UtcNow < crlfReady) { Dispatcher.UIThread.RunJobs(); crlfWindow.UpdateLayout(); Thread.Sleep(10);
+        if (crlfWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var crlfView = crlfWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    var crlfRow = crlfView.Rows.First(r => r.Left?.Text.Contains(";") == true && r.Left.Text.Contains("{"));
+    crlfView.SelectRows([crlfRow]);
+    crlfWindow.CreateSplitMenu(crlfRow, true)!.Items.OfType<MenuItem>().First()
+        .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
+    Dispatcher.UIThread.RunJobs();
+    crlfWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true)
+        .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var crlfDone = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < crlfDone) { Dispatcher.UIThread.RunJobs(); crlfWindow.UpdateLayout(); Thread.Sleep(10); }
+    var after = crlfWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    Check(after.Rows.Count(r => r.Left?.Text == "margin:0;") == 1 && after.Rows.First(r => r.Left?.Text == "margin:0;").Left!.Ending == "CRLF",
+        "css split preserves CRLF endings");
+    crlfWindow.Close();
+}
+finally { Directory.Delete(crlfRoot, recursive: true); }
+// A5 CopyToSide 目标为 CRLF 时追加 CR(回归 C3 修复)
+string mixRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-mix-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(mixRoot);
+try
+{
+    File.WriteAllText(Path.Combine(mixRoot, "lf.txt"), "same\nleft line\n");
+    File.WriteAllText(Path.Combine(mixRoot, "crlf.txt"), "same\r\ndifferent\r\n");
+    var mixWindow = new MainWindow(["--plugins", pluginsPath, "--left", Path.Combine(mixRoot, "lf.txt"), "--right", Path.Combine(mixRoot, "crlf.txt"), "--auto-compare"]);
+    mixWindow.Show();
+    var mixReady = DateTime.UtcNow.AddSeconds(8);
+    while (DateTime.UtcNow < mixReady) { Dispatcher.UIThread.RunJobs(); mixWindow.UpdateLayout(); Thread.Sleep(10);
+        if (mixWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    var mixView = mixWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+    var mixRow = mixView.Rows.First(r => r.Left?.Text == "left line");
+    mixView.SelectRows([mixRow]);
+    mixWindow.CopyToSide(mixRow, fromLeft: true);
+    Dispatcher.UIThread.RunJobs();
+    mixWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains("重新对齐") == true)
+        .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var mixDone = DateTime.UtcNow.AddSeconds(3);
+    while (DateTime.UtcNow < mixDone) { Dispatcher.UIThread.RunJobs(); mixWindow.UpdateLayout(); Thread.Sleep(10); }
+    var mixRows = mixWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single().Rows;
+    Check(mixRows.Any(r => r.Right?.Text == "left line" && r.Right.Ending == "CRLF"),
+        "copy-to-side appends CR when target uses CRLF");
+    mixWindow.Close();
+}
+finally { Directory.Delete(mixRoot, recursive: true); }
+// A6 MergeWindow 退化路径:未合并点采用/路径不存在 → 状态提示,不崩不写盘
+var degenerate = new MergeWindow(null, null, null, plugins);
+degenerate.Show(); Dispatcher.UIThread.RunJobs();
+degenerate.Take(true);   // 无冲突可决策
+degenerate.Repaint();
+Check(degenerate.ConflictCount == 0, "take-without-conflict is a no-op");
+degenerate.Close();
+// A7 跨行选区含幽灵行:切片以空行占位,行数守恒
+var ghostSel = window.GetVisualDescendants().OfType<AlignedRowsView>().Single();
+var withGhost = Enumerable.Range(0, ghostSel.RowCount).FirstOrDefault(i => ghostSel.Rows[i].Right is null, -1);
+if (withGhost >= 0)
+{
+    ghostSel.SetTextSelection(0, 0, withGhost, 3, true);
+    var ghostSliced = ghostSel.SelectedText();
+    Check(ghostSliced.Split('\n').Length == withGhost + 1, $"ghost rows keep line count in selection slice ({sliced.Split('\n').Length} vs {withGhost + 1})");
+    ghostSel.ClearTextSelection();
+}
 // 十六进制视图:二进制对 → hex 行渲染且状态栏提示。
 string binRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-bin-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(binRoot);

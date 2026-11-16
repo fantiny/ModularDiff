@@ -339,13 +339,19 @@ public sealed class MainWindow : Window
             var targetCell = sourceLeft ? current.Right : current.Left;
             if (inSelection && sourceCell is not null)
             {
-                target.Add(usesCrLf ? sourceCell.Text + "\r" : sourceCell.Text);   // 目标侧 CRLF 时补 '\r'(单元格文本不含行尾符)
+                target.Add(sourceCell.Text + (usesCrLf ? "\r" : ""));   // 复制行沿用目标侧整体行尾风格
                 copied++;
             }
-            else if (targetCell is not null) target.Add(targetCell.Text);
+            else if (targetCell is not null)
+                // 逐行保留原行尾(单元格 Ending:CRLF/CR→\r,LF/EOF→无),避免整侧重建丢掉 CRLF
+                target.Add(targetCell.Text + (targetCell.Ending is "CRLF" or "CR" ? "\r" : ""));
             // 对侧为幽灵且不在选区:目标本就没有这一行,保持没有。
         }
-        _session.Edit(!sourceLeft, string.Join("\n", target));
+        string previous = (sourceLeft ? _session.Right : _session.Left).Text;
+        string joined = string.Join("\n", target);
+        if (previous.EndsWith("\n") && !joined.EndsWith("\n"))
+            joined += joined.EndsWith("\r") ? "\n" : previous.EndsWith("\r\n") ? "\r\n" : "\n";   // 保留末行换行,避免重复 \r
+        _session.Edit(!sourceLeft, joined);
         _debounce.Stop(); RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
         else _status.Text = $"已复制 {copied} 行到{(sourceLeft ? "右" : "左")}侧 · 点 ⟳ 重新对齐";
@@ -548,7 +554,7 @@ public sealed class MainWindow : Window
         {
             var bare = buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
             var formatted = formatter.Format(bare);
-            _session.Edit(left, LineText.Rebuild(formatted, buffer.Text));   // 行尾风格/结尾换行沿原文 —— 走 Core 助手,不再手写 join(LFCR 事故源)
+            _session.Edit(left, LineText.Rebuild(formatted, buffer.Text));   // 行尾风格/结尾换行沿原文 —— 走 Core 助手,不再手写 join(LFCR 事故源;与上游 1caf78c 的内联修正语义一致)
             _debounce.Stop();
             RefreshDirty();
             if ((bool)_autoRealign.IsChecked!) Realign();
@@ -584,7 +590,7 @@ public sealed class MainWindow : Window
             string raw = lines[cell.LineNumber - 1];
             var parts = splitter.Split(raw.TrimEnd('\r'));
             if (parts.Count < 2) continue;
-            lines[cell.LineNumber - 1] = LineText.ReplaceRawLine(raw, parts);
+            lines[cell.LineNumber - 1] = LineText.ReplaceRawLine(raw, parts);   // Core 助手:行尾风格沿用原行(上游同修)
             applied++;
         }
         if (applied == 0) return;
@@ -607,7 +613,7 @@ public sealed class MainWindow : Window
             string raw = lines[index];
             var parts = splitter.Split(raw.TrimEnd('\r'));
             if (parts.Count < 2) return;
-            lines[index] = LineText.ReplaceRawLine(raw, parts);   // 行尾风格(CRLF)沿用原行 —— Core 助手
+            lines[index] = LineText.ReplaceRawLine(raw, parts);   // 行尾风格(CRLF)沿用原行 —— Core 助手(上游同修)
             _session.Edit(left, string.Join("\n", lines));
             _debounce.Stop();   // 手动模式:点 ⟳ 重对齐;⚡ 开启时立即重算
             RefreshDirty();
@@ -618,6 +624,7 @@ public sealed class MainWindow : Window
     /// <summary>测试/交互入口:在指定行指定侧弹出行内编辑器(与视图点击同一通路)。</summary>
     public void BeginEditRow(int index, bool left)
     {
+        if (HexMode && !left) { _status.Text = "十六进制编辑仅支持左侧。"; return; }
         if (index < 0 || index >= _rows.RowCount) return;
         var row = _rows.Rows[index];
         var cell = left ? row.Left : row.Right;
@@ -1040,7 +1047,13 @@ public sealed class MainWindow : Window
         finally { _loading = false; }
         RefreshRows();
     }
-    private void RefreshRows() { _rows.Rows = _session.Presentation?.Rows ?? []; RefreshDirty(); }
+    private void RefreshRows()
+    {
+        if (_editingRow is not null && (_session.Presentation?.Rows ?? []).All(r => !ReferenceEquals(r, _editingRow)))
+            EndCellEdit();   // 行集合已换:覆盖层指向的行不存在了,收起
+        _rows.Rows = _session.Presentation?.Rows ?? [];
+        RefreshDirty();
+    }
     private void RefreshDirty() => _status.Text = _session.Left is null ? "请选择文件或目录" : $"{(_session.Dirty ? "● 未保存" : "已保存")} · {_session.Presentation?.Hunks.Count ?? 0} 个差异块 · {_session.Left.Path} ↔ {_session.Right?.Path}";
     private async Task CopyAllBlocks(bool toRight)
     {
