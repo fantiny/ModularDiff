@@ -163,6 +163,9 @@
     "md_menu_goto_offset": "转到字节偏移…",
     "md_menu_export_patch": "导出二进制补丁报告…",
     "md_menu_save_hex": "保存十六进制编辑（左侧）",
-    "md_lang_switched": "界面语言已切换：{0}（状态提示等动态文本自新窗口起完全生效）"
+    "md_lang_switched": "界面语言已切换：{0}（状态提示等动态文本自新窗口起完全生效）",
+    "md_tip_save_side": "保存此侧（保留编码，检测外部修改冲突）",
+    "md_tip_pick_file": "选择文件",
+    "md_tip_pick_dir": "选择目录"
   }
 }

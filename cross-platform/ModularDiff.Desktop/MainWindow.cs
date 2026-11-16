@@ -28,6 +28,12 @@ public sealed class MainWindow : Window
     private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
     private readonly List<(Control Target, string Key)> _localized = [];
     private void Tip(Control target, string key) { _localized.Add((target, key)); ToolTip.SetTip(target, Lang.Get(key)); }
+    private Button LButton(string icon, string tipKey, Action action)
+    {
+        var button = Button(icon, "", action);
+        Tip(button, tipKey);
+        return button;
+    }
     private void ApplyLanguage()
     {
         Title = Lang.Get("md_title");
@@ -69,14 +75,14 @@ public sealed class MainWindow : Window
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = FirstAlgorithmId();
         _session.Algorithm = FirstAlgorithmId();   // A3 收尾:构造期 SelectionChanged 尚未挂,须显式同步会话(否则目录首个算法≠myers 时显示与实际不符)
         Tip(_algorithm, "md_tip_algo");
-        _toolbar.Children.Add(Button("▶", Lang.Get("md_tip_compare"), () => Run(Compare)));
-        _toolbar.Children.Add(Button("⟳", Lang.Get("md_tip_realign"), Realign));
-        ToolTip.SetTip(_autoRealign, "自动重对齐：右键换行等格式化操作后立即重算对齐；关闭时需点 ⟳ 手动刷新（打字编辑始终不自动重排）");
+        _toolbar.Children.Add(LButton("▶", "md_tip_compare", () => Run(Compare)));
+        _toolbar.Children.Add(LButton("⟳", "md_tip_realign", Realign));
+        Tip(_autoRealign, "md_tip_auto");
         _toolbar.Children.Add(_autoRealign);
-        _toolbar.Children.Add(Button("◱", Lang.Get("md_tip_layout"), () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
-        _toolbar.Children.Add(Button("⌗", Lang.Get("md_tip_format"), FormatSide));
-        _toolbar.Children.Add(Button("◈", Lang.Get("md_tip_rules"), EditRules));
-        _toolbar.Children.Add(Button("💾", Lang.Get("md_tip_session"), () => Run(SaveSession)));
+        _toolbar.Children.Add(LButton("◱", "md_tip_layout", () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
+        _toolbar.Children.Add(LButton("⌗", "md_tip_format", FormatSide));
+        _toolbar.Children.Add(LButton("◈", "md_tip_rules", EditRules));
+        _toolbar.Children.Add(LButton("💾", "md_tip_session", () => Run(SaveSession)));
         Button themeButton = new() { Content = Palette.IsDark ? "☀" : "🌙", MinWidth = 32, Padding = new Thickness(8, 4) };
         Tip(themeButton, "md_tip_theme");
         themeButton.Click += (_, _) =>
@@ -105,20 +111,20 @@ public sealed class MainWindow : Window
         _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_sessionBox.SelectedIndex >= 0 && _sessions.Named.Count > _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex]); _sessionBox.SelectedIndex = -1; });
         _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_recentBox.SelectedIndex >= 0 && _sessions.Recent.Count > _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex]); _recentBox.SelectedIndex = -1; });
         _toolbar.Children.Add(_sessionBox); _toolbar.Children.Add(_recentBox); RefreshSessions();
-        _toolbar.Children.Add(Button("⇄", Lang.Get("md_tip_swap"), () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
+        _toolbar.Children.Add(LButton("⇄", "md_tip_swap", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         Tip(_ignoreEol, "md_tip_eol"); Tip(_ignoreWhitespace, "md_tip_ws"); Tip(_ignoreCase, "md_tip_case");
         _toolbar.Children.Add(_ignoreEol); _toolbar.Children.Add(_ignoreWhitespace); _toolbar.Children.Add(_ignoreCase);
         _ignoreEol.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreWhitespace.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreCase.IsCheckedChanged += (_, _) => ApplyOptions();
-        _toolbar.Children.Add(Button("↑", Lang.Get("md_tip_prev"), () => Navigate(-1)));
-        _toolbar.Children.Add(Button("↓", Lang.Get("md_tip_next"), () => Navigate(1)));
+        _toolbar.Children.Add(LButton("↑", "md_tip_prev", () => Navigate(-1)));
+        _toolbar.Children.Add(LButton("↓", "md_tip_next", () => Navigate(1)));
         _toolbar.Children.Add(Button("→", Lang.Get("md_tip_merge_l2r"), () => Merge(MergeDirection.LeftToRight)));
         _toolbar.Children.Add(Button("←", Lang.Get("md_tip_merge_r2l"), () => Merge(MergeDirection.RightToLeft)));
         _toolbar.Children.Add(Button("⇉", Lang.Get("md_tip_copyall_l2r"), () => Run(() => CopyAllBlocks(true))));
         _toolbar.Children.Add(Button("⇇", Lang.Get("md_tip_copyall_r2l"), () => Run(() => CopyAllBlocks(false))));
         _toolbar.Children.Add(Button("⇥", Lang.Get("md_tip_sync_l2r"), () => Run(() => Sync(SyncMode.LeftToRight))));
         _toolbar.Children.Add(Button("⇤", Lang.Get("md_tip_sync_r2l"), () => Run(() => Sync(SyncMode.RightToLeft))));
-        _toolbar.Children.Add(Button("◷", Lang.Get("md_tip_history"), () => Run(History)));
+        _toolbar.Children.Add(LButton("◷", "md_tip_history", () => Run(History)));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
         _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Content = _diffScroll; _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
@@ -680,15 +686,15 @@ public sealed class MainWindow : Window
     {
         var panel = new DockPanel { LastChildFill = true };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
-        buttons.Children.Add(Button("▤", "选择文件", () => Run(async () => { var items = await StorageProvider.OpenFilePickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
-        buttons.Children.Add(Button("▣", "选择目录", () => Run(async () => { var items = await StorageProvider.OpenFolderPickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
+        buttons.Children.Add(LButton("▤", "md_tip_pick_file", () => Run(async () => { var items = await StorageProvider.OpenFilePickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
+        buttons.Children.Add(LButton("▣", "md_tip_pick_dir", () => Run(async () => { var items = await StorageProvider.OpenFolderPickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
         DockPanel.SetDock(buttons, Dock.Right); panel.Children.Add(buttons); panel.Children.Add(path); return panel;
     }
     private Control EditPanel(bool left)
     {
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         bar.Children.Add(new TextBlock { Text = left ? "左侧" : "右侧", VerticalAlignment = VerticalAlignment.Center });
-        bar.Children.Add(Button("▣", "保存此侧（保留编码，检测外部修改冲突）", () => Run(async () => { await _session.SaveAsync(left); RefreshDirty(); })));
+        bar.Children.Add(LButton("▣", "md_tip_save_side", () => Run(async () => { await _session.SaveAsync(left); RefreshDirty(); })));
         bar.Children.Add(Button("↶", "撤销此侧编辑", () => { try { _session.History(left, false); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } }));
         bar.Children.Add(Button("↷", "重做此侧编辑", () => { try { _session.History(left, true); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } }));
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") }; grid.Children.Add(bar); var editor = left ? _leftEditor : _rightEditor; Grid.SetRow(editor, 1); grid.Children.Add(editor); return grid;

@@ -163,6 +163,9 @@
     "md_menu_goto_offset": "Go To Byte Offset…",
     "md_menu_export_patch": "Export Binary Patch Report…",
     "md_menu_save_hex": "Save Hex Edit (left)",
-    "md_lang_switched": "UI language switched to {0} (dynamic status text fully applies to new windows)"
+    "md_lang_switched": "UI language switched to {0} (dynamic status text fully applies to new windows)",
+    "md_tip_save_side": "Save this side (keeps encoding, detects external-modification conflicts)",
+    "md_tip_pick_file": "Pick a file",
+    "md_tip_pick_dir": "Pick a directory"
   }
 }
