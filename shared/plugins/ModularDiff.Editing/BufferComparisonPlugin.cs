@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ModularDiff.Contracts;
 
 namespace ModularDiff.Editing;
@@ -11,9 +12,14 @@ public sealed class BufferComparisonPlugin : IBufferComparison
     {
         cancellationToken.ThrowIfCancellationRequested();
         var a = DocumentLines.Parse(left.Text); var b = DocumentLines.Parse(right.Text);
+        // 与 FileComparisonModule 同语义:$Id$/时间戳等 unimportant 规则在 GUI 会话比较里同样生效
+        // (此前仅 CLI 生效,GUI 静默忽略 —— 2026-11 审查发现)。
+        var unimportant = options.EffectiveUnimportantPatterns
+            .Select(p => new Regex(p, RegexOptions.None, TimeSpan.FromMilliseconds(100))).ToArray();
         string Key(DocumentLine line)
         {
             string text = line.Text;
+            foreach (var pattern in unimportant) text = pattern.Replace(text, "");
             if (options.IgnoreWhitespace) text = string.Concat(text.Where(c => !char.IsWhiteSpace(c)));
             if (options.IgnoreCase) text = text.ToUpperInvariant();
             return options.IgnoreLineEndings ? text : text + line.Ending;

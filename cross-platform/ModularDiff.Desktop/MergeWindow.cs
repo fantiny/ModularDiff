@@ -17,28 +17,34 @@ public sealed class MergeWindow : Window
     private List<(int Start, int Middle, int End)> _conflicts = [];
     private int _currentConflict = -1;
     private bool _everMerged;
-    public string? GitOutputPath { get; init; }
+    private readonly string? _gitOutputPath;
+    /// <summary>git mergetool 的 MERGED 输出路径;只能经构造函数传入 —— 此前为 init-only 属性,
+    /// 对象初始化器在构造函数之后执行,构造函数里据此订阅 Closing 是永远不生效的死接线(审查 K1)。</summary>
+    public string? GitOutputPath => _gitOutputPath;
     public int ConflictCount => _conflicts.Count;
-    /// <summary>把当前结果写入 git 的 MERGED 路径并回报完成状态(Closing 与测试都走这里;行尾按系统惯例)。
-    /// 从未执行过合并就关闭时 fail-closed:不写 MERGED(git 保留自己的冲突版本),退出码非 0 表示未解决。</summary>
+    /// <summary>把当前结果写入 git 的 MERGED 路径并回报完成状态(Closing 与测试都走这里;行尾按系统惯例,原子写)。
+    /// 从未执行合并就关闭时 fail-closed:不写 MERGED(git 保留自己的冲突版本),退出码非 0 表示未解决。</summary>
     public void SaveToOutput()
     {
-        if (GitOutputPath is null) return;
+        if (_gitOutputPath is null) return;
         if (!_everMerged) { GitMergeCompleted?.Invoke(false); return; }
         try
         {
-            File.WriteAllText(GitOutputPath, (_result.Text ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
+            AtomicFile.WriteAllText(_gitOutputPath, (_result.Text ?? "").Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
             GitMergeCompleted?.Invoke(_conflicts.Count == 0);
         }
         catch { GitMergeCompleted?.Invoke(false); }
     }
     /// <summary>git mergetool 流程完成(参数=是否无未决冲突);宿主据此设置进程退出码 0/1。</summary>
     public event Action<bool>? GitMergeCompleted;
+    /// <summary>测试/程序化入口:结果编辑器(模拟用户手编,验证 TextChanged → 重析接线)。</summary>
+    public TextBox ResultEditor => _result;
 
     private readonly PluginCatalog _plugins;
-    public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null, PluginCatalog? plugins = null)
+    public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null, PluginCatalog? plugins = null, string? gitOutputPath = null)
     {
         _plugins = plugins ?? App.Plugins ?? throw new InvalidOperationException("插件目录不可用。");
+        _gitOutputPath = gitOutputPath;
         Title = "ModularDiff · 三方合并"; Width = 1150; Height = 780; MinWidth = 780; MinHeight = 520;
         _base.Text = basePath; _left.Text = leftPath; _right.Text = rightPath;
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -61,11 +67,15 @@ public sealed class MergeWindow : Window
         Grid.SetRow(_result, 2); root.Children.Add(_result);
         Grid.SetRow(_status, 3); root.Children.Add(_status);
         Content = root;
-        if (GitOutputPath is not null)
+        if (_gitOutputPath is not null)
             Closing += (_, _) => SaveToOutput();
+        // 结果区自由手编:任何改动立即重析冲突标记,导航/决策永远作用于当前文本
+        // (此前 _conflicts 保存旧行号,删行后 ↑↓/⇐⇒ 越界崩溃 —— 审查 K5)。
+        _result.TextChanged += (_, _) => Repaint();
         Opened += async (_, _) => { if (basePath is not null && leftPath is not null && rightPath is not null) await MergeAsync(); };
     }
-    private async Task MergeAsync()
+    /// <summary>执行三方合并(公开为测试/程序化入口;算法取目录中第一个算法插件,不再硬编码)。</summary>
+    public async Task MergeAsync()
     {
         try
         {
@@ -74,7 +84,8 @@ public sealed class MergeWindow : Window
             _status.Text = "合并中…";
             string baseText = await File.ReadAllTextAsync(_base.Text!), leftText = await File.ReadAllTextAsync(_left.Text!), rightText = await File.ReadAllTextAsync(_right.Text!);
             static string[] Split(string text) => text.Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
-            var merged = await Task.Run(() => ThreeWayMerger.Merge(Split(baseText), Split(leftText), Split(rightText), "myers", _plugins));
+            string algorithm = _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault()?.Id ?? "myers";
+            var merged = await Task.Run(() => ThreeWayMerger.Merge(Split(baseText), Split(leftText), Split(rightText), algorithm, _plugins));
             string newLine = leftText.Contains("\r\n") ? "\r\n" : "\n";
             string composed = merged.Compose(Path.GetFileName(_left.Text!), Path.GetFileName(_right.Text!), newLine);
             _result.Text = composed.Replace("\r\n", "\n");
@@ -105,8 +116,10 @@ public sealed class MergeWindow : Window
         _currentConflict = Math.Clamp(_currentConflict + direction, 0, _conflicts.Count - 1);
         var (start, _, end) = _conflicts[_currentConflict];
         _status.Text = $"冲突 {_currentConflict + 1}/{_conflicts.Count}(行 {start + 1}–{end + 1})";
-        _result.SelectionStart = _result.Text!.Split('\n')[..start].Aggregate(0, (sum, line) => sum + line.Length + 1);
-        _result.SelectionEnd = _result.SelectionStart + _result.Text.Split('\n')[start].Length;
+        var lines = _result.Text!.Split('\n');
+        if (start >= lines.Length) { Repaint(); return; }   // 防御:行号失效(理论上 TextChanged 已重析)
+        _result.SelectionStart = lines[..start].Aggregate(0, (sum, line) => sum + line.Length + 1);
+        _result.SelectionEnd = _result.SelectionStart + lines[start].Length;
         _result.Focus();
     }
     /// <summary>解决当前冲突:true=采用右侧,false=采用左侧;重写结果文本后重新解析。</summary>
@@ -115,6 +128,7 @@ public sealed class MergeWindow : Window
         if (_currentConflict < 0 || _currentConflict >= _conflicts.Count) { _status.Text = "请先用 ↑↓ 选中一处冲突。"; return; }
         var (start, middle, end) = _conflicts[_currentConflict];
         var lines = (_result.Text ?? "").Split('\n').ToList();
+        if (start >= lines.Count || end >= lines.Count || middle >= lines.Count) { Repaint(); _status.Text = "冲突标记已变化，请重试。"; return; }
         var chosen = useRight ? lines.GetRange(middle + 1, end - middle - 1) : lines.GetRange(start + 1, middle - start - 1);
         lines.RemoveRange(start, end - start + 1);
         lines.InsertRange(start, chosen);

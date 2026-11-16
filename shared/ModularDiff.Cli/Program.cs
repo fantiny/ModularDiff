@@ -41,19 +41,35 @@ try
     {
         if (args.Length < 2 || args[1] is not "setup") throw new ArgumentException("Usage: ModularDiff.Cli git setup [--gui PATH] [--global]");
         string cliExe = Environment.ProcessPath ?? throw new IOException("Cannot determine CLI path.");
-        string guiExe = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(cliExe)!, "..", "gui", "ModularDiff.Gui.exe"));
-        for (int i = 2; i < args.Length - 1; i++)
-            if (args[i] == "--gui") guiExe = Path.GetFullPath(args[i + 1]);
+        // 非 Windows 上桌面端是跨平台的 ModularDiff.Desktop 可执行文件,不是 Gui.exe。
+        string guiExe = OperatingSystem.IsWindows()
+            ? "ModularDiff.Gui.exe"
+            : OperatingSystem.IsMacOS() ? "ModularDiff.Desktop" : "ModularDiff.Desktop";
+        string guiExeDefault = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(cliExe)!, "..", "gui", guiExe));
+        string chosen = guiExeDefault;
+        bool guiGiven = false;
+        for (int i = 2; i < args.Length; i++)
+            if (args[i] == "--gui")
+            {
+                if (i + 1 >= args.Length) throw new ArgumentException("Missing value for --gui");
+                chosen = Path.GetFullPath(args[++i]); guiGiven = true;
+            }
+            else if (args[i] != "--global") throw new ArgumentException($"Unknown option: {args[i]}");   // 拼错的选项不再被静默吞掉
+        if (!guiGiven && !File.Exists(chosen))
+            throw new ArgumentException($"GUI executable not found at '{chosen}' — pass --gui PATH (mergetool needs it).");
+        if (guiGiven && !File.Exists(chosen))
+            throw new ArgumentException($"--gui path does not exist: {chosen}");
         string scope = args.Contains("--global") ? " --global" : "";
         string cli = cliExe.Replace("\\", "/");
-        string gui = guiExe.Replace("\\", "/");
+        string gui = chosen.Replace("\\", "/");
+        int failures = 0;
         void GitConfig(string key, string value)
         {
             var psi = new System.Diagnostics.ProcessStartInfo("git", $"config{scope} {key} \"{value}\"")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
             using var proc = System.Diagnostics.Process.Start(psi)!;
-            proc.WaitForExit(5000);
-            if (proc.ExitCode != 0) Console.Error.WriteLine($"git config {key}: {proc.StandardError.ReadToEnd().Trim()}");
+            if (!proc.WaitForExit(5000)) { failures++; Console.Error.WriteLine($"git config {key}: timed out"); return; }
+            if (proc.ExitCode != 0) { failures++; Console.Error.WriteLine($"git config {key}: {proc.StandardError.ReadToEnd().Trim()}"); }
         }
         GitConfig("difftool.modulardiff.cmd", $"\\\"{cli}\\\" compare \\\"$LOCAL\\\" \\\"$REMOTE\\\"");
         GitConfig("difftool.prompt", "false");
@@ -61,9 +77,10 @@ try
         GitConfig("mergetool.modulardiff.cmd", $"\\\"{gui}\\\" --git-merge \\\"$BASE\\\" \\\"$LOCAL\\\" \\\"$REMOTE\\\" \\\"$MERGED\\\"");
         GitConfig("mergetool.modulardiff.trustExitCode", "true");
         GitConfig("merge.tool", "modulardiff");
+        if (failures > 0) return 2;   // 写失败必须非 0,不再假报成功
         Console.WriteLine("Git integration configured" + (args.Contains("--global") ? " (global)" : " (local)") + ":");
         Console.WriteLine($"  diff.tool   = modulardiff");
-        Console.WriteLine($"  merge.tool  = modulardiff");
+        Console.WriteLine($"  merge.tool  = modulardiff ({gui})");
         Console.WriteLine("Run 'git difftool' or resolve a conflict to try it.");
         return 0;
     }
@@ -102,11 +119,20 @@ try
     {
         foreach (string input in new[] { args[1], args[2], args[3] })
             if (!File.Exists(input)) throw new ArgumentException($"Merge input not found: {input}");
+        if (values.TryGetValue("--output", out string? mergeOutput))
+        {
+            // 与 compare 同一条铁律:输出绝不覆盖任何一个输入(merge --output LEFT 会静默毁掉工作副本)。
+            string fullOutput = Path.GetFullPath(mergeOutput);
+            var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            foreach (string input in new[] { args[1], args[2], args[3] })
+                if (fullOutput.Equals(Path.GetFullPath(input), pathComparison))
+                    throw new ArgumentException("Merge output must not overwrite any of BASE/LEFT/RIGHT.");
+        }
         string[] Read(string path) => File.ReadAllText(path).Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
         var merged = ThreeWayMerger.Merge(Read(args[1]), Read(args[2]), Read(args[3]), Value("--algorithm", "myers"), catalog, cancellation.Token);
         string newLine = File.ReadAllText(args[2]).Contains("\r\n") ? "\r\n" : "\n";   // result follows the left file's ending style
         string mergedText = merged.Compose(Path.GetFileName(args[2]), Path.GetFileName(args[3]), newLine);
-        if (values.TryGetValue("--output", out string? mergeOutput)) File.WriteAllText(mergeOutput, mergedText);
+        if (mergeOutput is not null) AtomicFile.WriteAllText(mergeOutput, mergedText);
         else Console.Write(mergedText);
         Console.Error.WriteLine(merged.Clean ? "合并完成，无冲突。" : $"{merged.Conflicts} 处冲突，已用 <<<<<<< / >>>>>>> 标记。");
         return merged.Clean ? 0 : 1;

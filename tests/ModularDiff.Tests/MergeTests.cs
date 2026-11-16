@@ -45,6 +45,30 @@ internal static class MergeTests
         result = Merge(["a", "b"], ["L", "a", "b"], ["a", "b", "R"]);
         Check(result.Clean && result.Compose() == "L\na\nb\nR\n", "insertions on both ends");
 
+        // K4 回归:偏移相交的重叠改动(左改基线 2-3,右改 3-4,共同动基线行 3)必须报冲突。
+        // 此前只有相同起点的块才进冲突窗口,两侧替换被同时写入且 Clean=True(静默损坏)。
+        result = Merge(
+            ["a", "b", "c", "d", "e", "f"],
+            ["a", "b", "C", "D", "e", "f"],
+            ["a", "b", "c", "X", "Y", "f"]);
+        Check(!result.Clean && result.Conflicts == 1, $"offset-overlapping edits conflict (clean={result.Clean}, conflicts={result.Conflicts})");
+        string overlapped = result.Compose();
+        Check(overlapped.Contains("<<<<<<<"), "offset overlap produces conflict markers: " + overlapped.Replace("\n", "|"));
+
+        // K4 回归:嵌套重叠(左 [2,6),右 [3,4))同样必须冲突。
+        result = Merge(
+            ["a", "b", "c", "d", "e", "f"],
+            ["a", "b", "L3", "L4", "L5", "f"],
+            ["a", "b", "c", "R4", "e", "f"]);
+        Check(!result.Clean && result.Conflicts == 1, $"nested overlap conflicts (conflicts={result.Conflicts})");
+
+        // K4 邻接(左块结束处恰是右块起点)不算重叠:两侧各自生效。
+        result = Merge(
+            ["a", "b", "c", "d"],
+            ["A", "b", "c", "d"],
+            ["a", "B", "c", "d"]);
+        Check(result.Clean && result.Compose() == "A\nB\nc\nd\n", "adjacent (non-overlapping) edits still merge cleanly");
+
         // Random property: every non-conflicting edit of either side survives the merge.
         var random = new Random(20261109);
         for (int trial = 0; trial < 300; trial++)

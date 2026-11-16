@@ -240,32 +240,48 @@ try
     File.WriteAllText(Path.Combine(mergeRoot, "local.txt"), "common\nmine\n");
     File.WriteAllText(Path.Combine(mergeRoot, "remote.txt"), "common\ntheirs\n");
     File.WriteAllText(Path.Combine(mergeRoot, "merged.txt"), "");
-    MergeWindow mergeWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins) { GitOutputPath = Path.Combine(mergeRoot, "merged.txt") };
+    // K1 回归:按生产路径构造(gitOutputPath 走构造函数,而非直调 SaveToOutput),Close 触发整条接线。
+    MergeWindow mergeWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins, gitOutputPath: Path.Combine(mergeRoot, "merged.txt"));
     mergeWindow.Show();
     var mergeReady = DateTime.UtcNow.AddSeconds(8);
     while (DateTime.UtcNow < mergeReady) { Dispatcher.UIThread.RunJobs(); mergeWindow.UpdateLayout(); Thread.Sleep(10);
         if ((mergeWindow.Content as Grid)?.Children.OfType<TextBox>().Any(t => t.Text?.Contains("<<<<<<<") == true) == true) break; }
     mergeWindow.Repaint();
     Check(mergeWindow.ConflictCount == 1, $"one conflict detected (got {mergeWindow.ConflictCount})");
-    mergeWindow.Take(useRight: false);   // 采用左侧(mine)
-    Check(mergeWindow.ConflictCount == 0, "conflict resolved by taking left");
-    bool? completion = null;
-    mergeWindow.GitMergeCompleted += resolved => completion = resolved;
-    mergeWindow.SaveToOutput();
-    mergeWindow.Close();
-    var mergeClosed = DateTime.UtcNow.AddSeconds(3);
-    while (DateTime.UtcNow < mergeClosed) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
-    Check(File.ReadAllText(Path.Combine(mergeRoot, "merged.txt")).Replace("\r\n", "\n").TrimEnd('\n') + "\n" == "common\nmine\n", "git merge output written (took left)");
-    Check(completion == true, "GitMergeCompleted reports conflict-free");
+    // K5 回归:结果区手编(清空)立即重析冲突标记,后续 Take 不再命中陈旧行号而崩溃
+    mergeWindow.ResultEditor.Text = "manually rewritten";
+    Dispatcher.UIThread.RunJobs();
+    Check(mergeWindow.ConflictCount == 0, "manual result edit re-parses conflict markers (stale indices dropped)");
+    mergeWindow.Take(useRight: false);   // 无冲突时提示而非越界
+    await MergeWindowFlow(mergeWindow, Path.Combine(mergeRoot, "merged.txt"));   // 重新走一遍真合并,再验证接线
+    async Task MergeWindowFlow(MergeWindow window, string mergedPath)
+    {
+        var mergeTask = window.MergeAsync();   // 不能直接 await:无调度泵环境下真异步 IO 会死锁,泵循环驱动
+        var mergePump = DateTime.UtcNow.AddSeconds(5);
+        while (!mergeTask.IsCompleted && DateTime.UtcNow < mergePump) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+        Dispatcher.UIThread.RunJobs();
+        Check(window.ConflictCount == 1, "re-merge after manual edit finds the conflict again");
+        window.Take(useRight: false);   // 采用左侧(mine)
+        Check(window.ConflictCount == 0, "conflict resolved by taking left");
+        bool? completion = null;
+        window.GitMergeCompleted += resolved => completion = resolved;
+        window.Close();   // 经 Closing 接线写 MERGED(K1:此前 init-only 死接线时这里什么都不写)
+        var wait = DateTime.UtcNow.AddSeconds(3);
+        while (completion is null && DateTime.UtcNow < wait) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+        Check(File.ReadAllText(mergedPath).Replace("\r\n", "\n").TrimEnd('\n') + "\n" == "common\nmine\n", "git merge output written via Closing wiring (took left)");
+        Check(completion == true, "GitMergeCompleted reports conflict-free through Closing wiring");
+    }
 
-    // M1 回归:从未执行合并就关闭 → fail-closed,不覆盖 MERGED(git 保留自己的冲突版本),回报未解决
+    // M1 回归:从未执行合并就关闭(窗口从未 Show,Opened 自动合并未发生)→ fail-closed,MERGED 原样保留
     File.WriteAllText(Path.Combine(mergeRoot, "merged2.txt"), "<<<<<<< git conflict version\n");
-    MergeWindow earlyWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins) { GitOutputPath = Path.Combine(mergeRoot, "merged2.txt") };
+    MergeWindow earlyWindow = new(Path.Combine(mergeRoot, "base.txt"), Path.Combine(mergeRoot, "local.txt"), Path.Combine(mergeRoot, "remote.txt"), plugins, gitOutputPath: Path.Combine(mergeRoot, "merged2.txt"));
     bool? earlyCompletion = null;
     earlyWindow.GitMergeCompleted += resolved => earlyCompletion = resolved;
-    earlyWindow.SaveToOutput();   // 尚未合并(Opened 自动合并在 Show 之后才会发生)
+    earlyWindow.Close();   // 同样走 Closing 接线
+    var earlyWait = DateTime.UtcNow.AddSeconds(3);
+    while (earlyCompletion is null && DateTime.UtcNow < earlyWait) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
     Check(earlyCompletion == false && File.ReadAllText(Path.Combine(mergeRoot, "merged2.txt")) == "<<<<<<< git conflict version\n",
-        "premature close is fail-closed: MERGED untouched, exit state unresolved");
+        "premature close is fail-closed through Closing wiring: MERGED untouched, exit state unresolved");
 
     // 语法着色接线:.cs 侧有 provider,函数返回关键字令牌
     File.WriteAllText(Path.Combine(mergeRoot, "a.cs"), "class A { string s; }\n");
@@ -362,19 +378,43 @@ try
         if (hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
     var hexStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
     Check(hexWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0) && hexStatus.Contains("十六进制"), "binary pair renders hex view");
-    // 就地编辑:把左侧第 8 字节改成与右侧相同的 0x7b → 保存 → 两文件一致
+    // 就地编辑:把左侧第 8 字节改成与右侧相同的 0x7b → 保存 → 视图内重新比较后两文件一致
     hexWindow.BeginEditRow(0, true);
     var hexEditor = hexWindow.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor" && t.IsVisible);
     Check(hexEditor is not null, "hex inline editor visible");
     hexEditor!.Text = "4d 5a 90 00 03 ff fe 7b e9 80 11 b8";
     Dispatcher.UIThread.RunJobs();
-    hexWindow.SaveHexEdit();
-    var hexSaved = DateTime.UtcNow.AddSeconds(5);
-    while (DateTime.UtcNow < hexSaved) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); Thread.Sleep(10); }
+    Check(hexWindow.SaveHexEdit(), "hex save reports success");
     Check(File.ReadAllBytes(Path.Combine(binRoot, "a.bin"))[7] == 0x7b, "hex edit written to disk");
+    // 保存后的重新比较由菜单处理器链式执行;无头直调路径下用 ▶ 触发同一 Compare
+    var hexCompareButton = ((Grid)hexWindow.Content!).Children.OfType<StackPanel>().Single(p => p.Orientation == Avalonia.Layout.Orientation.Horizontal && p.Children.OfType<Button>().Any()).Children.OfType<Button>().First();
+    hexCompareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+    var hexRelist = DateTime.UtcNow.AddSeconds(5);
+    while (DateTime.UtcNow < hexRelist) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); Thread.Sleep(10); }
     var identicalStatus = string.Join(" ", ((Grid)hexWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
     Check(identicalStatus.Contains("相同"), $"reloaded hex shows identical (status: {identicalStatus[..Math.Min(70, identicalStatus.Length)]})");
     hexWindow.Close();
+
+    // K2 回归:超过 1MB 的文件,hex 编辑保存必须拼回尾部 —— 文件长度不变,绝不允许截断到 1MB
+    string bigLeft = Path.Combine(binRoot, "big-l.bin"), bigRight = Path.Combine(binRoot, "big-r.bin");
+    var big = new byte[1_500_000]; for (int i = 0; i < big.Length; i++) big[i] = (byte)(i % 251);
+    File.WriteAllBytes(bigLeft, big); File.WriteAllBytes(bigRight, big);
+    var bigWindow = new MainWindow(["--plugins", pluginsPath, "--left", bigLeft, "--right", bigRight, "--auto-compare"]);
+    bigWindow.Show();
+    var bigReady = DateTime.UtcNow.AddSeconds(15);
+    while (DateTime.UtcNow < bigReady) { Dispatcher.UIThread.RunJobs(); bigWindow.UpdateLayout(); Thread.Sleep(10);
+        if (bigWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
+    bigWindow.BeginEditRow(0, true);
+    var bigEditor = bigWindow.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "CellEditor" && t.IsVisible);
+    bigEditor!.Text = "ff 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f";
+    Dispatcher.UIThread.RunJobs();
+    bool bigSavedOk = bigWindow.SaveHexEdit();
+    var bigStatus = string.Join(" ", ((Grid)bigWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
+    Check(bigSavedOk, $"oversized hex save reports success (status: {bigStatus})");
+    var bigSaved = File.ReadAllBytes(bigLeft);
+    Check(bigSaved.Length == 1_500_000, $"oversized hex save preserves file length (got {bigSaved.Length}, expected 1500000)");
+    Check(bigSaved[0] == 0xff && bigSaved[15] == 0x0f && bigSaved[1_499_999] == (byte)(1_499_999 % 251), "edited prefix + untouched tail both present");
+    bigWindow.Close();
 }
 finally { Directory.Delete(binRoot, recursive: true); }
 // 图片视图:BMP 对(一枚差异像素)→ 图片比较页。

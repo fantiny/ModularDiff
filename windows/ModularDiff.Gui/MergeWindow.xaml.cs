@@ -19,26 +19,30 @@ public partial class MergeWindow : Window
     private static Brush LeftBack => Controls.Theme.DiffModified;
     private static Brush RightBack => Controls.Theme.DiffInserted;
     private readonly string? _baseArg, _leftArg, _rightArg;
+    private readonly string? _gitOutputPath;
     private bool _painting;
     private bool _everMerged;
     private int _currentConflict = -1;
     private List<(int Start, int Middle, int End)> _conflicts = [];
 
-    /// <summary>Git mergetool support: when set, the window auto-saves to this path on close
-    /// and fires GitMergeCompleted with the resolution state. Closing before any merge ran
-    /// is fail-closed: MERGED is left untouched (git keeps its own conflict version) and the
-    /// exit code stays non-zero — an empty result never silently counts as "resolved".</summary>
-    public string? GitOutputPath { get; init; }
+    /// <summary>Git mergetool support: pass the MERGED path to the constructor — the window
+    /// auto-saves to it on close and fires GitMergeCompleted with the resolution state.
+    /// Closing before any merge ran is fail-closed: MERGED is left untouched (git keeps its
+    /// own conflict version) and the exit state stays unresolved — an empty result never
+    /// silently counts as "resolved". (Never expose this as an init-only property checked
+    /// inside the ctor: object initializers run after the ctor, that wiring was dead code.)</summary>
+    public string? GitOutputPath => _gitOutputPath;
     public event Action<bool>? GitMergeCompleted;
 
     private readonly PluginCatalog _plugins;
 
-    public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null)
+    public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null, string? gitOutputPath = null)
     {
         _baseArg = basePath; _leftArg = leftPath; _rightArg = rightPath;
+        _gitOutputPath = gitOutputPath;
         _plugins = App.Plugins;   // shared catalog, disposed by App
         InitializeComponent();
-        if (GitOutputPath is not null)
+        if (_gitOutputPath is not null)
             Closing += (_, _) =>
             {
                 if (!_everMerged) { GitMergeCompleted?.Invoke(false); return; }
@@ -46,7 +50,7 @@ public partial class MergeWindow : Window
                 {
                     var text = new TextRange(Result.Document.ContentStart, Result.Document.ContentEnd).Text;
                     string resolved = text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine);
-                    File.WriteAllText(GitOutputPath, resolved);
+                    AtomicFile.WriteAllText(_gitOutputPath, resolved);
                     GitMergeCompleted?.Invoke(_conflicts.Count == 0);
                 }
                 catch { GitMergeCompleted?.Invoke(false); }
@@ -72,6 +76,9 @@ public partial class MergeWindow : Window
     }
 
     private async void MergeClick(object sender, RoutedEventArgs e) => await MergeAsync();
+
+    /// <summary>测试/程序化入口:与 ▶ 按钮同一合并入口。</summary>
+    public Task RunMergeAsync() => MergeAsync();
 
     private async Task MergeAsync()
     {
@@ -174,8 +181,9 @@ public partial class MergeWindow : Window
     private void TakeLeftClick(object sender, RoutedEventArgs e) => TakeSide(left: true);
     private void TakeRightClick(object sender, RoutedEventArgs e) => TakeSide(left: false);
 
-    /// <summary>Resolves the current conflict by replacing the marked block with one side's lines.</summary>
-    private void TakeSide(bool left)
+    /// <summary>Resolves the current conflict by replacing the marked block with one side's lines.
+    /// Public as the test/programmatic entry (same path as the ⇐/⇒ buttons).</summary>
+    public void TakeSide(bool left)
     {
         if (_currentConflict < 0 || _currentConflict >= _conflicts.Count) return;
         var range = _conflicts[_currentConflict];

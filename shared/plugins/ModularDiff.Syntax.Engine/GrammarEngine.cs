@@ -27,23 +27,17 @@ public sealed class GrammarEngine : ISyntaxGrammar
 
     public GrammarEngine()
     {
-        var diagnostics = _loadDiagnostics;
         string dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? ".";
         string grammarDir = Path.Combine(dir, "grammars");
         if (!Directory.Exists(grammarDir)) grammarDir = dir;
-        foreach (string file in Directory.GetFiles(grammarDir, "grammar-*.json"))
+        if (!Directory.Exists(grammarDir)) return;
+        foreach (string file in Directory.EnumerateFiles(grammarDir, "grammar-*.json"))
             try { Load(File.ReadAllText(file)); }
-            catch (JsonException ex)
+            catch (Exception ex) when (ex is JsonException or ArgumentException or KeyNotFoundException
+                or InvalidOperationException or FormatException or IOException or UnauthorizedAccessException)
             {
-                diagnostics.Add($"{Path.GetFileName(file)}: 第 {ex.LineNumber + 1} 行第 {ex.BytePositionInLine} 列 — {ex.Message}");
-            }
-            catch (ArgumentException ex) // bad regex pattern
-            {
-                diagnostics.Add($"{Path.GetFileName(file)}: 正则无效 — {ex.Message}");
-            }
-            catch (KeyNotFoundException ex)
-            {
-                diagnostics.Add($"{Path.GetFileName(file)}: 缺少必需字段 — {ex.Message}");
+                // 逐文件隔离:一个坏文法只进诊断,不炸掉整个引擎/插件包(此前类型错误会中断全部 10 种语言)。
+                _loadDiagnostics.Add($"{Path.GetFileName(file)}: {ex.Message}");
             }
     }
 
@@ -51,29 +45,34 @@ public sealed class GrammarEngine : ISyntaxGrammar
     {
         using var doc = JsonDocument.Parse(json);
         string language = doc.RootElement.GetProperty("language").GetString() ?? "unknown";
+        // 先在局部构建,全部成功才提交:半途失败不再留下"已注册但零规则"的扩展(那种状态会让
+        // Tokenize 返回 [] —— 声称支持却不着色 —— 而不是回退到别的提供者)。
+        var extensions = new List<string>();
         foreach (var ext in doc.RootElement.GetProperty("extensions").EnumerateArray())
         {
-            string extension = ext.GetString()!;
-            _languageNames[extension] = language;
-            _compiled[extension] = [];
+            if (ext.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(ext.GetString()))
+                throw new InvalidOperationException("extensions[] 必须是非空字符串");
+            extensions.Add(ext.GetString()!);
         }
         var rules = new List<(int Priority, string Pattern, SyntaxTokenKind Kind)>();
         foreach (var rule in doc.RootElement.GetProperty("rules").EnumerateArray())
         {
-            string pattern = rule.GetProperty("pattern").GetString()!;
+            string pattern = rule.GetProperty("pattern").GetString()
+                ?? throw new InvalidOperationException("rules[].pattern 必须是字符串");
             string kindStr = rule.GetProperty("kind").GetString() ?? "Default";
-            int priority = rule.TryGetProperty("priority", out var p) ? p.GetInt32() : 5;
-            if (Enum.TryParse<SyntaxTokenKind>(kindStr, true, out var kind))
-                _ = new Regex(pattern, RegexOptions.Compiled, TimeSpan.FromMilliseconds(50)); // fail fast on bad escapes
-            else
+            int priority = rule.TryGetProperty("priority", out var p) && p.ValueKind == JsonValueKind.Number ? p.GetInt32() : 5;
+            if (!Enum.TryParse<SyntaxTokenKind>(kindStr, true, out var kind))
                 throw new KeyNotFoundException($"rules[].kind '{kindStr}' 不是有效的 SyntaxTokenKind");
+            _ = new Regex(pattern, RegexOptions.Compiled, TimeSpan.FromMilliseconds(50)); // fail fast on bad escapes
             rules.Add((priority, pattern, kind));
         }
-        foreach (string extension in _compiled.Keys.Where(e => _languageNames[e] == language).ToList())
+        foreach (string extension in extensions)
         {
-            var compiled = _compiled[extension];
+            _languageNames[extension] = language;
+            var compiled = new List<(Regex, SyntaxTokenKind)>();
             foreach (var (priority, pattern, kind) in rules.OrderBy(r => r.Priority))
                 compiled.Add((new Regex(pattern, RegexOptions.Compiled, TimeSpan.FromMilliseconds(20)), kind));
+            _compiled[extension] = compiled;
         }
     }
 

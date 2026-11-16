@@ -269,6 +269,8 @@ public sealed class AlignedRowsView : Control
         var properties = e.GetCurrentPoint(this).Properties;
         if (properties.IsRightButtonPressed)
         {
+            // 右键即清除陈旧文本选区:否则旧的拖选范围会劫持"复制此行到对侧"(CopyToSide 优先读选区,审查发现)。
+            ClearTextSelection();
             if (!_selected.Contains(index)) { _selected.Clear(); _selected.Add(index); _primary = _anchor = index; InvalidateVisual(); SelectionChanged?.Invoke(); }
             MenuRequested?.Invoke(_rows[index], left);
             e.Handled = true;

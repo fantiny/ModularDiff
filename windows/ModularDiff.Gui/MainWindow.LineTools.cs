@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using ModularDiff.Contracts;
+using ModularDiff.Core;
 using ModularDiff.Gui.Controls;
 
 namespace ModularDiff.Gui;
@@ -173,9 +174,9 @@ public partial class MainWindow
         }
         try
         {
-            string suffix = buffer.Text.Contains("\r\n") ? "\r" : "";   // 行尾风格沿用原文件
             var formatted = formatter.Format([.. DocumentLines.Parse(buffer.Text).Select(l => l.Text)]);
-            buffer.Apply(new TextEdit(0, buffer.Text.Length, string.Join("\n" + suffix, formatted) + suffix, $"格式化 · {formatter.DisplayName}"));
+            // 行尾风格/结尾换行沿原文 —— 走 Core 助手;此前手写 join 把 CRLF 拼成 LFCR(审查 K3)。
+            buffer.Apply(new TextEdit(0, buffer.Text.Length, LineText.Rebuild(formatted, buffer.Text), $"格式化 · {formatter.DisplayName}"));
             AfterProgrammaticEdit(pane, $"已按「{formatter.DisplayName}」格式化{(ReferenceEquals(pane, LeftCode) ? "左" : "右")}侧");
         }
         catch (Exception ex) { StatusLabel.Text = "格式化失败：" + ex.Message; }

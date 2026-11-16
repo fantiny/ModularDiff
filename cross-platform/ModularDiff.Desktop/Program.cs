@@ -10,10 +10,11 @@ internal static class Program
     public static void Main(string[] args)
     {
         // 未处理异常 → 确定性退出码 1:git mergetool 模式下崩溃绝不能以 0 退出(会被当作"合并成功")。
+        // 实测(审查 PR3)UnhandledException 里仅赋值 Environment.ExitCode 不改变最终退出码,必须 Exit(1)。
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             System.Diagnostics.Trace.WriteLine($"ModularDiff unhandled exception: {e.ExceptionObject}");
-            Environment.ExitCode = 1;
+            Environment.Exit(1);
         };
         AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace().StartWithClassicDesktopLifetime(args);
     }
@@ -39,11 +40,11 @@ public sealed class App : Application
             // 单实例多窗口：Finder/服务重复调用时把参数转发给已运行实例,由它开新窗口(macOS 的 open --args 不会送达已运行应用)。
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnLastWindowClose;
             // git mergetool 模式:专用进程、不开多窗口 IPC;窗口关闭时写 MERGED 并按冲突状态给退出码(0=干净 / 1=有冲突)。
+            // MERGED 路径经构造函数传入 —— init-only + 对象初始化器的组合曾让 Closing 订阅永不生效(审查 K1)。
             int mergeDash = Array.IndexOf(args, "--git-merge");
             if (mergeDash >= 0 && args.Length - mergeDash - 1 >= 4)
             {
-                var mergeWindow = new MergeWindow(args[mergeDash + 1], args[mergeDash + 2], args[mergeDash + 3])
-                { GitOutputPath = args[mergeDash + 4] };
+                var mergeWindow = new MergeWindow(args[mergeDash + 1], args[mergeDash + 2], args[mergeDash + 3], gitOutputPath: args[mergeDash + 4]);
                 mergeWindow.GitMergeCompleted += resolved => Environment.ExitCode = resolved ? 0 : 1;
                 desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
                 desktop.MainWindow = mergeWindow;

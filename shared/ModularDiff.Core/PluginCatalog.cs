@@ -19,7 +19,10 @@ public sealed class PluginCatalog : IPluginResolver, IDisposable
             catalog.Diagnostics.Add($"Plugin directory does not exist: {directory}");
             return catalog;
         }
-        foreach (var manifest in Directory.EnumerateFiles(directory, "plugin.json", SearchOption.AllDirectories)
+        // IgnoreInaccessible:单个 ACL 拒绝的子目录只跳过该目录,不再让整个插件发现以
+        // UnauthorizedAccessException 失败、宿主零插件(2026-11 审查发现)。
+        var enumeration = new EnumerationOptions { IgnoreInaccessible = true, RecurseSubdirectories = true };
+        foreach (var manifest in Directory.EnumerateFiles(directory, "plugin.json", enumeration)
                      .Order(StringComparer.Ordinal))
             catalog.LoadPackage(manifest);
         catalog.ValidateDependencies();
@@ -92,9 +95,15 @@ public sealed class PluginCatalog : IPluginResolver, IDisposable
 
     public void Dispose()
     {
-        foreach (var plugin in _plugins.Values.OfType<IDisposable>()) plugin.Dispose();
+        // 容错释放:一个插件 Dispose 抛异常不再中断其余插件与 ALC 卸载。
+        foreach (var plugin in _plugins.Values)
+            if (plugin is IDisposable disposable)
+                try { disposable.Dispose(); }
+                catch (Exception ex) { Diagnostics.Add($"Dispose '{plugin.Id}': {ex.GetBaseException().Message}"); }
         _plugins.Clear();
-        foreach (var context in _contexts) context.Unload();
+        foreach (var context in _contexts)
+            try { context.Unload(); }
+            catch (Exception ex) { Diagnostics.Add($"Unload context: {ex.GetBaseException().Message}"); }
         _contexts.Clear();
     }
 

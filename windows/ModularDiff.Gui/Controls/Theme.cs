@@ -70,7 +70,11 @@ public static class Theme
             string name = doc.RootElement.GetProperty("name").GetString() ?? "Custom";
             var colors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var prop in doc.RootElement.GetProperty("colors").EnumerateObject())
-                colors[prop.Name] = prop.Value.GetString() ?? "#000000";
+            {
+                string value = prop.Value.GetString() ?? "#000000";
+                _ = (Brush?)new BrushConverter().ConvertFromString(value) ?? throw new FormatException($"invalid color '{value}'");   // 加载期校验:无效颜色在此报诊断,而不是 Apply 时炸掉静态构造函数
+                colors[prop.Name] = value;
+            }
             Themes[name] = colors;
         }
         catch (System.Text.Json.JsonException ex)
@@ -79,11 +83,12 @@ public static class Theme
         }
         catch (KeyNotFoundException ex)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 颜色值无效 — {ex.Message}");
+            // 颜色值非法 / 根节点非对象 / 文件被锁:降级为诊断,绝不逃出静态构造函数炸掉启动。
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
         }
     }
 

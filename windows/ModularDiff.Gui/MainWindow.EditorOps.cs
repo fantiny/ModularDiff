@@ -25,10 +25,14 @@ public partial class MainWindow
 
         try
         {
-            // Source content for the selected lines.
-            string[] sourceLines = source.Buffer.Text.Split('\n');
+            // Source content for the selected lines, rebuilt in the DESTINATION's ending style.
+            // TextEdit length spans whole lines (DocumentLine.Length includes the ending), so the
+            // replacement must end with a terminator too — otherwise the next line gets glued on.
+            var sourceDocs = DocumentLines.Parse(source.Buffer.Text);
             int srcFirst = selected[0] - 1, srcLast = selected[^1] - 1;
-            string replacement = string.Join("\n", sourceLines[srcFirst..(srcLast + 1)]);
+            string destEol = dest.Buffer.Text.Contains("\r\n") ? "\r\n" : "\n";   // 目标侧行尾风格
+            string replacement = string.Concat(Enumerable.Range(srcFirst, srcLast - srcFirst + 1)
+                .Select(i => sourceDocs[i].Text + destEol));
 
             // Find the destination range through the aligned rows.
             int destFirst = -1, destLast = -1;
@@ -73,7 +77,6 @@ public partial class MainWindow
             int srcLine = selected[0];
             var doc = source.Line(srcLine);
             if (doc is null) return;
-            string replacement = doc.Text;
             var srcCell = _presentation.Rows
                 .Select(r => toRight ? r.Left : r.Right)
                 .FirstOrDefault(c => c?.LineNumber == srcLine);
@@ -84,7 +87,10 @@ public partial class MainWindow
             if (dstCell is null) { StatusLabel.Text = "该行在对侧没有对应位置。"; return; }
             var destDoc = dest.Line(dstCell.LineNumber);
             if (destDoc is null) return;
-            dest.Buffer.Apply(new TextEdit(destDoc.Offset, destDoc.Length, replacement,
+            // 被替换的范围含目标行的行尾符(DocumentLine.Length = Text + Ending),替换文本必须带上
+            // 同样的行尾 —— 此前裸文本替换会把下一行拼接进来(每次 Ctrl+L 损坏一次缓冲区)。
+            string destEol = dest.Buffer.Text.Contains("\r\n") ? "\r\n" : "\n";
+            dest.Buffer.Apply(new TextEdit(destDoc.Offset, destDoc.Length, doc.Text + destEol,
                 $"复制行 {(toRight ? "左→右" : "右→左")}"));
             _activePane = dest;
             AfterProgrammaticEdit(dest, "已复制 1 行。");
@@ -172,10 +178,15 @@ public partial class MainWindow
         if (currentRow < 0 || currentRow >= _presentation.Rows.Count) return;
         int hunkId = _presentation.Rows[currentRow].HunkId;
         if (hunkId < 0) { StatusLabel.Text = "光标不在差异块内。"; return; }
-        var hunk = _presentation.Hunks[hunkId];
-        // Select all rows in this hunk via the number-column mechanism on the active pane.
-        pane.SelectColumn(hunk.StartRow, hunk.EndRow, 0, int.MaxValue);
-        StatusLabel.Text = $"已选中差异块 {hunkId + 1}（{hunk.EndRow - hunk.StartRow + 1} 行）。";
+        // DiffHunk.StartRow/EndRow 是展示行空间,而 SelectColumn 需要文档行号 —— 两个坐标系在
+        // 出现不成对行(增/删)后即分叉。经该块的行解析真实行号(此前直接传展示行号,选错行后
+        // 打字会改错行)。
+        bool leftPane = ReferenceEquals(pane, LeftCode);
+        var cells = _presentation.Rows.Where(r => r.HunkId == hunkId)
+            .Select(r => leftPane ? r.Left : r.Right).OfType<TextCell>().ToList();
+        if (cells.Count == 0) return;
+        pane.SelectColumn(cells[0].LineNumber, cells[^1].LineNumber, 0, int.MaxValue);
+        StatusLabel.Text = $"已选中差异块 {hunkId + 1}（{cells.Count} 行）。";
     }
 
     // File transforms moved to FileTypes plugin (GenericFileTools provider).

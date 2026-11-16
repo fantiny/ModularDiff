@@ -130,15 +130,20 @@ internal static unsafe class Handler
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int Initialize(void* self, void* pidlFolder, void* dataObj, void* progIdKey)
     {
-        State state = StateOf(Base(self, true));
-        state.Selection.Clear();
-        state.Left = null;
-        state.GuiExePath = ReadState("GuiExePath");
-        if (ReadState("Left") is { } left && Native.GetFileAttributesW(left) != Native.INVALID_FILE_ATTRIBUTES)
-            state.Left = new SelectionPath(left, DirectoryExists(left));
-        if (dataObj is not null) state.Selection.AddRange(PathsFromDataObject(dataObj));
-        state.Plan = [.. MenuPlan.Plan(state.Selection, state.Left)];
-        return Native.S_OK;
+        // COM 入口必须有异常屏障:UnmanagedCallersOnly 里逃逸的异常会 fail-fast 整个 Explorer。
+        try
+        {
+            State state = StateOf(Base(self, true));
+            state.Selection.Clear();
+            state.Left = null;
+            state.GuiExePath = ReadState("GuiExePath");
+            if (ReadState("Left") is { } left && Native.GetFileAttributesW(left) != Native.INVALID_FILE_ATTRIBUTES)
+                state.Left = new SelectionPath(left, DirectoryExists(left));
+            if (dataObj is not null) state.Selection.AddRange(PathsFromDataObject(dataObj));
+            state.Plan = [.. MenuPlan.Plan(state.Selection, state.Left)];
+            return Native.S_OK;
+        }
+        catch { return Native.E_FAIL; }
     }
 
     private static List<SelectionPath> PathsFromDataObject(void* dataObj)
@@ -157,7 +162,9 @@ internal static unsafe class Handler
                 for (uint i = 0; i < count; i++)
                 {
                     uint written = Native.DragQueryFileW(medium.hGlobal, i, pinned, (uint)buffer.Length);
-                    if (written == 0) continue;
+                    // cch 不足时 DragQueryFileW 返回的是"所需长度"而非已写长度 —— 超长路径必须跳过,
+                    // 否则 new string(pinned, 0, written) 会读过缓冲区边界(Explorer 进程内越界读)。
+                    if (written == 0 || written >= buffer.Length) continue;
                     string path = new(pinned, 0, (int)written);
                     result.Add(new SelectionPath(path, DirectoryExists(path)));
                 }
@@ -180,6 +187,11 @@ internal static unsafe class Handler
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int QueryContextMenu(void* self, nint hMenu, uint indexMenu, uint idFirst, uint idLast, uint flags)
+    {
+        try { return QueryContextMenuCore(self, hMenu, indexMenu, idFirst, idLast, flags); }
+        catch { return (int)idFirst; }   // 异常屏障:至少返回合法的 idFirst,绝不 fail-fast Explorer
+    }
+    private static int QueryContextMenuCore(void* self, nint hMenu, uint indexMenu, uint idFirst, uint idLast, uint flags)
     {
         State state = StateOf(Base(self, false));
         state.MenuBase = idFirst;
@@ -211,6 +223,11 @@ internal static unsafe class Handler
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int InvokeCommand(void* self, Native.CmInvokeCommandInfo* info)
+    {
+        try { return InvokeCommandCore(self, info); }
+        catch { return Native.E_FAIL; }   // 异常屏障:COM 服务器把异常转成 HRESULT,而不是拖垮 Explorer
+    }
+    private static int InvokeCommandCore(void* self, Native.CmInvokeCommandInfo* info)
     {
         State state = StateOf(Base(self, false));
         if (info is null) return Native.E_FAIL;
@@ -248,6 +265,9 @@ internal static unsafe class Handler
             if (!StillExists(right.Path))
                 return NotifyMissing(info, "所选的文件或目录已不存在，请重新选择。");
         }
+        // 主程序路径缺失时明确提示(此前静默返回 E_FAIL,用户点了菜单却什么都没发生)。
+        if (string.IsNullOrEmpty(state.GuiExePath))
+            return NotifyMissing(info, "未找到 ModularDiff 主程序路径，请重新安装或重新注册资源管理器集成。");
         return Launch(state.GuiExePath, left.Path, right.Path) ? Native.S_OK : Native.E_FAIL;
     }
 
@@ -301,6 +321,11 @@ internal static unsafe class Handler
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     private static int GetCommandString(void* self, uint idCmd, uint type, uint* reserved, char* name, uint cchMax)
+    {
+        try { return GetCommandStringCore(self, idCmd, type, reserved, name, cchMax); }
+        catch { return Native.E_FAIL; }
+    }
+    private static int GetCommandStringCore(void* self, uint idCmd, uint type, uint* reserved, char* name, uint cchMax)
     {
         State state = StateOf(Base(self, false));
         if (idCmd >= (uint)state.Plan.Length) return Native.E_FAIL;

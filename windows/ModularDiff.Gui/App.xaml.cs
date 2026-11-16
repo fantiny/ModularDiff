@@ -35,7 +35,8 @@ public partial class App : Application
             if (args.Length == 5 && args[0] == "--git-merge")
             {
                 // Git mergetool protocol: BASE LOCAL REMOTE MERGED — auto-save to MERGED, exit by conflict state.
-                var merge = new MergeWindow(args[1], args[2], args[3]) { GitOutputPath = args[4] };
+                // MERGED 走构造函数:对象初始化器在构造之后执行,ctor 内据 init-only 属性订阅 Closing 是死接线。
+                var merge = new MergeWindow(args[1], args[2], args[3], gitOutputPath: args[4]);
                 merge.GitMergeCompleted += resolved => { Shutdown(resolved ? 0 : 1); };
                 merge.Show();
                 return;

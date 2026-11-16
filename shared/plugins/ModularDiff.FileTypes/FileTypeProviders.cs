@@ -67,19 +67,16 @@ public sealed class JsonFileType : IFileTypeProvider
     }
     private static JsonNode? SortNode(JsonNode? node)
     {
-        if (node is JsonObject obj)
+        // 深拷贝重建:原节点仍挂在父对象上,直接搬动会抛 "The node already has a parent"
+        // (此前被上层 catch 吞掉,"排序 JSON 键"从未真正生效 —— 2026-11 审查发现)。
+        return node switch
         {
-            var sorted = new JsonObject(obj.OrderBy(p => p.Key, StringComparer.Ordinal));
-            foreach (var (key, value) in sorted) sorted[key] = SortNode(value);
-            return sorted;
-        }
-        if (node is JsonArray array)
-        {
-            var sorted = new JsonArray();
-            foreach (var item in array) sorted.Add(SortNode(item));
-            return sorted;
-        }
-        return node;
+            JsonObject obj => new JsonObject(
+                obj.OrderBy(p => p.Key, StringComparer.Ordinal)
+                   .Select(p => new KeyValuePair<string, JsonNode?>(p.Key, SortNode(p.Value)))),
+            JsonArray array => new JsonArray(array.Select(SortNode).ToArray()),
+            _ => node?.DeepClone(),
+        };
     }
 }
 

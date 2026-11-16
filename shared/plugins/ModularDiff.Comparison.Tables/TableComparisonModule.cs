@@ -141,12 +141,17 @@ public sealed class TableComparisonModule : IComparisonModule
                 foreach (var rowElement in XDocument.Load(sheetStream).Descendants(ns + "row"))
                 {
                     var cells = new SortedDictionary<int, string>();
+                    int sequential = 0;   // OOXML 允许省略 r 属性:按规范退化为"前一个单元格 +1"的顺序位置
                     foreach (var cell in rowElement.Elements(ns + "c"))
                     {
                         int column = ColumnIndex(cell.Attribute("r")?.Value ?? "");
+                        if (column < 0) column = sequential;
+                        sequential = column + 1;
                         string type = cell.Attribute("t")?.Value ?? "";
                         string? value = cell.Element(ns + "v")?.Value ?? cell.Element(ns + "is")?.Element(ns + "t")?.Value;
-                        cells[column] = type == "s" && int.TryParse(value, out int sharedIndex) && sharedIndex < shared.Count ? shared[sharedIndex] : value ?? "";
+                        // 共享字符串索引必须非负且在表内(此前 <v>-1</v> 直接越界抛出)
+                        cells[column] = type == "s" && int.TryParse(value, out int sharedIndex)
+                            && sharedIndex >= 0 && sharedIndex < shared.Count ? shared[sharedIndex] : value ?? "";
                     }
                     int width = cells.Count == 0 ? 0 : cells.Keys.Max() + 1;
                     var line = new string[width];

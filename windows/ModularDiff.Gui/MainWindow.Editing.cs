@@ -236,14 +236,22 @@ public partial class MainWindow
     private async Task<bool> CanLeaveEdits()
     {
         if (_saving) { StatusLabel.Text = "正在保存，请稍候。"; return false; }
-        if (!HasDirtyBuffers) return true;
-        var choice = MessageBox.Show(this, "左右文件中有未保存的修改。\n\n是：保存修改后继续\n否：放弃修改\n取消：留在当前文件", "未保存的修改", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
-        return choice switch { MessageBoxResult.Yes => await SaveBuffers([_leftBuffer, _rightBuffer]) && !HasDirtyBuffers, MessageBoxResult.No => true, _ => false };
+        if (!HasDirtyBuffers && !Hex.IsDirty) return true;
+        var choice = MessageBox.Show(this, Hex.IsDirty && !HasDirtyBuffers
+                ? "十六进制视图有未保存的字节修改。\n\n是：保存后继续\n否：放弃修改\n取消：留在当前文件"
+                : "左右文件中有未保存的修改。\n\n是：保存修改后继续\n否：放弃修改\n取消：留在当前文件",
+            "未保存的修改", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+        if (choice == MessageBoxResult.No) return true;
+        if (choice != MessageBoxResult.Yes) return false;
+        // 文本与十六进制编辑一并保存 —— 此前 hex 修改不在任何离开/关闭提示内,静默丢弃(审查发现)。
+        bool saved = await SaveBuffers([_leftBuffer, _rightBuffer]) && !HasDirtyBuffers;
+        if (Hex.IsDirty) saved = Hex.Save() && saved;
+        return saved;
     }
     private async void EditorClosing(object? sender, CancelEventArgs e)
     {
         if (_allowClose) return;
-        if (!HasDirtyBuffers && !_saving) return;
+        if (!HasDirtyBuffers && !Hex.IsDirty && !_saving) return;
         e.Cancel = true;
         if (_closingPrompt) return;
         _closingPrompt = true;

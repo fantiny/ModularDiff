@@ -118,7 +118,9 @@ public partial class MainWindow
             {
                 _activeSession = session;
                 RestoreSessionState(session);
-                await SaveBuffers([session.LeftBuffer, session.RightBuffer]);
+                // 保存失败必须中止关闭:SaveBuffers 返回 false 时弹窗已承诺"编辑仍保留",
+                // 此前无条件移除 session 会把唯一的缓冲区引用丢掉(审查发现的数据丢失路径)。
+                if (!await SaveBuffers([session.LeftBuffer, session.RightBuffer])) return;
             }
         }
         _textSessions.Remove(session);
@@ -169,8 +171,10 @@ public partial class MainWindow
         session.CurrentHunk = _currentHunk;
         session.LeftVOffset = LeftCode.VerticalOffset;
         session.RightVOffset = RightCode.VerticalOffset;
-        session.LeftPath = LeftPath.Text;
-        session.RightPath = RightPath.Text;
+        // 路径框只在文本模式承载文件对;目录模式下仍是目录根,不得覆盖会话的文件路径
+        // (此前无条件覆盖:目录页打开文件 → 会话存成目录根 → find-or-create 永不命中 → 重复标签页)。
+        if (File.Exists(LeftPath.Text)) session.LeftPath = LeftPath.Text;
+        if (File.Exists(RightPath.Text)) session.RightPath = RightPath.Text;
         session.IsDirty = HasDirtyBuffers;
         string prefix = session.IsDirty ? "● " : "";
         string title = session.Title.TrimStart('●', ' ');

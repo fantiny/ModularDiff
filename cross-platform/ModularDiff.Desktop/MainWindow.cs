@@ -32,12 +32,15 @@ public sealed class MainWindow : Window
     {
         Title = Lang.Get("md_title");
         _diffTab.Header = Lang.Get("md_tab_diff");
+        _editTab.Header = Lang.Get("md_tab_edit");      // 三个 tab 头全部纳入语言切换(此前编辑/目录页永不更新)
+        _folderTab.Header = Lang.Get("md_tab_folder");
         foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
     }
     private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
     private bool HexMode => _hexLeft is not null;
     private readonly TabControl _tabs = new();
-    private readonly TabItem _diffTab = new() { Header = "差异对齐" };
+    private readonly TabItem _diffTab = new() { Header = "差异对齐" }, _editTab = new(), _folderTab = new();
+    private readonly ComboBox _languageBox = new() { Width = 96 };
     private readonly ComboBox _algorithm = new() { Width = 130 };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreEol = new() { Content = "↵", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreWhitespace = new() { Content = "␣", MinWidth = 32, Padding = new Thickness(8, 4) };
@@ -64,6 +67,7 @@ public sealed class MainWindow : Window
         _session = new(_plugins);
         _leftPath.Text = Arg("--left"); _rightPath.Text = Arg("--right");
         _algorithm.ItemsSource = _plugins.GetAll<IDiffAlgorithm>().Select(p => p.Id).ToArray(); _algorithm.SelectedItem = FirstAlgorithmId();
+        _session.Algorithm = FirstAlgorithmId();   // A3 收尾:构造期 SelectionChanged 尚未挂,须显式同步会话(否则目录首个算法≠myers 时显示与实际不符)
         Tip(_algorithm, "md_tip_algo");
         _toolbar.Children.Add(Button("▶", Lang.Get("md_tip_compare"), () => Run(Compare)));
         _toolbar.Children.Add(Button("⟳", Lang.Get("md_tip_realign"), Realign));
@@ -82,7 +86,7 @@ public sealed class MainWindow : Window
             themeButton.Content = Palette.IsDark ? "☀" : "🌙";
         };
         _toolbar.Children.Add(themeButton);
-        var languageBox = new ComboBox { Width = 96 };
+        var languageBox = _languageBox;
         languageBox.ItemsSource = Lang.Available.ToArray();
         languageBox.SelectedItem = Lang.CurrentName;
         languageBox.SelectionChanged += (_, _) =>
@@ -168,7 +172,7 @@ public sealed class MainWindow : Window
                 var patch = new MenuItem { Header = Lang.Get("md_menu_export_patch") };
                 patch.Click += (_, _) => Run(ExportHexPatchAsync);
                 var saveHex = new MenuItem { Header = Lang.Get("md_menu_save_hex") + (_hexDirty ? " ●" : "") };
-                saveHex.Click += (_, _) => Run(async () => SaveHexEdit());
+                saveHex.Click += (_, _) => Run(async () => { if (SaveHexEdit()) await Compare(); });   // 保存成功后在同一 Run 内重比较
                 menu.Items.Add(gotoOffset); menu.Items.Add(patch); menu.Items.Add(saveHex);
                 menu.Items.Add(new Separator());
             }
@@ -189,9 +193,9 @@ public sealed class MainWindow : Window
                 foreach (var item in split.Items.OfType<MenuItem>()) menu.Items.Add(item);
             if (menu.ItemCount > 0) _rows.OpenMenu(menu);
         };
-        var editTab = new TabItem { Header = Lang.Get("md_tab_edit"), Content = Columns(EditPanel(true), EditPanel(false)) };
-        var folderTab = new TabItem { Header = Lang.Get("md_tab_folder"), Content = _files };
-        _tabs.ItemsSource = new[] { _diffTab, editTab, folderTab };
+        _editTab.Header = Lang.Get("md_tab_edit"); _editTab.Content = Columns(EditPanel(true), EditPanel(false));
+        _folderTab.Header = Lang.Get("md_tab_folder"); _folderTab.Content = _files;
+        _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab };
         _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
             file is null ? new TextBlock() : Columns(
                 new TextBlock { Text = file.Status == FileStatus.RightOnly ? "—" : $"{file.Status}  {file.RelativePath}", Margin = new Thickness(4) },
@@ -254,6 +258,7 @@ public sealed class MainWindow : Window
         });
         if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         if (Palette.SavedLanguage is { } saved && Lang.Available.Contains(saved)) Lang.Apply(saved);
+        _languageBox.SelectedItem = Lang.CurrentName;   // 恢复保存语言后回同步下拉框显示(此前恢复 English 仍显示"中文")
         ApplyLanguage();
         if (args.Contains("--auto-compare")) Opened += (_, _) => Run(Compare);
     }
@@ -502,18 +507,35 @@ public sealed class MainWindow : Window
         await File.WriteAllTextAsync(target.TryGetLocalPath() ?? "modulardiff-binary.patch", report.ToString());
         _status.Text = $"补丁报告已导出（{segments} 段差异）。";
     }
-    public void SaveHexEdit()
+    /// <summary>把十六进制编辑写盘并返回是否成功;调用方自行决定是否重新比较。不再内部 Run(Compare) ——
+    /// 本方法常在菜单的 Run 内被调用,嵌套 Run 会被 _busy 短路成静默 no-op(保存后视图停在旧差异)。
+    /// 视图只装了前 1MB:文件更大时拼回未加载的尾部再原子写,绝不截断原文件(审查 K2)。</summary>
+    public bool SaveHexEdit()
     {
-        if (!HexMode) return;
-        if (!_hexDirty) { _status.Text = "没有未保存的十六进制修改。"; return; }
+        if (!HexMode) return false;
+        if (!_hexDirty) { _status.Text = "没有未保存的十六进制修改。"; return false; }
         try
         {
-            File.WriteAllBytes(_hexLeftPath, _hexLeft!);
+            var edited = _hexLeft!;
+            long originalLength = new FileInfo(_hexLeftPath).Length;
+            if (originalLength == edited.Length)
+                AtomicFile.WriteAllBytes(_hexLeftPath, edited);
+            else
+            {
+                byte[] full;
+                using (var original = File.OpenRead(_hexLeftPath))
+                {
+                    full = new byte[originalLength];
+                    original.ReadAtLeast(full, (int)Math.Min(originalLength, edited.Length));
+                }
+                Array.Copy(edited, full, edited.Length);   // 编辑只发生在已加载前缀内,尾部保持原样
+                AtomicFile.WriteAllBytes(_hexLeftPath, full);   // 读句柄必须先关:File.Replace 换不掉本进程打开的文件
+            }
             _hexDirty = false;
-            _status.Text = "十六进制编辑已写入磁盘，重新比较…";
-            Run(Compare);
+            _status.Text = "十六进制编辑已写入磁盘。";
+            return true;
         }
-        catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
     }
     private void FormatSide()
     {
@@ -524,9 +546,9 @@ public sealed class MainWindow : Window
         if (formatter is null) { _status.Text = $"没有支持 {Path.GetFileName(buffer.Path)} 的格式化插件（当前插件：{string.Join("、", _plugins.GetAll<ICodeFormatter>().Select(f => f.DisplayName))}）。"; return; }
         try
         {
-            string suffix = buffer.Text.Contains("\r\n") ? "\r" : "";   // 行尾风格沿用原文件
-            var formatted = formatter.Format(buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList());
-            _session.Edit(left, string.Join("\n" + suffix, formatted) + suffix);
+            var bare = buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+            var formatted = formatter.Format(bare);
+            _session.Edit(left, LineText.Rebuild(formatted, buffer.Text));   // 行尾风格/结尾换行沿原文 —— 走 Core 助手,不再手写 join(LFCR 事故源)
             _debounce.Stop();
             RefreshDirty();
             if ((bool)_autoRealign.IsChecked!) Realign();
@@ -560,10 +582,9 @@ public sealed class MainWindow : Window
         foreach (var cell in targets)
         {
             string raw = lines[cell.LineNumber - 1];
-            string suffix = raw.EndsWith('\r') ? "\r" : "";
-            var parts = splitter.Split(suffix.Length > 0 ? raw[..^1] : raw);
+            var parts = splitter.Split(raw.TrimEnd('\r'));
             if (parts.Count < 2) continue;
-            lines[cell.LineNumber - 1] = string.Join("\n" + suffix, parts) + suffix;
+            lines[cell.LineNumber - 1] = LineText.ReplaceRawLine(raw, parts);
             applied++;
         }
         if (applied == 0) return;
@@ -584,10 +605,9 @@ public sealed class MainWindow : Window
             int index = cell.LineNumber - 1;
             if (index < 0 || index >= lines.Length) return;
             string raw = lines[index];
-            string suffix = raw.EndsWith('\r') ? "\r" : "";   // 行尾风格(CRLF)沿用原行
-            var parts = splitter.Split(suffix.Length > 0 ? raw[..^1] : raw);
+            var parts = splitter.Split(raw.TrimEnd('\r'));
             if (parts.Count < 2) return;
-            lines[index] = string.Join("\n" + suffix, parts) + suffix;
+            lines[index] = LineText.ReplaceRawLine(raw, parts);   // 行尾风格(CRLF)沿用原行 —— Core 助手
             _session.Edit(left, string.Join("\n", lines));
             _debounce.Stop();   // 手动模式:点 ⟳ 重对齐;⚡ 开启时立即重算
             RefreshDirty();
@@ -771,6 +791,7 @@ public sealed class MainWindow : Window
             if (result.ModuleId == "pictures" && file.Status != FileStatus.Error)
             {
                 ShowPicture(left, right, file);
+                _tabs.SelectedIndex = 0;   // 差异页承载图片视图:此前不切 tab,目录页之后看似"没反应"
                 _status.Text = $"图片比较 · {file.Note}";
                 RecordRecent(left, right);
                 return;

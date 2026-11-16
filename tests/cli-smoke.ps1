@@ -36,6 +36,52 @@ if ($LASTEXITCODE -ne 0) { throw 'Extension build failed' }
 $extensionJson = Invoke-Case 'New plugin without rebuilding host' 1 @('compare', $left, $right, '--plugins', $packageRoot, '--algorithm', 'position', '--format', 'json')
 $extensionResult = @($extensionJson)[-1] | ConvertFrom-Json
 if ($extensionResult.AlgorithmId -ne 'position') { throw 'Extension not used' }
+
+# ─── merge 命令:退出码契约 / --output 同输入保护 / 冲突标记落盘(2026-11 审查补) ───
+$mergeRoot = Join-Path $repoRoot ('artifacts/merge-smoke-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $mergeRoot -Force | Out-Null
+try {
+    $base = Join-Path $mergeRoot 'base.txt'; $localF = Join-Path $mergeRoot 'local.txt'; $remoteF = Join-Path $mergeRoot 'remote.txt'
+    Set-Content -Path $base -Value "common`nkeep`n" -NoNewline
+    Set-Content -Path $localF -Value "common`nmine`n" -NoNewline
+    Set-Content -Path $remoteF -Value "common`ntheirs`n" -NoNewline
+    $cleanBase = Join-Path $mergeRoot 'cb.txt'; $cleanLocal = Join-Path $mergeRoot 'cl.txt'; $cleanRemote = Join-Path $mergeRoot 'cr.txt'
+    Set-Content -Path $cleanBase -Value "a`nb`n" -NoNewline
+    Set-Content -Path $cleanLocal -Value "A`nb`n" -NoNewline
+    Set-Content -Path $cleanRemote -Value "a`nB`n" -NoNewline
+    $null = Invoke-Case 'Merge clean (disjoint edits)' 0 @('merge', $cleanBase, $cleanLocal, $cleanRemote)
+    $conflictOut = Join-Path $mergeRoot 'conflict-merged.txt'
+    $conflictText = Invoke-Case 'Merge conflicts exit 1' 1 @('merge', $base, $localF, $remoteF, '--output', $conflictOut)
+    $mergedPayload = Get-Content -Path $conflictOut -Raw
+    if ($mergedPayload -notmatch '<<<<<<<' -or $mergedPayload -notmatch '>>>>>>>') { throw "conflict markers missing: $mergedPayload" }
+    Write-Output 'PASS conflict markers written to --output'
+    $checks++
+    $null = Invoke-Case 'Merge output never overwrites inputs' 2 @('merge', $base, $localF, $remoteF, '--output', $localF)
+    if ((Get-Content -Path $localF -Raw) -ne "common`nmine`n") { throw 'merge --output overwrote LEFT input!' }
+    $null = Invoke-Case 'Merge missing input' 2 @('merge', (Join-Path $mergeRoot 'nope.txt'), $localF, $remoteF)
+    Write-Output 'PASS merge input guard left LEFT untouched'
+    $checks++
+
+    # git setup:用 GIT_CONFIG_GLOBAL 把"全局配置"隔离到临时文件,断言键与 trustExitCode;坏 --gui 必须失败。
+    $gitConfigPath = Join-Path $mergeRoot 'gitconfig-test'
+    $env:GIT_CONFIG_GLOBAL = $gitConfigPath
+    try {
+        $guiStub = Join-Path $mergeRoot 'ModularDiff.Gui.exe'
+        Set-Content -Path $guiStub -Value 'stub'
+        $null = Invoke-Case 'git setup writes mergetool config' 0 @('git', 'setup', '--global', '--gui', $guiStub)
+        $configured = & git config --global --get-regexp '^(diff|merge)\.' 2>$null
+        if (-not $configured) { throw 'git config file has no diff/merge keys' }
+        $trustExit = & git config --global --get 'mergetool.modulardiff.trustExitCode'
+        if ($trustExit -ne 'true') { throw "trustExitCode = $trustExit" }
+        $mergeCmd = & git config --global --get 'mergetool.modulardiff.cmd'
+        if ($mergeCmd -notmatch '--git-merge' -or $mergeCmd -notmatch '\$MERGED') { throw "mergetool cmd: $mergeCmd" }
+        Write-Output 'PASS git setup: difftool+mergetool keys, trustExitCode, --git-merge contract'
+        $checks++
+        $null = Invoke-Case 'git setup rejects missing --gui path' 2 @('git', 'setup', '--global', '--gui', (Join-Path $mergeRoot 'missing.exe'))
+    }
+    finally { Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue }
+}
+finally { Remove-Item -LiteralPath $mergeRoot -Recurse -Force -ErrorAction SilentlyContinue }
 if ($Gui) {
     $guiDll = Join-Path $repoRoot 'artifacts/gui/ModularDiff.Gui.dll'
     $imagePath = Join-Path $repoRoot 'artifacts/gui-smoke.png'

@@ -35,8 +35,12 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     // Directory results retain summaries; GUI loads a selected file's edits lazily.
                     item = result.Files.Single() with { RelativePath = relative, Lines = [] };
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { item = new(relative, FileStatus.Error, [], Note: ex.Message); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // 单文件任何失败(含格式解析异常,如缺 r 属性的 xlsx)只降级为 Error 条目,
+                    // 不再让一个坏文件中止整次目录比较(2026-11 审查发现)。
+                    item = new(relative, FileStatus.Error, [], Note: ex.GetBaseException().Message);
+                }
             }
             files.Add(item);
             progress?.Report(new(Interlocked.Increment(ref completed), paths.Length, relative));

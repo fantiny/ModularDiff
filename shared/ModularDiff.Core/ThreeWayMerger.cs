@@ -24,7 +24,12 @@ public static class ThreeWayMerger
             int leftStart = l < left.Chunks.Count ? left.Chunks[l].BaseStart : int.MaxValue;
             int rightStart = r < right.Chunks.Count ? right.Chunks[r].BaseStart : int.MaxValue;
             if (leftStart == int.MaxValue && rightStart == int.MaxValue) break;
-            if (leftStart < rightStart)
+            // 偏移重叠检测:一侧的块跨越另一侧块的起点 = 两侧改动在基线上相交(哪怕起点不同),
+            // 必须进入冲突窗口统一裁决。此前仅 leftStart == rightStart 才判重叠,偏移相交时
+            // 两侧各自独立发射,把对同一基线行的两种替换都写进结果且 Clean=True(审查 K4)。
+            bool leftSpansRight = leftStart < rightStart && left.Chunks[l].BaseEnd > rightStart;
+            bool rightSpansLeft = rightStart < leftStart && right.Chunks[r].BaseEnd > leftStart;
+            if (leftStart < rightStart && !leftSpansRight)
             {
                 EmitStable(sections, baseLines, position, leftStart);
                 var chunk = left.Chunks[l++];
@@ -32,7 +37,7 @@ public static class ThreeWayMerger
                 position = chunk.BaseEnd;
                 continue;
             }
-            if (rightStart < leftStart)
+            if (rightStart < leftStart && !rightSpansLeft)
             {
                 EmitStable(sections, baseLines, position, rightStart);
                 var chunk = right.Chunks[r++];

@@ -434,7 +434,9 @@ try
             catch (Exception ex) { issues.Add($"{name}: {ex.GetBaseException().Message}"); }
         }
 
-        // Language files: parse + key coverage
+        // Language files: parse + FULL key parity vs zh-CN baseline (a half-translated pack used to
+        // ship "working" via silent key-name fallback)
+        string? baselinePack = null; var packKeys = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in Directory.GetFiles(Path.Combine(repo, "windows/ModularDiff.Gui/languages"), "lang-*.json"))
         {
             string name = Path.GetFileName(file);
@@ -442,10 +444,20 @@ try
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(file));
                 Check(doc.RootElement.GetProperty("name").GetString()!.Length > 0, name + ": missing name");
-                Check(doc.RootElement.GetProperty("strings").GetProperty("app_title").GetString()!.Length > 0, name + ": missing app_title");
+                var keys = doc.RootElement.GetProperty("strings").EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                Check(keys.Contains("app_title") && keys.Contains("md_title"), name + ": missing core keys");
+                packKeys[name] = keys;
+                if (name.Contains("zh-CN")) baselinePack = name;
             }
             catch (Exception ex) { issues.Add($"{name}: {ex.GetBaseException().Message}"); }
         }
+        if (baselinePack is { } baseline)
+            foreach (var (pack, keys) in packKeys)
+            {
+                if (pack == baseline) continue;
+                var missing = packKeys[baseline].Except(keys).Where(k => !k.StartsWith("_")).ToList();
+                Check(missing.Count == 0, $"{pack}: missing {missing.Count} keys vs zh-CN ({string.Join(",", missing.Take(5))})");
+            }
 
         // Theme files: parse + color coverage
         foreach (var file in Directory.GetFiles(Path.Combine(repo, "windows/ModularDiff.Gui/themes"), "theme-*.json"))
@@ -465,18 +477,124 @@ try
         return Task.CompletedTask;
     });
 
-    await Test("GrammarEngine loads grammar files and produces syntax tokens", () =>
+    await Test("GrammarEngine loads grammar files and produces syntax tokens", async () =>
     {
         var grammars = catalog.GetAll<ISyntaxGrammar>();
         Check(grammars.Count > 0, "No ISyntaxGrammar plugins loaded — GrammarEngine didn't find any grammar files.");
-        var engine = grammars.FirstOrDefault(g => g.Extensions.Contains(".cs"));
-        Check(engine is not null, "No grammar covers .cs — grammar files not loaded.");
-        if (engine is null) return Task.CompletedTask;
-        var tokens = engine.Tokenize("public static void Main(string[] args)", ".cs");
+        var grammarEngine = grammars.FirstOrDefault(g => g.Extensions.Contains(".cs"));
+        Check(grammarEngine is not null, "No grammar covers .cs — grammar files not loaded.");
+        if (grammarEngine is null) return;
+        var tokens = grammarEngine.Tokenize("public static void Main(string[] args)", ".cs");
         Check(tokens is not null && tokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "C-family grammar produced no keyword tokens.");
-        var pyTokens = engine.Tokenize("def hello():", ".py");
+        var pyTokens = grammarEngine.Tokenize("def hello():", ".py");
         Check(pyTokens is not null && pyTokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "Python grammar produced no keyword tokens.");
-        return Task.CompletedTask;
+
+        // ─── 2026-11 审查回归:每个 P0/P1 修复都有对应断言 ───
+
+        // K3:行尾组装走 Core 助手后,CRLF 永远不会变成 LFCR
+        Check(LineText.Rebuild(["a", "b"], "x\r\ny\r\n") == "a\r\nb\r\n", "Rebuild keeps CRLF + trailing newline");
+        Check(LineText.Rebuild(["a", "b"], "x\ny\n") == "a\nb\n", "Rebuild keeps LF + trailing newline");
+        Check(LineText.Rebuild(["a", "b"], "x\r\ny") == "a\r\nb", "Rebuild without trailing newline");
+        Check(LineText.Rebuild(["a", "b", ""], "x\r\ny\r\n") == "a\r\nb\r\n", "trailing empty line normalized away");
+        Check(LineText.ReplaceRawLine("abc\r", ["p1", "p2"]) == "p1\r\np2\r", "raw CRLF line split preserves CRLF (not LFCR)");
+        Check(LineText.ReplaceRawLine("abc", ["p1", "p2"]) == "p1\np2", "raw LF line split keeps LF");
+
+        // 原子写:替换语义 + 不留临时文件
+        string atomicTarget = Path.Combine(temp, "atomic-target.json");
+        await File.WriteAllTextAsync(atomicTarget, "old");
+        AtomicFile.WriteAllText(atomicTarget, "new-content");
+        Check(File.ReadAllText(atomicTarget) == "new-content", "atomic overwrite replaces in place");
+        AtomicFile.WriteAllBytes(atomicTarget, [1, 2, 3]);
+        Check(File.ReadAllBytes(atomicTarget).SequenceEqual<byte>([1, 2, 3]), "atomic bytes write replaces");
+        Check(Directory.GetFiles(temp, "atomic-target.json.tmp-*").Length == 0, "no temp leftovers");
+
+        // SessionStore:类型错误的字段/非数组节点不再让 Load 整体抛出
+        string corruptSessions = Path.Combine(temp, "sessions-corrupt.json");
+        await File.WriteAllTextAsync(corruptSessions, "{\"Named\":[{\"Name\":\"good\",\"Left\":\"l\",\"Right\":\"r\"},{\"Name\":\"bad\",\"IgnoreCase\":\"yes\"}],\"Recent\":\"not-an-array\"}");
+        var repaired = SessionStore.Load(corruptSessions);
+        Check(repaired.Named.Count == 1 && repaired.Named[0].Name == "good", "good entry survives, wrong-typed entry skipped");
+        Check(repaired.Recent.Count == 0, "non-array Recent degrades to empty");
+        SessionStore.Save(repaired.UpsertNamed(new("kept", "a", "b", null, false, false, false, true, DateTime.Now, null)), corruptSessions);
+        Check(SessionStore.Load(corruptSessions).Named.Count == 2, "round-trip after repair");
+
+        // 隔离左右命名空间分离 + 重复提示不再抛(左右第 2 行高度相似:分离命名空间下会配对,
+        // 合并命名空间的旧实现会把右 1 一并隔离导致不配对 —— 这是判别点)
+        var presenter = catalog.Get<ITextPresentation>("side-by-side");
+        var isolationPair = await Text("a\naaabbb\nz\n", "aaabbc\nq\nz\n");
+        var leftIsolated = presenter.Build(isolationPair.Files[0].Lines, isolatedLeftLines: [1]);
+        Check(leftIsolated.Rows.Any(r => r.Left?.LineNumber == 1 && r.Right is null), "isolated left line stays unpaired");
+        Check(leftIsolated.Rows.Any(r => r.Right?.LineNumber == 1 && r.Left is not null), "same-numbered RIGHT line still pairable (per-side namespaces): "
+            + string.Join(" | ", leftIsolated.Rows.Select(r => $"{r.Left?.LineNumber}:{r.Left?.Text} / {r.Right?.LineNumber}:{r.Right?.Text}")));
+        _ = presenter.Build(isolationPair.Files[0].Lines, hints: [new(1, 1), new(1, 2)]);   // 重复提示:先到先得,不抛
+
+        // P1:JSON"排序键"此前是死代码(JsonNode 重复挂父被吞),必须真的排序
+        string sortJson = Path.Combine(temp, "sort.json");
+        await File.WriteAllTextAsync(sortJson, "{\"b\": 1, \"a\": {\"d\": 2, \"c\": 3}}");
+        var storagePlugin = catalog.GetAll<ITextStorage>().First();
+        var bufferFactory = catalog.GetAll<IEditBufferFactory>().First();
+        var jsonBuffer = bufferFactory.Create(await storagePlugin.LoadAsync(sortJson, true));
+        var jsonProvider = catalog.GetAll<IFileTypeProvider>().First(p => p.LanguageName == "JSON");
+        var sortAction = jsonProvider.EditActions.First(a => a.Label.Contains("排序"));
+        string sorted = sortAction.Transform(new(jsonBuffer, 1, 1));
+        Check(sorted.Length > 0 && sorted.IndexOf("\"a\"") is int aPos && sorted.IndexOf("\"b\"") is int bPos && aPos >= 0 && bPos > aPos,
+            "JSON sort-keys actually sorts (a before b): " + sorted);
+        Check(sorted.Contains("\"c\"") && sorted.Contains("\"d\"") && sorted.IndexOf("\"c\"") < sorted.IndexOf("\"d\""), "nested keys sorted too");
+
+        // P1:GUI 会话比较必须尊重 unimportant 规则(此前仅 CLI 生效)
+        var session = new ComparisonSession(catalog);
+        string unimpL = Path.Combine(temp, "unimp-l.txt"), unimpR = Path.Combine(temp, "unimp-r.txt");
+        await File.WriteAllTextAsync(unimpL, "v1.0\nsame\n"); await File.WriteAllTextAsync(unimpR, "v1.1\nsame\n");
+        await session.LoadAsync(unimpL, unimpR);
+        Check(session.Presentation!.Hunks.Count > 0, "version line differs by default");
+        session.Options = new(UnimportantPatterns: [@"v\d+\.\d+"]);
+        session.Recompare();
+        Check(session.Presentation!.Hunks.Count == 0, "unimportant pattern collapses GUI-session hunks");
+
+        // P1:CSS 格式化器处理换行花括号风格(此前产生游离 "body;")
+        var cssFormatter = catalog.GetAll<ICodeFormatter>().FirstOrDefault(f => f.CanFormat("a.css"));
+        Check(cssFormatter is not null, "css formatter present");
+        if (cssFormatter is not null)
+        {
+            var formattedCss = cssFormatter.Format(["body", "{ margin: 0; }", ""]);
+            Check(!string.Join("\n", formattedCss).Contains("body;"), "multi-line CSS braces not corrupted: " + string.Join("|", formattedCss));
+        }
+
+        // P1:xlsx 单元格缺 r 属性(OOXML 允许,流式写入器常见)不得崩溃
+        {
+            using var output = new MemoryStream();
+            using (var archive = new ZipArchive(output, ZipArchiveMode.Create))
+            {
+                void Put(string path, string xml) { var entry = archive.CreateEntry(path); using var writer = new StreamWriter(entry.Open()); writer.Write(xml); }
+                Put("[Content_Types].xml", """<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>""");
+                Put("xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></workbook>");
+                Put("xl/_rels/workbook.xml.rels", """<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>""");
+                // 无 r 属性、含 inlineStr —— 合规但此前触发 IndexOutOfRangeException
+                Put("xl/worksheets/sheet1.xml", """<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c t="inlineStr"><is><t>head</t></is></c><c><v>7</v></c></row></sheetData></worksheet>""");
+            }
+            string noR = Path.Combine(temp, "no-r.xlsx");
+            await File.WriteAllBytesAsync(noR, output.ToArray());
+            var parsedNoR = await TableComparisonModule.ParseAsync(noR, default);
+            Check(parsedNoR[1].SequenceEqual(["head", "7"]), "cells without r attribute parse positionally: [" + string.Join(",", parsedNoR[1]) + "]");
+            string noR2 = Path.Combine(temp, "no-r-2.xlsx");
+            await File.WriteAllBytesAsync(noR2, output.ToArray());
+            var noRResult = await engine.CompareAsync(new(noR, noR2, "myers"));
+            Check(noRResult.Files.Single().Status == FileStatus.Equal, "r-less xlsx compares without crashing");
+        }
+
+        // 测试缺口:编码探测广度(UTF-8 BOM / UTF-16BE / UTF-32 在比较层的等价判定)
+        {
+            string encL = Path.Combine(temp, "enc-l.txt"), encR = Path.Combine(temp, "enc-r.txt");
+            await File.WriteAllTextAsync(encL, "héllo\nworld\n", new UTF8Encoding(true));                    // UTF-8 with BOM
+            await File.WriteAllTextAsync(encR, "héllo\nworld\n", new UTF8Encoding(false));                   // UTF-8 no BOM
+            Check((await engine.CompareAsync(new(encL, encR, "myers"))).Files.Single().Status == FileStatus.Equal, "UTF-8 BOM vs no-BOM compares equal");
+            await File.WriteAllBytesAsync(encL, new byte[] { 0xFE, 0xFF }.Concat(Encoding.BigEndianUnicode.GetBytes("héllo\r\nworld")).ToArray());
+            await File.WriteAllBytesAsync(encR, Encoding.Unicode.GetBytes("héllo\r\nworld"));                // UTF-16LE no BOM (ASCII-safe content)
+            var beResult = await engine.CompareAsync(new(encL, encR, "myers"));
+            Check(beResult.Files.Single().Status is FileStatus.Equal or FileStatus.Modified, "UTF-16BE sheet decodes (never crash): " + beResult.Files.Single().Status);
+            await File.WriteAllBytesAsync(encL, Encoding.UTF32.GetBytes("alpha\nbeta\n"));
+            await File.WriteAllBytesAsync(encR, Encoding.UTF32.GetBytes("alpha\nbeta\n"));
+            Check((await engine.CompareAsync(new(encL, encR, "myers"))).Files.Single().Status == FileStatus.Equal, "UTF-32LE round-trips equal");
+        }
     });
 }
 finally

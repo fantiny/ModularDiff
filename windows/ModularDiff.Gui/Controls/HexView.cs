@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using ModularDiff.Contracts;
+using ModularDiff.Core;
 
 namespace ModularDiff.Gui.Controls;
 
@@ -69,7 +70,22 @@ public sealed class HexView : FrameworkElement, IScrollInfo
         if (!_isDirty || _editablePath is null) return true;
         try
         {
-            File.WriteAllBytes(_editablePath, _left);
+            // 视图最多装 16MB:文件更大时把编辑前缀拼回未加载的尾部再原子写 ——
+            // 此前直接写截断缓冲,大文件被静默砍成 16MB(审查 K2)。
+            long originalLength = new FileInfo(_editablePath).Length;
+            if (originalLength == _left.Length)
+                AtomicFile.WriteAllBytes(_editablePath, _left);
+            else
+            {
+                byte[] full;
+                using (var original = File.OpenRead(_editablePath))
+                {
+                    full = new byte[originalLength];
+                    original.ReadAtLeast(full, (int)Math.Min(originalLength, _left.Length));
+                }
+                Array.Copy(_left, full, _left.Length);
+                AtomicFile.WriteAllBytes(_editablePath, full);   // 读句柄先关:File.Replace 换不掉本进程打开的文件
+            }
             _originalLeft = [.. _left];
             _isDirty = false;
             DirtyStateChanged?.Invoke();
@@ -78,6 +94,22 @@ public sealed class HexView : FrameworkElement, IScrollInfo
         }
         catch { return false; }
     }
+
+    /// <summary>测试/程序化入口:模拟在当前光标处连续键入十六进制字符(驱动 OverwriteNibble→AdvanceCursor)。</summary>
+    public void TypeHex(string digits)
+    {
+        foreach (char c in digits)
+        {
+            int digit = c is >= '0' and <= '9' ? c - '0' : c is >= 'a' and <= 'f' ? c - 'a' + 10 : c is >= 'A' and <= 'F' ? c - 'A' + 10 : -1;
+            if (digit >= 0) { OverwriteNibble(digit); }
+        }
+        InvalidateVisual();
+    }
+
+    /// <summary>测试/程序化入口:当前光标位置(字节偏移,是否高半字节)。</summary>
+    public (int Offset, bool HighNibble) HexCursor => (_cursorOffset, _cursorHighNibble);
+    /// <summary>测试/程序化入口:当前(可能已编辑的)左侧字节。</summary>
+    public byte[] EditedBytes => _left;
 
     /// <summary>Exports the binary differences as a human-readable patch report.</summary>
     public string ExportPatch()
@@ -207,13 +239,14 @@ public sealed class HexView : FrameworkElement, IScrollInfo
         {
             case Key.Left:
                 e.Handled = true;
-                if (_cursorHighNibble) { _cursorHighNibble = false; }
-                else { _cursorHighNibble = true; if (current > 0) _cursorOffset = current - 1; }
+                // 半字节线性序列 [B0高, B0低, B1高, B1低…]:左移 = 低→同字节高;高→前一字节低
+                if (!_cursorHighNibble) _cursorHighNibble = true;
+                else if (current > 0) { _cursorOffset = current - 1; _cursorHighNibble = false; }
                 break;
             case Key.Right:
                 e.Handled = true;
-                if (!_cursorHighNibble) { _cursorHighNibble = true; }
-                else { _cursorHighNibble = false; if (current < _left.Length - 1) _cursorOffset = current + 1; }
+                if (_cursorHighNibble) _cursorHighNibble = false;
+                else if (current < _left.Length - 1) { _cursorOffset = current + 1; _cursorHighNibble = true; }
                 break;
             case Key.Up:
                 e.Handled = true;
@@ -265,7 +298,9 @@ public sealed class HexView : FrameworkElement, IScrollInfo
 
     private void AdvanceCursor()
     {
-        if (!_cursorHighNibble) _cursorHighNibble = true;
+        // 半字节编辑模型:写完高半字节 → 同字节低半字节;写完低半字节 → 下一字节高半字节。
+        // 此前两支反了(写高跳下字节高,低半字节永远键入不到,连续输入会打坏相邻字节 —— 审查 K7)。
+        if (_cursorHighNibble) _cursorHighNibble = false;
         else if (_cursorOffset < _left.Length - 1) { _cursorOffset++; _cursorHighNibble = true; }
         // Auto-scroll if cursor moves out of view
         double cursorY = (_cursorOffset / 16) * RowHeight;

@@ -94,9 +94,13 @@ public sealed record AlignmentHint(int LeftLine, int RightLine);
 public interface ITextPresentation : IPlugin
 {
     // contextLines: -1 = all, 0 = changes only, >0 = context around changed blocks.
-    // hints: forced alignment pairs (user-driven "Align With"); isolatedLines are excluded from matching.
+    // hints: forced alignment pairs (user-driven "Align With"); isolated lines are excluded from matching.
+    // isolatedLeftLines/isolatedRightLines carry per-side line numbers (preferred over the legacy
+    // merged isolatedLines, which cannot tell left line N from right line N).
     TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1,
         CancellationToken cancellationToken = default,
         IReadOnlyList<AlignmentHint>? hints = null,
-        IReadOnlyList<int>? isolatedLines = null);
+        IReadOnlyList<int>? isolatedLines = null,
+        IReadOnlyList<int>? isolatedLeftLines = null,
+        IReadOnlyList<int>? isolatedRightLines = null);
 }

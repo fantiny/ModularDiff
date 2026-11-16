@@ -10,12 +10,17 @@ public sealed class SideBySidePresentation : ITextPresentation
     public TextPresentation Build(IReadOnlyList<DiffLine> lines, int contextLines = -1,
         CancellationToken cancellationToken = default,
         IReadOnlyList<AlignmentHint>? hints = null,
-        IReadOnlyList<int>? isolatedLines = null)
+        IReadOnlyList<int>? isolatedLines = null,
+        IReadOnlyList<int>? isolatedLeftLines = null,
+        IReadOnlyList<int>? isolatedRightLines = null)
     {
         if (contextLines < -1) throw new ArgumentOutOfRangeException(nameof(contextLines));
         var rows = new List<AlignedRow>(); var hunks = new List<DiffHunk>();
-        var hintMap = hints?.ToDictionary(h => h.LeftLine, h => h.RightLine) ?? [];
-        var isolated = isolatedLines?.ToHashSet() ?? [];
+        // 重复提示(同一左行多次"对齐到")按先到先得,不再让 ToDictionary 抛异常炸掉整个重比较。
+        var hintMap = hints?.GroupBy(h => h.LeftLine).ToDictionary(g => g.Key, g => g.First().RightLine) ?? [];
+        // 左右行号各自成表;仅传合并列表(旧调用)时两表共用,保持旧行为。
+        var isolatedLeft = isolatedLeftLines?.ToHashSet() ?? isolatedLines?.ToHashSet() ?? [];
+        var isolatedRight = isolatedRightLines?.ToHashSet() ?? isolatedLines?.ToHashSet() ?? [];
         TextCell? Cell(DiffLine? line, bool left, IReadOnlyList<HighlightSpan>? spans = null, string? text = null)
         {
             int? number = left ? line?.LeftLine : line?.RightLine;
@@ -43,7 +48,7 @@ public sealed class SideBySidePresentation : ITextPresentation
             var forced = new List<(DiffLine? Left, DiffLine? Right)>();
             foreach (var delete in deletes)
             {
-                if (delete.LeftLine is int dl && isolated.Contains(dl))
+                if (delete.LeftLine is int dl && isolatedLeft.Contains(dl))
                 { forced.Add((delete, null)); paired.Add(delete); continue; }
                 if (delete.LeftLine is int l && hintMap.TryGetValue(l, out int targetRight))
                 {
@@ -54,7 +59,7 @@ public sealed class SideBySidePresentation : ITextPresentation
             }
             foreach (var insert in inserts)
             {
-                if (insert.RightLine is int rl && isolated.Contains(rl))
+                if (insert.RightLine is int rl && isolatedRight.Contains(rl))
                 { forced.Add((null, insert)); paired.Add(insert); }
             }
             var remainingDeletes = deletes.Where(d => !paired.Contains(d)).ToList();

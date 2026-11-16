@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Avalonia.Media;
+using ModularDiff.Core;
 
 namespace ModularDiff.Desktop;
 
@@ -73,7 +74,7 @@ public static class Palette
         {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff");
             Directory.CreateDirectory(directory);
-            File.WriteAllText(Path.Combine(directory, "Settings.json"), JsonSerializer.Serialize(new SettingsRecord(IsDark, SavedLanguage)));
+            AtomicFile.WriteAllText(Path.Combine(directory, "Settings.json"), JsonSerializer.Serialize(new SettingsRecord(IsDark, SavedLanguage)));
         }
         catch { /* 持久化失败不影响本次切换 */ }
     }
@@ -104,9 +105,10 @@ public static class Palette
         {
             _diagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            _diagnostics.Add($"{Path.GetFileName(path)}: 颜色值无效 — {ex.Message}");
+            // 颜色值非法 / 根节点非对象 / 文件被锁等,一律降级为诊断而不是逃出静态构造函数炸掉启动。
+            _diagnostics.Add($"{Path.GetFileName(path)}: {ex.Message}");
         }
     }
     private static Dictionary<string, IBrush> Compile(Dictionary<string, string> colors)

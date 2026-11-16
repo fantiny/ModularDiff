@@ -42,6 +42,11 @@ public sealed class ComparisonSession(PluginCatalog plugins)
         Left = Right = null;
         Comparison = null;
         Presentation = null;
+        // 手动对齐/隔离绑定的是上一个文件的行号,对新文件毫无意义,必须一并清掉
+        // (此前残留会把新文件的无关行强行配对 —— 审查发现的状态泄漏)。
+        AlignmentHints = [];
+        IsolatedLeftLines = [];
+        IsolatedRightLines = [];
         Version++;
     }
 
@@ -74,7 +79,9 @@ public sealed class ComparisonSession(PluginCatalog plugins)
         Presentation = null;
         Version++;
         Comparison = Plugin<IBufferComparison>().Compare(Left.Snapshot(), Right.Snapshot(), Algorithm, Options, plugins);
-        Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines, hints: AlignmentHints, isolatedLines: [.. IsolatedLeftLines, .. IsolatedRightLines]);
+        // 左右行号分开传递:合并成一个列表会把"隔离左侧第 N 行"误伤到右侧第 N 行(审查发现的命名空间混用)。
+        Presentation = Plugin<ITextPresentation>().Build(Comparison.File.Lines, hints: AlignmentHints,
+            isolatedLeftLines: IsolatedLeftLines, isolatedRightLines: IsolatedRightLines);
     }
 
     /// <summary>Replaces one side's entire text with minimal-span edit detection.</summary>

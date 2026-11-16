@@ -129,9 +129,64 @@ public partial class MainWindow
             WrapToggle.IsChecked = false;
             Require(Math.Abs(LeftCode.RowHeightOf(0) - single) < .5, "unwrapping restores single-line height");
 
+            // ─── 2026-11 审查回归:K6 复制行 CRLF / K1 MergeWindow 接线 / K7 hex 半字节 ───
+
+            // K6:复制单行到对侧不得吞掉目标行换行、不得注入游离 CR(CRLF 文件)。
+            // 注:目标行取 "betaX"(与源行共享前缀)保证相似度配对 —— 全大写的 BETA 因大小写不配对。
+            ClearEditors();
+            LeftPath.Text = Path.Combine(root, "crlf-left.txt"); RightPath.Text = Path.Combine(root, "crlf-right.txt");
+            await File.WriteAllTextAsync(LeftPath.Text, "alpha\r\nbeta\r\ngamma\r\n");
+            await File.WriteAllTextAsync(RightPath.Text, "alpha\r\nbetaX\r\ngamma\r\n");
+            await CompareAsync();
+            _activePane = LeftCode; LeftCode.SetCaret(7);   // 光标在左侧第 2 行(beta)
+            CopySelectionToSide(true); await _editTask;
+            Require(_rightBuffer!.Text == "alpha\r\nbeta\r\ngamma\r\n",
+                "copy-line on CRLF keeps line endings intact: [" + _rightBuffer.Text.Replace("\r", "\\r").Replace("\n", "\\n")
+                + "] status: " + StatusLabel.Text);
+
+            // K1:MergeWindow 按生产路径构造(--git-merge 的 MERGED 走构造函数),Close 触发写盘与完成事件。
+            string mergeBase = Path.Combine(root, "m-base.txt"), mergeLocal = Path.Combine(root, "m-local.txt"),
+                   mergeRemote = Path.Combine(root, "m-remote.txt"), mergeOut = Path.Combine(root, "m-merged.txt");
+            await File.WriteAllTextAsync(mergeBase, "common\nkeep\n");
+            await File.WriteAllTextAsync(mergeLocal, "common\nmine\n");
+            await File.WriteAllTextAsync(mergeRemote, "common\ntheirs\n");
+            await File.WriteAllTextAsync(mergeOut, "");
+            bool? mergeResolved = null;
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var merge = new MergeWindow(mergeBase, mergeLocal, mergeRemote, gitOutputPath: mergeOut);
+                merge.GitMergeCompleted += resolved => mergeResolved = resolved;
+                merge.Loaded += async (_, _) =>
+                {
+                    await merge.RunMergeAsync();   // 与 ▶ 按钮同一入口
+                    merge.TakeSide(left: true);    // 采用左侧(mine) → 无未决冲突
+                    merge.Close();                 // 经 Closing 接线写 MERGED(K1 死接线时这里什么都不写)
+                };
+                merge.Show();
+            });
+            var mergeDeadline = DateTime.UtcNow.AddSeconds(10);
+            while (mergeResolved is null && DateTime.UtcNow < mergeDeadline) await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            string mergePayload = mergeResolved is null ? "(no completion)" : await File.ReadAllTextAsync(mergeOut);
+            Require(mergeResolved == true, "MergeWindow Closing wiring fires GitMergeCompleted(true)");
+            Require(mergePayload.Replace("\r\n", "\n").TrimEnd('\n') == "common\nmine", "unexpected merge payload: ["
+                + mergePayload.Replace("\r", "\\r").Replace("\n", "\\n") + "]");   // FlowDocument 尾部空段落按惯例忽略
+
+            // K7:hex 半字节顺序 —— 键入 AB 修改的是同一字节(高后进低),不再打坏相邻字节。
+            await Dispatcher.InvokeAsync(() =>
+            {
+                var hex = new Controls.HexView();
+                hex.SetContent(new byte[] { 0x00, 0x11, 0x22 }, new byte[] { 0x00, 0x11, 0x22 }, [], editablePath: Path.Combine(root, "hex-typing.bin"));
+                hex.GoToOffset(0);
+                hex.TypeHex("AB");
+                var (offset, high) = hex.HexCursor;
+                Require(offset == 1 && high, $"after typing AB cursor moves to next byte high (got {offset},{high})");
+                byte[] edited = hex.EditedBytes;
+                Require(edited[0] == 0xAB && edited[1] == 0x11, $"AB lands on one byte: {edited[0]:X2} {edited[1]:X2}");
+            });
+
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             if (Arg("--screenshot") is string screenshot) SaveScreenshot(screenshot);
-            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign, find/replace, column selection" }));
+            File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, root, tests = "both-side edit, undo/redo, bidirectional block merge, save, saved checkpoint, empty-buffer edit, css format, css split, manual/auto realign, find/replace, column selection, CRLF copy-line, git-merge wiring, hex nibble order" }));
         }
         catch (Exception ex) { exit = 2; File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "edit-smoke-error.txt"), ex.ToString()); }
         _allowClose = true; Application.Current.Shutdown(exit);

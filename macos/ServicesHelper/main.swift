@@ -22,8 +22,11 @@ final class ModularDiffServices: NSObject {
         NSWorkspace.shared.openApplication(at: Self.appURL, configuration: configuration)
     }
     /// 通过 Unix domain socket 转发参数(协议:JSON 字符串数组,与 SingleInstance 一致)。
+    /// 套接字路径必须与 .NET 的 Environment.GetFolderPath(LocalApplicationData) 一致:
+    /// .NET 8+ 在 Unix 上走 XDG 规范解析为 ~/.local/share(不是 ~/Library/Application Support),
+    /// 此前连错目录导致转发永远失败、pending-left 被白白消费。
     private func forward(_ arguments: [String]) -> Bool {
-        let path = NSHomeDirectory() + "/Library/Application Support/ModularDiff/ipc.sock"
+        let path = NSHomeDirectory() + "/.local/share/ModularDiff/ipc.sock"
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { close(fd) }
@@ -60,13 +63,14 @@ final class ModularDiffServices: NSObject {
 
     @objc func compare(_ pboard: NSPasteboard, userData: String?, error: AutoreleasingUnsafeMutablePointer<NSString?>?) {
         let paths = selectedPaths(pboard)
-        if paths.count >= 2 {
-            try? FileManager.default.removeItem(at: Self.stateURL)
+        // 与 Windows MenuPlan 同规则:恰好 2 项才比较;≥3 项不做任何静默截取。
+        if paths.count == 2 {
             launch(["--left", paths[0], "--right", paths[1], "--auto-compare"])
+            try? FileManager.default.removeItem(at: Self.stateURL)   // 参数已送达(转发或新进程命令行)才消费状态
         } else if paths.count == 1 {
             if let left = pendingLeft(), left != paths[0] {
-                try? FileManager.default.removeItem(at: Self.stateURL)
                 launch(["--left", left, "--right", paths[0], "--auto-compare"])
+                try? FileManager.default.removeItem(at: Self.stateURL)
             } else {
                 launch(["--left", paths[0]])
             }

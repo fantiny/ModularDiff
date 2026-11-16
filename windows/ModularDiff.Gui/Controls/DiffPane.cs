@@ -208,7 +208,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
                 dc.DrawText(Format($"  ⋯  已折叠 {row.HiddenLines:N0} 行相同内容 · 双击展开", Muted, 12), new(55, y + 3));
                 continue;
             }
-            var background = cell is null ? Ghost : !row.IsDifferent ? Brushes.White : other is not null ? Modified : IsLeft ? Deleted : Inserted;
+            var background = cell is null ? Ghost : !row.IsDifferent ? Theme.PanelBackground : other is not null ? Modified : IsLeft ? Deleted : Inserted;
             dc.DrawRectangle(background, null, rect);
             if (cell is null)
             {
@@ -220,11 +220,11 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
             if (Buffer is null && _selected >= 0 && i >= Math.Min(_anchor, _selected) && i <= Math.Max(_anchor, _selected))
                 dc.DrawRectangle(Selected, null, rect);
             // The fixed number gutter does not move during horizontal scrolling.
-            dc.DrawRectangle(Brush("#F7F8FA"), null, new Rect(0, y, 54, height));
+            dc.DrawRectangle(Theme.Gutter, null, new Rect(0, y, 54, height));
             if (cell is null) continue;
             var number = Format(cell.LineNumber.ToString(CultureInfo.InvariantCulture), Muted, 11);
             dc.DrawText(number, new(46 - number.Width, y + 4));
-            if (row.IsDifferent) dc.DrawRectangle(other is not null ? Brush("#EAA05B") : IsLeft ? Brush("#D76565") : Brush("#65A67F"), null, new Rect(0, y, 3, height));
+            if (row.IsDifferent) dc.DrawRectangle(other is not null ? Theme.ModifiedBar : IsLeft ? Theme.DeletedBar : Theme.InsertedBar, null, new Rect(0, y, 3, height));
             if (_wrapLines)
             {
                 dc.PushClip(new RectangleGeometry(new Rect(55, Math.Max(0, y), Math.Max(0, RenderSize.Width - 55), Math.Max(0, Math.Min(height, RenderSize.Height - y)))));

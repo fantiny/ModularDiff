@@ -35,6 +35,11 @@ public static class SessionStore
         {
             return new([], []);
         }
+        catch
+        {
+            // 根节点非对象等结构异常同样按"无可加载会话"处理,不让畸形文件炸掉宿主启动。
+            return new([], []);
+        }
     }
 
     public static void Save(SessionFile sessions, string? path = null)
@@ -42,7 +47,8 @@ public static class SessionStore
         string file = path ?? DefaultPath;
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         var payload = new { Named = sessions.Named, Recent = sessions.Recent };
-        File.WriteAllText(file, JsonSerializer.Serialize(payload, Options));
+        // 原子写:裸 WriteAllText 在崩溃/并发下会截断文件,全部命名会话随之永久丢失。
+        AtomicFile.WriteAllText(file, JsonSerializer.Serialize(payload, Options));
     }
 
     /// <summary>Inserts or renames a saved session, keeping the list stable-ordered by name.</summary>
@@ -68,7 +74,8 @@ public static class SessionStore
 
     private static IReadOnlyList<SavedSession> Read(JsonElement root, string property)
     {
-        if (!root.TryGetProperty(property, out var list)) return [];
+        // 属性缺失或不是数组(如字符串)都按空处理:类型错误不该炸掉整个 Load(2026-11 审查)。
+        if (!root.TryGetProperty(property, out var list) || list.ValueKind != JsonValueKind.Array) return [];
         var result = new List<SavedSession>();
         foreach (var item in list.EnumerateArray())
         {
@@ -87,7 +94,7 @@ public static class SessionStore
                     item.TryGetProperty("UnimportantPatterns", out var patterns) && patterns.ValueKind == JsonValueKind.Array
                         ? [.. patterns.EnumerateArray().Select(p => p.GetString() ?? "").Where(p => p.Length > 0)] : null));
             }
-            catch (KeyNotFoundException) { /* skip malformed entries, keep the rest loadable */ }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* 跳过畸形条目(缺键/类型错),其余照常加载 */ }
         }
         return result;
     }

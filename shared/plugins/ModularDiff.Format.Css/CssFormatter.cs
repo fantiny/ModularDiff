@@ -20,10 +20,12 @@ public sealed class CssFormatter : ICodeFormatter
     {
         var output = new List<string>();
         int depth = 0;
+        string pending = "";   // 换行花括号风格:选择器独占一行,与携带 '{' 的下一行拼接后再处理
         static string Indent(int level) => new(' ', Math.Max(0, level) * 2);
         foreach (var raw in lines)
         {
-            string text = (raw ?? "").Trim();
+            string text = (pending.Length > 0 ? pending + " " : "") + (raw ?? "").Trim();
+            pending = "";
             if (text.Length == 0) { if (output.Count > 0 && output[^1].Length > 0) output.Add(""); continue; }
             while (text.Length > 0)
             {
@@ -36,6 +38,13 @@ public sealed class CssFormatter : ICodeFormatter
                     continue;
                 }
                 int open = IndexOutside(text, '{');
+                int close = IndexOutside(text, '}');
+                if (open < 0 && close < 0 && !text.Contains(';'))
+                {
+                    // 无花括号无分号:换行风格的选择器行,留待下一行(此前被当声明输出成游离的 "body;")
+                    pending = text;
+                    break;
+                }
                 string head = open >= 0 ? text[..open].TrimEnd() : "";
                 if (head.Length > 0 && !head.Contains(';') && !head.Contains('}'))
                 {
@@ -44,13 +53,13 @@ public sealed class CssFormatter : ICodeFormatter
                     text = text[(open + 1)..].TrimStart();
                     continue;
                 }
-                int close = IndexOutside(text, '}');
                 string chunk = close >= 0 ? text[..close] : text;
                 foreach (var declaration in Declarations(chunk))
                     output.Add(Indent(depth) + declaration);
                 text = close >= 0 ? text[close..] : "";
             }
         }
+        if (pending.Length > 0) output.Add(Indent(depth) + pending);   // 文件尾部的孤儿行原样保留
         return output;
     }
 
