@@ -25,12 +25,22 @@ public partial class MainWindow
             await File.WriteAllTextAsync(Path.Combine(LeftPath.Text, "src", "added.cs"), "left only\n");
             await File.WriteAllTextAsync(Path.Combine(RightPath.Text, "right-only.txt"), "right only\n");
             await CompareAsync(); Require(_folderResult is not null && _tree is not null, "Folder compare failed");
+            ExpandAll(this, new RoutedEventArgs()); // nested files must be in ItemsSource to select
             LeftFolders.SelectedItems.Clear();
             LeftFolders.SelectedItems.Add(_tree!.All.First(n => n.Name == "changed.cs"));
             LeftFolders.SelectedItems.Add(_tree.All.First(n => n.Name == "right-only.txt"));
             Require(SyncPaths(false).Count == 2 && RightFolders.SelectedItems.Count == 2, "Paired multiselection");
-            CollapseAll(this, new RoutedEventArgs()); Require(SyncPaths(true).Count == 3, "Collapsed descendants excluded from batch");
-            FolderSearch.Text = "src"; Require(SyncPaths(true).Count == 2, "Filter scope"); FolderSearch.Clear();
+            // Batch sync scopes from comparison result + name filter, not tree expansion.
+            CollapseAll(this, new RoutedEventArgs()); Require(SyncPaths(true).Count == 3, "Batch includes all compared files");
+            FolderSearch.Text = "src"; Require(SyncPaths(true).Count == 2, "Filter scope substring");
+            FolderSearch.Text = "*.cs";
+            var globCs = SyncPaths(true);
+            Require(globCs.Count == 2 && globCs.All(p => p.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)), "Filter scope glob *.cs");
+            FolderSearch.Clear();
+            FolderSearchRegex.IsChecked = true; FolderSearch.Text = @"changed\.cs$";
+            var reCs = SyncPaths(true);
+            Require(reCs.Count == 1 && reCs[0].EndsWith("changed.cs", StringComparison.OrdinalIgnoreCase), "Filter scope regex");
+            FolderSearchRegex.IsChecked = false; FolderSearch.Clear();
             var planner = (ISyncPlanner)SyncPlannerBox.SelectedItem; var presenter = (ISyncPreview)SyncPreviewBox.SelectedItem; var executor = (ISyncExecutor)SyncExecutorBox.SelectedItem;
             var plan = await planner.PlanAsync(LeftPath.Text, RightPath.Text, SyncPaths(true), SyncMode.Bidirectional);
             Require(plan.Items.Single(i => i.RelativePath.EndsWith("changed.cs")).Conflict, "Bidirectional conflict not shown");

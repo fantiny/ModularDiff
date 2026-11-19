@@ -23,12 +23,13 @@ public partial class MainWindow
         if (batch)
         {
             // Filtering applies to the complete comparison result, independently of tree expansion.
-            string query = FolderSearch.Text.Trim(); int filter = FolderFilter.SelectedIndex;
-            return _folderResult.Files.Where(f => (filter switch { 1 => f.Status != FileStatus.Equal, 2 => f.Status == FileStatus.Equal, 3 => f.Status == FileStatus.LeftOnly, 4 => f.Status == FileStatus.RightOnly, _ => true })
-                && (query.Length == 0 || f.RelativePath.Contains(query, StringComparison.OrdinalIgnoreCase))).Select(f => f.RelativePath).ToArray();
+            var nameFilter = CurrentFolderNameFilter(); int filter = FolderFilter.SelectedIndex;
+            return _folderResult.Files.Where(f => !f.IsDirectory
+                && (filter switch { 1 => f.Status != FileStatus.Equal, 2 => f.Status == FileStatus.Equal, 3 => f.Status == FileStatus.LeftOnly, 4 => f.Status == FileStatus.RightOnly, _ => true })
+                && (nameFilter.IsEmpty || nameFilter.Matches(f.RelativePath, Path.GetFileName(f.RelativePath)))).Select(f => f.RelativePath).ToArray();
         }
         var nodes = LeftFolders.SelectedItems.OfType<FolderNode>().ToArray();
-        return _folderResult.Files.Where(f => nodes.Any(n => n.IsDirectory
+        return _folderResult.Files.Where(f => !f.IsDirectory && nodes.Any(n => n.IsDirectory
             ? f.RelativePath.StartsWith(n.RelativePath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
             : string.Equals(f.RelativePath, n.RelativePath, StringComparison.OrdinalIgnoreCase))).Select(f => f.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

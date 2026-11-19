@@ -13,6 +13,16 @@ using ModularDiff.Core;
 namespace ModularDiff.Desktop;
 public sealed class MainWindow : Window
 {
+    /// <summary>IProgress that never captures the UI SynchronizationContext.</summary>
+    private sealed class ThreadPoolProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => ThreadPool.UnsafeQueueUserWorkItem(static state =>
+        {
+            var (action, item) = ((Action<T>, T))state!;
+            try { action(item); } catch { /* progress must not tear down compare */ }
+        }, (handler, value));
+    }
+
     private readonly PluginCatalog _plugins;
     private readonly bool _ownsPlugins;
     private readonly ComparisonSession _session;
@@ -793,10 +803,39 @@ public sealed class MainWindow : Window
         string left = Path.GetFullPath(_leftPath.Text.Trim()), right = Path.GetFullPath(_rightPath.Text.Trim());
         _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
         _status.Text = "比较中…";
-        var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options)));
+        // Avoid Progress<T>'s UI sync-context marshal: it was flooding the UI thread.
+        long lastUi = 0;
+        IProgress<ComparisonProgress> progress = new ThreadPoolProgress<ComparisonProgress>(p =>
+        {
+            long now = Environment.TickCount64;
+            if (p.PartialResult is { } partial && Directory.Exists(partial.LeftPath))
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    _directory = partial;
+                    _files.ItemsSource = partial.Files.Where(f => !f.IsDirectory).ToArray();
+                    _tabs.SelectedIndex = 2;
+                });
+            }
+            if (p.Path.StartsWith("scan:", StringComparison.Ordinal) && (p.Path == "scan:root" || now - lastUi >= 200))
+            {
+                lastUi = now;
+                string text = p.Path == "scan:root"
+                    ? "根目录已列出 · 继续扫描子目录…"
+                    : $"扫描子目录… 已发现 {p.Completed:N0} 个文件";
+                Dispatcher.UIThread.Post(() => _status.Text = text);
+            }
+            else if (p.Total > 0 && (p.Completed == p.Total || now - lastUi >= 200))
+            {
+                lastUi = now;
+                string text = $"内容比较 {p.Completed}/{p.Total} · {p.Path}";
+                Dispatcher.UIThread.Post(() => _status.Text = text);
+            }
+        });
+        var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options), progress: progress));
         _session.Clear(); RefreshEditors();
         if (Directory.Exists(left) && Directory.Exists(right))
-        { _directory = result; _files.ItemsSource = result.Files; _tabs.SelectedIndex = 2; _status.Text = $"{result.Files.Count} 个文件 · {result.Files.Count(f => f.Status != FileStatus.Equal)} 个差异/错误 · 双击打开"; }
+        { _directory = result; _files.ItemsSource = result.Files.Where(f => !f.IsDirectory).ToArray(); _tabs.SelectedIndex = 2; _status.Text = $"{result.Files.Count(f => !f.IsDirectory):N0} 个文件 · {result.Files.Count(f => !f.IsDirectory && f.Status != FileStatus.Equal)} 个差异/错误 · 双击打开"; }
         else
         {
             _directory = null; _files.ItemsSource = null;

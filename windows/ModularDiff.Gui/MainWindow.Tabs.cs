@@ -55,9 +55,7 @@ public partial class MainWindow
                 BuildTabButton(session);
             }
             SaveSessionState(session);
-            _activeSession = session;
-            FolderTab.IsChecked = false;
-            foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
+            ActivateTextSession(session);
         }
         else if (_folderResult is not null && _activeSession is not null)
         {
@@ -100,6 +98,16 @@ public partial class MainWindow
             Content = panel, Style = (Style)FindResource("SessionTab"), Padding = new Thickness(10, 5, 10, 5),
             ToolTip = session.LeftPath + "\n" + session.RightPath,
         };
+        // Tabs are not checkboxes: re-clicking an active tab must not uncheck it (which would
+        // leave no tab selected and hide nothing useful). Keep it checked and re-activate.
+        session.TabButton.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (session.TabButton.IsChecked == true)
+            {
+                e.Handled = true;
+                _ = SwitchToSession(session);
+            }
+        };
         session.TabButton.Checked += (_, _) => _ = SwitchToSession(session);
         TabStripPanel.Children.Remove(NewTabButton);
         TabStripPanel.Children.Add(session.TabButton);
@@ -129,24 +137,38 @@ public partial class MainWindow
         else SwitchToFolderView();
     }
 
-    private void SwitchToFolderView()
+    private void SwitchToFolderView() => SetView(false);
+
+    // RestoreFolderPathBar lives with SyncViewChrome (SetView) so Alt+Left and the folder tab
+    // share one path/toolbar restore path.
+
+    /// <summary>Folder tab owns the directory roots. File tabs temporarily overwrite the path
+    /// boxes; switching back must restore the comparison roots (not the last opened file).</summary>
+    private void RestoreFolderPathBar()
     {
-        if (_activeSession is { } current) SaveSessionState(current);
-        _activeSession = null;
-        FolderView.Visibility = Visibility.Visible;
-        TextView.Visibility = Visibility.Collapsed;
-        FolderTab.IsChecked = true;
-        foreach (var session in _textSessions) session.TabButton!.IsChecked = false;
-        UpdateSummary(); UpdateEditState();
+        if (_folderResult is null) return;
+        LeftPath.Text = _folderResult.LeftPath;
+        RightPath.Text = _folderResult.RightPath;
+        RememberCommittedPaths(_folderResult.LeftPath, _folderResult.RightPath);
     }
 
     private async Task SwitchToSession(TextSession session)
     {
-        if (ReferenceEquals(session, _activeSession)) return;
+        // Already-active tab clicks must still reveal TextView: OpenNode used to leave
+        // FolderView up while checking the new tab, and a second click would otherwise
+        // early-return with the file view still collapsed.
+        if (ReferenceEquals(session, _activeSession))
+        {
+            if (TextView.Visibility != Visibility.Visible)
+            {
+                SetView(true);
+                RestoreSessionState(session); // folder chrome may have overwritten path boxes
+            }
+            return;
+        }
         if (_activeSession is { } current) SaveSessionState(current);
         _activeSession = session;
-        FolderView.Visibility = Visibility.Collapsed;
-        TextView.Visibility = Visibility.Visible;
+        SetView(true);
         FolderTab.IsChecked = false;
         foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
         RestoreSessionState(session);
@@ -157,6 +179,16 @@ public partial class MainWindow
             await CompareAsync();
             SaveSessionState(session);
         }
+    }
+
+    /// <summary>Marks <paramref name="session"/> as the active text tab and shows the file view
+    /// without going through ToggleButton.Checked (which early-returns once _activeSession is set).</summary>
+    private void ActivateTextSession(TextSession session)
+    {
+        _activeSession = session;
+        FolderTab.IsChecked = false;
+        foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
+        SetView(true);
     }
 
     private void SaveSessionState(TextSession session)
@@ -171,16 +203,28 @@ public partial class MainWindow
         session.CurrentHunk = _currentHunk;
         session.LeftVOffset = LeftCode.VerticalOffset;
         session.RightVOffset = RightCode.VerticalOffset;
-        // 路径框只在文本模式承载文件对;目录模式下仍是目录根,不得覆盖会话的文件路径
-        // (此前无条件覆盖:目录页打开文件 → 会话存成目录根 → find-or-create 永不命中 → 重复标签页)。
-        if (File.Exists(LeftPath.Text)) session.LeftPath = LeftPath.Text;
-        if (File.Exists(RightPath.Text)) session.RightPath = RightPath.Text;
+        // Path boxes must not rewrite a different file pair's identity.
+        // Regression: open A → view A (boxes=A) → open B from folder while boxes still
+        // say A → SaveSessionState(B) used to set B's paths to A → find-or-create then
+        // treated every later open as the same tab (one file-compare tab forever).
+        // Directory roots are also rejected (File.Exists false). Blank "新比较" tabs and
+        // the active tab (user may have edited the boxes) may adopt the boxes.
+        bool blank = string.IsNullOrWhiteSpace(session.LeftPath) && string.IsNullOrWhiteSpace(session.RightPath);
+        bool samePair =
+            string.Equals(session.LeftPath, LeftPath.Text, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(session.RightPath, RightPath.Text, StringComparison.OrdinalIgnoreCase);
+        bool adoptBoxes = blank || samePair || ReferenceEquals(session, _activeSession);
+        if (adoptBoxes && File.Exists(LeftPath.Text)) session.LeftPath = LeftPath.Text;
+        if (adoptBoxes && File.Exists(RightPath.Text)) session.RightPath = RightPath.Text;
         session.IsDirty = HasDirtyBuffers;
         string prefix = session.IsDirty ? "● " : "";
         string title = session.Title.TrimStart('●', ' ');
         session.Title = prefix + title;
         if (session.TabButton is not null)
+        {
             (session.TabButton.Content as StackPanel)!.Children.OfType<TextBlock>().First().Text = session.Title;
+            session.TabButton.ToolTip = session.LeftPath + "\n" + session.RightPath;
+        }
     }
 
     private void RestoreSessionState(TextSession session)
@@ -203,9 +247,15 @@ public partial class MainWindow
         Overview.SetPresentation(session.Presentation);
         LeftPath.Text = session.LeftPath;
         RightPath.Text = session.RightPath;
-        UpdateSummary(); UpdateEditState();
+        RememberCommittedPaths(session.LeftPath, session.RightPath);
+        UpdateSummary(); UpdateEditState(); UpdateFileStats();
         if (session.Presentation is not null)
             HunkLabel.Text = $"{session.Presentation.Hunks.Count} 个差异块";
+        else
+            HunkLabel.Text = "";
+        OpenButton.IsEnabled = false;
+        PreviousFileButton.IsEnabled = NextFileButton.IsEnabled = _folderResult is not null;
+        ExportButton.IsEnabled = _fileResult is not null;
     }
 
     private async Task<TextSession> FindOrCreateSession(string left, string right, FolderNode? node = null)

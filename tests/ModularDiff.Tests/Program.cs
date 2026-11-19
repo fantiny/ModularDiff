@@ -38,6 +38,8 @@ try
     });
 
     await MenuPlanTests.Run(Test);
+    await FolderNameFilterTests.Run(Test);
+    await PathBarCommitTests.Run(Test);
 
     await Test("JSON structural comparison: key-order insensitive, value differences", async () =>
     {
@@ -304,11 +306,42 @@ try
         await File.WriteAllTextAsync(Path.Combine(left, "only-left"), "x"); await File.WriteAllTextAsync(Path.Combine(right, "only-right"), "y");
         await File.WriteAllTextAsync(Path.Combine(left, "nested", "code"), "aaa"); await File.WriteAllTextAsync(Path.Combine(right, "nested", "code"), "bbb");
         var result = await engine.CompareAsync(new(left, right, "patience"));
-        Check(result.Files.Count == 4 && result.Files.Count(f => f.Status == FileStatus.Modified) == 1, "Recursive file pairing failed.");
-        Check(result.Files.Count(f => f.Status == FileStatus.LeftOnly) == 1 && result.Files.Count(f => f.Status == FileStatus.RightOnly) == 1, "One-sided files failed.");
-        Check(result.Files.All(f => f.Lines.Count == 0), "Directory summaries retained line payloads.");
+        var files = result.Files.Where(f => !f.IsDirectory).ToArray();
+        Check(files.Length == 4 && files.Count(f => f.Status == FileStatus.Modified) == 1, "Recursive file pairing failed.");
+        Check(files.Count(f => f.Status == FileStatus.LeftOnly) == 1 && files.Count(f => f.Status == FileStatus.RightOnly) == 1, "One-sided files failed.");
+        Check(files.All(f => f.Lines.Count == 0), "Directory summaries retained line payloads.");
+        Check(result.Files.Any(f => f.IsDirectory && f.RelativePath == "nested"), "Nested directory placeholder emitted.");
         result = await engine.CompareAsync(new(left, right, Options: new(Recursive: false)));
-        Check(result.Files.Count == 3, "Non-recursive option ignored.");
+        Check(result.Files.Count(f => !f.IsDirectory) == 3, "Non-recursive option ignored.");
+    });
+    await Test("Directory compare emits root wave before nested scan and resolves Pending", async () =>
+    {
+        string left = Path.Combine(temp, "prog-left"), right = Path.Combine(temp, "prog-right");
+        Directory.CreateDirectory(Path.Combine(left, "deep")); Directory.CreateDirectory(Path.Combine(right, "deep"));
+        await File.WriteAllTextAsync(Path.Combine(left, "root.txt"), "left-root");
+        await File.WriteAllTextAsync(Path.Combine(right, "root.txt"), "right-root");
+        await File.WriteAllTextAsync(Path.Combine(left, "deep", "nested.txt"), "L");
+        await File.WriteAllTextAsync(Path.Combine(right, "deep", "nested.txt"), "R");
+        ComparisonResult? rootWave = null;
+        var addedWaves = new List<FileComparison>();
+        var updates = new List<FileComparison>();
+        var progress = new Progress<ComparisonProgress>(p =>
+        {
+            if (p.Path == "scan:root" && p.PartialResult is { } partial && rootWave is null)
+                rootWave = partial;
+            if (p.Added is { Count: > 0 } added) addedWaves.AddRange(added);
+            if (p.FileUpdate is { } update) updates.Add(update);
+        });
+        var result = await engine.CompareAsync(new(left, right, "myers"), progress: progress);
+        Check(rootWave is not null, "Root wave PartialResult must arrive before nested scan finishes.");
+        Check(rootWave!.Files.Any(f => !f.IsDirectory && f.RelativePath == "root.txt"), "Root file listed in first wave.");
+        Check(rootWave.Files.Any(f => f.IsDirectory && f.RelativePath == "deep"), "Root subdirectory placeholder in first wave.");
+        Check(!rootWave.Files.Any(f => f.RelativePath == Path.Combine("deep", "nested.txt")), "Nested file must not appear in root wave.");
+        Check(addedWaves.Any(f => f.RelativePath == Path.Combine("deep", "nested.txt")), "Nested file arrives via Added delta, not full resend.");
+        Check(result.Files.Count(f => !f.IsDirectory) == 2, "Final inventory has both root and nested files.");
+        Check(result.Files.Where(f => !f.IsDirectory).All(f => f.Status != FileStatus.Pending), "Final result has no Pending files.");
+        Check(result.Files.Single(f => f.RelativePath == "root.txt").Status == FileStatus.Modified, "Root file resolves to Modified.");
+        Check(updates.Any(u => u.RelativePath == "root.txt"), "FileUpdate reports resolved root file.");
     });
     await Test("Invalid paths and unavailable algorithms fail explicitly", async () =>
     {

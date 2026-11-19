@@ -47,7 +47,14 @@ public partial class MainWindow
         }
         if (!node.IsDirectory)
         {
-            Item("打开比较", true, () => _ = OpenNode(node));
+            var other = fromLeft ? RightFolders.SelectedItem as FolderNode : LeftFolders.SelectedItem as FolderNode;
+            bool cross = other is { IsDirectory: false }
+                && !string.Equals(node.RelativePath, other.RelativePath, StringComparison.OrdinalIgnoreCase)
+                && (fromLeft ? node.LeftExists && other.RightExists : other.LeftExists && node.RightExists);
+            string crossTitle = fromLeft ? $"{node.Name} ↔ {other!.Name}" : $"{other!.Name} ↔ {node.Name}";
+            Item(cross ? "打开比较：" + crossTitle : "打开比较", true, () => _ = OpenSelectedFiles());
+            if (cross)
+                Item("仅打开此行（同名配对）", true, () => _ = OpenNode(node));
             Item("复制到" + (fromLeft ? "右侧" : "左侧"), File.Exists(clicked), () => _ = CopyFolderFile(node, fromLeft));
         }
         Item("在资源管理器中显示(" + (fromLeft ? "左" : "右") + "侧)", File.Exists(clicked) || Directory.Exists(clicked),

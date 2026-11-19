@@ -1,4 +1,5 @@
-using System.IO;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -17,6 +18,7 @@ namespace ModularDiff.Gui;
 public partial class MainWindow : Window
 {
     private readonly PluginCatalog _plugins;
+    private string _committedLeft = "", _committedRight = "";
     private readonly ComparisonEngine _engine;
     private readonly string[] _arguments;
     private ComparisonResult? _folderResult, _fileResult;
@@ -24,13 +26,35 @@ public partial class MainWindow : Window
     private FolderTree? _tree;
     private IReadOnlyList<FolderNode> _folderRows = [];
     private FolderNode? _currentNode;
+    /// <summary>Sticky left/right file picks for BC-style cross-name compare. Survives the
+    /// non-Ctrl first click of a double-click so Open still uses the independent pair.</summary>
+    private FolderNode? _crossLeft, _crossRight;
     private FileComparison? _textFile;
     private CancellationTokenSource? _comparisonCancellation, _detailCancellation;
     private bool _ready, _busy, _syncText, _syncFolderScroll, _syncFolderSelection;
     private int _currentHunk = -1;
+    private int _folderSnapshotVersion;
+    private readonly ConcurrentQueue<FileComparison> _folderAdds = new();
+    private readonly ConcurrentQueue<FileComparison> _folderUpdates = new();
+    private string _folderProgressStatus = "";
+    private string _folderProgressActivity = "";
+    private volatile bool _folderUiDirty;
+    private DispatcherTimer? _folderUiTimer;
     private double _codeFontSize = 14;
     private static int _windowCount;
     private sealed record ModuleChoice(string? Id, string DisplayName);
+
+    /// <summary>Progress that never marshals to the UI SynchronizationContext — scan/compare
+    /// callbacks stay on the thread pool so the dispatcher queue is not flooded.</summary>
+    private sealed class ThreadPoolProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => ThreadPool.UnsafeQueueUserWorkItem(static state =>
+        {
+            var (action, item) = ((Action<T>, T))state!;
+            try { action(item); }
+            catch { /* progress must not tear down the compare */ }
+        }, (handler, value));
+    }
 
     public MainWindow(string[] arguments)
     {
@@ -106,6 +130,51 @@ public partial class MainWindow : Window
     }
     private TextBox Target(object sender) => (string)((Button)sender).Tag == "left" ? LeftPath : RightPath;
     private async void CompareClick(object sender, RoutedEventArgs e) => await CompareAndTrackSession();
+
+    private async void PathBarKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        e.Handled = true;
+        await CommitPathBarAsync();
+    }
+
+    /// <summary>Enter in the path bar: re-compare when both paths exist and are the same kind;
+    /// otherwise restore the last successful paths and keep the current result.</summary>
+    private async Task CommitPathBarAsync()
+    {
+        if (_busy) return;
+        if (!PathBarCommit.TryResolve(LeftPath.Text, RightPath.Text, out string left, out string right, out string? error))
+        {
+            LeftPath.Text = _committedLeft;
+            RightPath.Text = _committedRight;
+            StatusLabel.Text = error ?? "路径无效，已恢复。";
+            return;
+        }
+        if (!await CanLeaveEdits())
+        {
+            LeftPath.Text = _committedLeft;
+            RightPath.Text = _committedRight;
+            return;
+        }
+        LeftPath.Text = left;
+        RightPath.Text = right;
+        await CompareAndTrackSession();
+        if (_rootRequest is not null
+            && string.Equals(_rootRequest.LeftPath, left, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_rootRequest.RightPath, right, StringComparison.OrdinalIgnoreCase))
+            RememberCommittedPaths(left, right);
+        else
+        {
+            LeftPath.Text = _committedLeft;
+            RightPath.Text = _committedRight;
+        }
+    }
+
+    private void RememberCommittedPaths(string left, string right)
+    {
+        _committedLeft = left;
+        _committedRight = right;
+    }
     private async Task CompareAsync()
     {
         if (_busy || !await CanLeaveEdits()) return;
@@ -114,12 +183,17 @@ public partial class MainWindow : Window
         _comparisonCancellation?.Dispose(); _comparisonCancellation = new();
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
-        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows = [];
+        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _crossLeft = _crossRight = null; _textFile = null; _presentation = null; _folderRows = [];
+        _folderSnapshotVersion++;
+        while (_folderAdds.TryDequeue(out _)) { }
+        while (_folderUpdates.TryDequeue(out _)) { }
+        _folderProgressStatus = ""; _folderProgressActivity = "比较中…"; _folderUiDirty = false;
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         FolderView.Visibility = Visibility.Visible; TextView.Visibility = Visibility.Collapsed;
         ActivityLabel.Text = "比较中…";
+        StartFolderUiTimer();
         try
         {
             if (string.IsNullOrWhiteSpace(LeftPath.Text) || string.IsNullOrWhiteSpace(RightPath.Text)) throw new InvalidOperationException("请填写左右两侧路径。");
@@ -128,14 +202,16 @@ public partial class MainWindow : Window
                 new(IgnoreCaseBox.IsChecked == true, IgnoreWhitespaceBox.IsChecked == true, IgnoreEolBox.IsChecked == true, RecursiveBox.IsChecked == true,
                     UnimportantPatterns: ParseUnimportantPatterns()));
             string? module = (ModuleBox.SelectedItem as ModuleChoice)?.Id;
-            var progress = new Progress<ComparisonProgress>(p => { if (_busy && !token.IsCancellationRequested) StatusLabel.Text = $"比较中 {p.Completed}/{p.Total} · {p.Path}"; });
+            // Thread-pool progress: never Post to the UI sync context (that was freezing the UI).
+            IProgress<ComparisonProgress> progress = new ThreadPoolProgress<ComparisonProgress>(p => OnDirectoryProgress(p, token));
             var result = await Task.Run(() => _engine.CompareAsync(request, module, progress, token), token);
             _rootRequest = request;
+            // Drop progressive queues — final rebuild is authoritative and avoids a UI hitch
+            // flushing hundreds of thousands of deferred adds/updates.
+            while (_folderAdds.TryDequeue(out _)) { }
+            while (_folderUpdates.TryDequeue(out _)) { }
             if (Directory.Exists(request.LeftPath) && Directory.Exists(request.RightPath))
-            {
-                var tree = await Task.Run(() => FolderTree.Build(result, token), token);
-                _folderResult = result; _tree = tree; RefreshFolderRows();
-            }
+                await ApplyFinalFolderResult(result, token);
             else
             {
                 _fileResult = result; _textFile = result.Files.Single();
@@ -146,31 +222,166 @@ public partial class MainWindow : Window
             ExportButton.IsEnabled = true;
             UpdateSummary();
             RecordRecentComparison(request);
+            RememberCommittedPaths(request.LeftPath, request.RightPath);
+            LeftPath.Text = request.LeftPath;
+            RightPath.Text = request.RightPath;
         }
         catch (OperationCanceledException) { StatusLabel.Text = "已取消比较。"; }
         catch (Exception ex) { StatusLabel.Text = "比较失败：" + ex.Message; }
         finally
         {
+            StopFolderUiTimer();
             _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪";
         }
     }
-    /// <summary>File facts for the status bar: line counts, encoding and line-ending style per side.</summary>
+
+    /// <summary>Runs on a thread-pool thread. Only enqueues work — never touches WPF objects.</summary>
+    private void OnDirectoryProgress(ComparisonProgress progress, CancellationToken token)
+    {
+        if (!_busy || token.IsCancellationRequested) return;
+        if (progress.PartialResult is { } partial && Directory.Exists(partial.LeftPath))
+        {
+            // Root (or rare full) snapshot: build tree off the UI thread, then ask dispatcher to bind.
+            int version = Interlocked.Increment(ref _folderSnapshotVersion);
+            try
+            {
+                var tree = FolderTree.Build(partial, token);
+                if (token.IsCancellationRequested || version != _folderSnapshotVersion) return;
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (!_busy || version != _folderSnapshotVersion) return;
+                    string? selectedPath = (LeftFolders.SelectedItem as FolderNode)?.RelativePath;
+                    _tree = tree;
+                    _folderResult = partial;
+                    RefreshFolderRows(selectedPath is null ? null : tree.All.FirstOrDefault(n =>
+                        string.Equals(n.RelativePath, selectedPath, StringComparison.OrdinalIgnoreCase)));
+                    ExportButton.IsEnabled = true;
+                    OpenButton.IsEnabled = true;
+                    UpdateSummary();
+                }, DispatcherPriority.Background);
+            }
+            catch (OperationCanceledException) { return; }
+            catch (Exception) { /* ignore build races */ }
+        }
+        if (progress.Added is { Count: > 0 } added)
+        {
+            foreach (var item in added) _folderAdds.Enqueue(item);
+            _folderUiDirty = true;
+        }
+        if (progress.FileUpdate is { } update)
+        {
+            _folderUpdates.Enqueue(update);
+            _folderUiDirty = true;
+        }
+        if (progress.Path.StartsWith("scan:", StringComparison.Ordinal))
+        {
+            _folderProgressStatus = progress.Path == "scan:root"
+                ? "根目录已列出 · 继续扫描子目录…"
+                : $"扫描子目录… 已发现 {progress.Completed:N0} 个文件";
+            _folderProgressActivity = "扫描中…";
+            _folderUiDirty = true;
+        }
+        else if (progress.Total > 0)
+        {
+            _folderProgressStatus = $"内容比较 {progress.Completed}/{progress.Total} · {progress.Path}";
+            _folderProgressActivity = "比较中…";
+            _folderUiDirty = true;
+        }
+    }
+
+    private void StartFolderUiTimer()
+    {
+        StopFolderUiTimer();
+        _folderUiTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(120),
+        };
+        _folderUiTimer.Tick += (_, _) => FlushFolderUi(force: false);
+        _folderUiTimer.Start();
+    }
+
+    private void StopFolderUiTimer()
+    {
+        if (_folderUiTimer is null) return;
+        _folderUiTimer.Stop();
+        _folderUiTimer = null;
+    }
+
+    /// <summary>UI-thread only: apply a budgeted batch of adds/updates so input stays responsive.</summary>
+    private void FlushFolderUi(bool force)
+    {
+        if (!_folderUiDirty && !force && _folderAdds.IsEmpty && _folderUpdates.IsEmpty) return;
+        if (_folderProgressStatus.Length > 0) StatusLabel.Text = _folderProgressStatus;
+        if (_folderProgressActivity.Length > 0) ActivityLabel.Text = _folderProgressActivity;
+
+        if (_tree is null || _folderResult is null)
+        {
+            // Root tree not bound yet — keep dirty so queued adds flush after BeginInvoke binds it.
+            _folderUiDirty = !_folderAdds.IsEmpty || !_folderUpdates.IsEmpty || _folderUiDirty;
+            return;
+        }
+        _folderUiDirty = false;
+
+        int budget = force ? int.MaxValue : 400;
+        int changed = 0;
+        var batch = new List<FileComparison>();
+        while (budget > 0 && _folderAdds.TryDequeue(out var add))
+        {
+            batch.Add(add);
+            budget--;
+        }
+        if (batch.Count > 0)
+            changed += _tree.MergeAdded(batch, _folderResult.LeftPath, _folderResult.RightPath);
+        while (budget > 0 && _folderUpdates.TryDequeue(out var update))
+        {
+            if (_tree.ApplyFileUpdate(update, _folderResult.LeftPath, _folderResult.RightPath)) changed++;
+            budget--;
+        }
+        if (changed > 0 || force)
+        {
+            RefreshFolderRows(LeftFolders.SelectedItem as FolderNode);
+            UpdateSummary();
+        }
+        // More work pending — keep dirty so the next tick continues.
+        if (!_folderAdds.IsEmpty || !_folderUpdates.IsEmpty) _folderUiDirty = true;
+    }
+
+    private async Task ApplyFinalFolderResult(ComparisonResult result, CancellationToken token)
+    {
+        _folderResult = result;
+        var expanded = _tree?.All.Where(n => n.IsDirectory && n.IsExpanded)
+            .Select(n => n.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string? selectedPath = (LeftFolders.SelectedItem as FolderNode)?.RelativePath;
+        var tree = await Task.Run(() => FolderTree.Build(result, token), token);
+        if (expanded is not null)
+            foreach (var node in tree.All.Where(n => n.IsDirectory && expanded.Contains(n.RelativePath)))
+                node.IsExpanded = true;
+        _tree = tree;
+        RefreshFolderRows(selectedPath is null ? null : tree.All.FirstOrDefault(n =>
+            string.Equals(n.RelativePath, selectedPath, StringComparison.OrdinalIgnoreCase)));
+    }
+    /// <summary>File facts for the status bar: line counts, encoding and line-ending style per side.
+    /// Cleared on the folder tab so directory view does not keep the last file's stats/hunks.</summary>
     private void UpdateFileStats()
     {
-        if (_leftBuffer is not null && _rightBuffer is not null)
+        if (TextView.Visibility != Visibility.Visible || _leftBuffer is null || _rightBuffer is null)
         {
-            static string Describe(IEditBuffer buffer) =>
-                $"{DocumentLines.Parse(buffer.Text).Count:N0} 行 · {buffer.Snapshot().Encoding.Name} · {(buffer.NewLine == "\r\n" ? "CRLF" : buffer.NewLine == "\r" ? "CR" : "LF")}";
-            FileStatsLabel.Text = $"左 {Describe(_leftBuffer)} ｜ 右 {Describe(_rightBuffer)}";
+            FileStatsLabel.Text = "";
+            return;
         }
-        else FileStatsLabel.Text = "";
+        static string Describe(IEditBuffer buffer) =>
+            $"{DocumentLines.Parse(buffer.Text).Count:N0} 行 · {buffer.Snapshot().Encoding.Name} · {(buffer.NewLine == "\r\n" ? "CRLF" : buffer.NewLine == "\r" ? "CR" : "LF")}";
+        FileStatsLabel.Text = $"左 {Describe(_leftBuffer)} ｜ 右 {Describe(_rightBuffer)}";
     }
 
     private void UpdateSummary()
     {
         var result = TextView.Visibility == Visibility.Visible ? _fileResult : _folderResult;
         if (result is null) return;
-        StatusLabel.Text = $"{result.Files.Count} 个文件 · {result.Files.Count(f => f.Status == FileStatus.Equal)} 相同 · {result.Files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)} 差异 · {result.Files.Count(f => f.Status == FileStatus.Error)} 错误";
+        int files = result.Files.Count(f => !f.IsDirectory);
+        int pending = result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Pending);
+        StatusLabel.Text = $"{files:N0} 个文件 · {result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Equal):N0} 相同 · {result.Files.Count(f => !f.IsDirectory && f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly):N0} 差异 · {result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Error):N0} 错误"
+            + (pending > 0 ? $" · {pending:N0} 比较中" : "");
     }
     private void CancelClick(object sender, RoutedEventArgs e) { _syncCancellation?.Cancel(); _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); }
     private async void SwapClick(object sender, RoutedEventArgs e)
@@ -182,28 +393,64 @@ public partial class MainWindow : Window
     }
     private void SetView(bool text)
     {
+        if (!text)
+        {
+            // Leaving the file view must drop the active text session; otherwise a later click
+            // on the same tab early-returns without RestoreSessionState and the path bar stays
+            // on directory roots (or the reverse leak after OpenFilePair).
+            if (_activeSession is { } current)
+            {
+                SaveSessionState(current);
+                _activeSession = null;
+            }
+            foreach (var session in _textSessions)
+                if (session.TabButton is not null) session.TabButton.IsChecked = false;
+        }
         FolderView.Visibility = text ? Visibility.Collapsed : Visibility.Visible;
         TextView.Visibility = text ? Visibility.Visible : Visibility.Collapsed;
-        if (!text) FolderTab.IsChecked = true;
+        SyncViewChrome();
+    }
+
+    /// <summary>Keeps shared chrome (path bar, toolbar enablement, status strip) aligned with
+    /// FolderView vs TextView. File tabs overwrite paths/hunks; returning to the folder tab
+    /// must restore directory roots and clear file-only indicators.</summary>
+    private void SyncViewChrome()
+    {
+        bool text = TextView.Visibility == Visibility.Visible;
+        if (!text)
+        {
+            FolderTab.IsChecked = true;
+            RestoreFolderPathBar();
+            HunkLabel.Text = "";
+            FileStatsLabel.Text = "";
+        }
         OpenButton.IsEnabled = !text && _folderResult is not null;
         PreviousFileButton.IsEnabled = NextFileButton.IsEnabled = text && _folderResult is not null;
         ExportButton.IsEnabled = text ? _fileResult is not null : _folderResult is not null;
-        UpdateSummary(); UpdateEditState();
+        UpdateSummary();
+        UpdateFileStats();
+        UpdateEditState();
     }
     private void RefreshFolderRows(FolderNode? selected = null)
     {
         if (!_ready || _tree is null) return;
         selected ??= LeftFolders.SelectedItem as FolderNode;
-        _folderRows = _tree.Visible(FolderFilter.SelectedIndex, FolderSearch.Text.Trim());
+        var nameFilter = CurrentFolderNameFilter();
+        _folderRows = _tree.Visible(FolderFilter.SelectedIndex, nameFilter);
         _syncFolderSelection = true;
         LeftFolders.ItemsSource = RightFolders.ItemsSource = _folderRows;
         var target = selected is not null && _folderRows.Contains(selected) ? selected : _folderRows.FirstOrDefault();
         LeftFolders.SelectedItem = RightFolders.SelectedItem = target;
         _syncFolderSelection = false;
         FolderSummary.Text = $"{_folderRows.Count(n => !n.IsDirectory)} 个可见文件 / {_folderResult?.Files.Count ?? 0} 个文件";
+        if (nameFilter.Error is not null)
+            StatusLabel.Text = nameFilter.Error;
     }
+    private FolderNameFilter CurrentFolderNameFilter() =>
+        FolderNameFilter.Create(FolderSearch.Text, FolderSearchRegex.IsChecked == true);
     private void FolderFilterChanged(object sender, SelectionChangedEventArgs e) => RefreshFolderRows();
     private void FolderSearchChanged(object sender, TextChangedEventArgs e) => RefreshFolderRows();
+    private void FolderSearchRegexChanged(object sender, RoutedEventArgs e) => RefreshFolderRows();
     private void ClearFolderSearch(object sender, RoutedEventArgs e) => FolderSearch.Clear();
     private void ExpandAll(object sender, RoutedEventArgs e) { if (_tree is null) return; foreach (var node in _tree.All) node.IsExpanded = true; RefreshFolderRows(); }
     private void CollapseAll(object sender, RoutedEventArgs e) { if (_tree is null) return; foreach (var node in _tree.All) node.IsExpanded = false; RefreshFolderRows(); }
@@ -215,13 +462,59 @@ public partial class MainWindow : Window
     private void FolderSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncFolderSelection) return;
-        var source = (DataGrid)sender; var other = ReferenceEquals(source, LeftFolders) ? RightFolders : LeftFolders;
-        _syncFolderSelection = true;
-        other.SelectedItems.Clear();
-        foreach (var selected in source.SelectedItems) other.SelectedItems.Add(selected);
-        _syncFolderSelection = false;
-        if (source.SelectedItem is FolderNode node) StatusLabel.Text = node.Description;
+        var source = (DataGrid)sender;
+        // Plain click mirrors the pair (same relative path). Ctrl/Shift keeps each side
+        // independent so you can pick different left/right files like Beyond Compare.
+        bool independent = Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+            || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+        var selected = source.SelectedItem as FolderNode;
+        if (independent)
+        {
+            if (ReferenceEquals(source, LeftFolders)) _crossLeft = selected;
+            else _crossRight = selected;
+            // Keep both sticky picks in sync with whatever each grid currently holds.
+            _crossLeft = LeftFolders.SelectedItem as FolderNode ?? _crossLeft;
+            _crossRight = RightFolders.SelectedItem as FolderNode ?? _crossRight;
+        }
+        else
+        {
+            // Double-click's first click arrives without Ctrl and would mirror-wipe a cross
+            // pair. If the click lands on one of the sticky picks, keep the other side.
+            bool keepCross = IsCrossPair(_crossLeft, _crossRight)
+                && selected is not null
+                && (ReferenceEquals(selected, _crossLeft) || ReferenceEquals(selected, _crossRight));
+            if (keepCross)
+            {
+                if (ReferenceEquals(source, LeftFolders)) _crossLeft = selected;
+                else _crossRight = selected;
+            }
+            else
+            {
+                var other = ReferenceEquals(source, LeftFolders) ? RightFolders : LeftFolders;
+                _syncFolderSelection = true;
+                other.SelectedItems.Clear();
+                foreach (var item in source.SelectedItems) other.SelectedItems.Add(item);
+                _syncFolderSelection = false;
+                _crossLeft = _crossRight = selected;
+            }
+        }
+        UpdateFolderSelectionStatus();
     }
+
+    private static bool IsCrossPair(FolderNode? left, FolderNode? right) =>
+        left is { IsDirectory: false } && right is { IsDirectory: false }
+        && !string.Equals(left.RelativePath, right.RelativePath, StringComparison.OrdinalIgnoreCase);
+
+    private void UpdateFolderSelectionStatus()
+    {
+        var left = _crossLeft ?? LeftFolders.SelectedItem as FolderNode;
+        var right = _crossRight ?? RightFolders.SelectedItem as FolderNode;
+        if (IsCrossPair(left, right))
+            StatusLabel.Text = $"将比较：{left!.Name}  ↔  {right!.Name}（Enter / 双击打开）";
+        else if (left is FolderNode node || right is FolderNode)
+            StatusLabel.Text = (left ?? right)!.Description;
+    }
+
     private void FolderScrolled(object sender, ScrollChangedEventArgs e)
     {
         if (!_ready || _syncFolderScroll || e.VerticalChange == 0 || e.OriginalSource is not ScrollViewer source) return;
@@ -229,62 +522,132 @@ public partial class MainWindow : Window
         if (target is null) return;
         _syncFolderScroll = true; target.ScrollToVerticalOffset(source.VerticalOffset); _syncFolderScroll = false;
     }
-    private async void FolderDoubleClick(object sender, MouseButtonEventArgs e)
+    /// <summary>Second click of a double-click: open before DataGrid toggles selection
+    /// (Ctrl+click on an already-selected row would otherwise deselect it).</summary>
+    private async void FolderPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is FolderNode node)
-        { if (node.IsDirectory) ToggleFolder(node); else await OpenNode(node); }
+        if (e.ClickCount != 2 || e.ChangedButton != MouseButton.Left) return;
+        if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is not FolderNode node) return;
+        e.Handled = true;
+        if (node.IsDirectory) { ToggleFolder(node); return; }
+        // Prefer sticky cross picks; if double-click lands on a third file, open that row paired.
+        if (IsCrossPair(_crossLeft, _crossRight)
+            && (ReferenceEquals(node, _crossLeft) || ReferenceEquals(node, _crossRight)))
+        {
+            if (ReferenceEquals(sender, LeftFolders)) _crossLeft = node;
+            else _crossRight = node;
+            await OpenSelectedFiles();
+            return;
+        }
+        _crossLeft = _crossRight = node;
+        await OpenNode(node);
+    }
+    private void FolderDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Opening is handled in PreviewMouseLeftButtonDown (ClickCount==2) so selection
+        // is not wiped; keep this handler to mark the event handled on the bubble route.
+        if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is FolderNode)
+            e.Handled = true;
     }
     private async void FolderKeyDown(object sender, KeyEventArgs e)
     {
         if (((DataGrid)sender).SelectedItem is not FolderNode node) return;
-        if (e.Key == Key.Enter) { e.Handled = true; if (node.IsDirectory) ToggleFolder(node); else await OpenNode(node); }
+        if (e.Key == Key.Enter) { e.Handled = true; if (node.IsDirectory) ToggleFolder(node); else await OpenSelectedFiles(); }
         else if (node.IsDirectory && e.Key is Key.Left or Key.Right)
         { node.IsExpanded = e.Key == Key.Right; RefreshFolderRows(node); e.Handled = true; }
     }
-    private async void OpenSelectedClick(object sender, RoutedEventArgs e)
-    { if (LeftFolders.SelectedItem is FolderNode node) { if (node.IsDirectory) ToggleFolder(node); else await OpenNode(node); } }
+    private async void OpenSelectedClick(object sender, RoutedEventArgs e) => await OpenSelectedFiles();
+
+    /// <summary>Opens the left/right folder selections. Same relative path → paired open;
+    /// different files (Ctrl-selected on each side) → cross-name compare.</summary>
+    private async Task OpenSelectedFiles()
+    {
+        // Sticky cross picks win over SelectedItem: double-click's first click may have
+        // changed only one grid while the other side's visual selection lagged.
+        var leftNode = (IsCrossPair(_crossLeft, _crossRight) ? _crossLeft : null)
+            ?? LeftFolders.SelectedItem as FolderNode;
+        var rightNode = (IsCrossPair(_crossLeft, _crossRight) ? _crossRight : null)
+            ?? RightFolders.SelectedItem as FolderNode;
+        if (leftNode is { IsDirectory: true } && (rightNode is null || ReferenceEquals(leftNode, rightNode)))
+        { ToggleFolder(leftNode); return; }
+        if (leftNode is { IsDirectory: false } && rightNode is { IsDirectory: false }
+            && leftNode.LeftExists && rightNode.RightExists
+            && !string.Equals(leftNode.RelativePath, rightNode.RelativePath, StringComparison.OrdinalIgnoreCase))
+        {
+            await OpenFilePair(leftNode, rightNode);
+            return;
+        }
+        var node = leftNode is { IsDirectory: false } ? leftNode
+            : rightNode is { IsDirectory: false } ? rightNode : null;
+        if (node is not null) await OpenNode(node);
+    }
+
     private async Task OpenNode(FolderNode node)
     {
-        if (_busy || node.File is null || _folderResult is null || _rootRequest is null) return;
+        if (_folderResult is null) return;
+        string left = Path.Combine(_folderResult.LeftPath, node.RelativePath);
+        string right = Path.Combine(_folderResult.RightPath, node.RelativePath);
+        await OpenFilePair(node, node, left, right, pairedSamePath: true);
+    }
+
+    private async Task OpenFilePair(FolderNode leftNode, FolderNode rightNode)
+    {
+        if (_folderResult is null) return;
+        string left = Path.Combine(_folderResult.LeftPath, leftNode.RelativePath);
+        string right = Path.Combine(_folderResult.RightPath, rightNode.RelativePath);
+        await OpenFilePair(leftNode, rightNode, left, right, pairedSamePath: false);
+    }
+
+    private async Task OpenFilePair(FolderNode leftNode, FolderNode rightNode, string left, string right, bool pairedSamePath)
+    {
+        if (_busy || _folderResult is null || _rootRequest is null) return;
+        if (leftNode.IsDirectory || rightNode.IsDirectory) return;
         if (!await CanLeaveEdits()) return;
+        if (_activeSession is { } previous) SaveSessionState(previous);
         ClearEditors();
         _detailCancellation?.Cancel();
         var cancellation = new CancellationTokenSource(); _detailCancellation = cancellation;
         var token = cancellation.Token;
         var root = _folderResult; var request = _rootRequest;
-        _currentNode = node; _textFile = null; _fileResult = null; _presentation = null;
+        _currentNode = leftNode; _textFile = null; _fileResult = null; _presentation = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
-        string left = Path.Combine(root.LeftPath, node.RelativePath), right = Path.Combine(root.RightPath, node.RelativePath);
-        // Session is created after the comparison completes (see end of OpenNode) —
-        // creating it here would trigger SwitchToSession's auto-compare and race with this method.
         TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
-        SetTextHeaders(left, right, node.File);
         CancelButton.IsEnabled = true; ActivityLabel.Text = "加载文件…";
         string? empty = null;
         try
         {
+            bool leftMissing = !File.Exists(left);
+            bool rightMissing = !File.Exists(right);
+            if (leftMissing && rightMissing) throw new InvalidOperationException("左右两侧文件都不存在。");
             ComparisonResult result;
-            if (node.File.Status == FileStatus.Error) result = new(left, right, "files", request.AlgorithmId, [node.File], []);
+            if (pairedSamePath && leftNode.File?.Status == FileStatus.Error)
+                result = new(left, right, "files", request.AlgorithmId, [leftNode.File], []);
             else
             {
-                if (node.File.Status is FileStatus.LeftOnly or FileStatus.RightOnly) empty = Path.GetTempFileName();
+                if (leftMissing || rightMissing) empty = Path.GetTempFileName();
                 var fileRequest = request with
                 {
-                    LeftPath = node.File.Status == FileStatus.RightOnly ? empty! : left,
-                    RightPath = node.File.Status == FileStatus.LeftOnly ? empty! : right
+                    LeftPath = leftMissing ? empty! : left,
+                    RightPath = rightMissing ? empty! : right,
                 };
                 result = await Task.Run(() => _engine.CompareAsync(fileRequest, "files", cancellationToken: token), token);
-                var file = result.Files.Single() with { RelativePath = node.RelativePath };
-                if (node.File.Status is FileStatus.LeftOnly or FileStatus.RightOnly) file = file with { Status = node.File.Status };
+                var file = result.Files.Single() with
+                {
+                    RelativePath = pairedSamePath ? leftNode.RelativePath
+                        : leftNode.Name + " ↔ " + rightNode.Name,
+                };
+                if (leftMissing) file = file with { Status = FileStatus.RightOnly };
+                else if (rightMissing) file = file with { Status = FileStatus.LeftOnly };
                 result = result with { LeftPath = left, RightPath = right, Files = [file] };
             }
             token.ThrowIfCancellationRequested();
             _fileResult = result; _textFile = result.Files.Single();
             SetTextHeaders(left, right, _textFile);
             await RebuildPresentation(token);
-            await AttachEditors(left, right, token);
-            // Comparison done: find-or-create a session for this pair and store the results.
+            await AttachEditors(leftMissing ? empty! : left, rightMissing ? empty! : right, token);
+            LeftPath.Text = left; RightPath.Text = right;
+            RememberCommittedPaths(left, right);
             var session = _textSessions.FirstOrDefault(s =>
                 string.Equals(s.LeftPath, left, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(s.RightPath, right, StringComparison.OrdinalIgnoreCase));
@@ -294,11 +657,17 @@ public partial class MainWindow : Window
                 session.Title = Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
                 BuildTabButton(session);
             }
+            session.SourceNode = leftNode;
+            session.LeftPath = left;
+            session.RightPath = right;
             SaveSessionState(session);
-            _activeSession = session;
-            FolderTab.IsChecked = false;
-            foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
-            LeftFolders.SelectedItem = RightFolders.SelectedItem = node;
+            ActivateTextSession(session);
+            if (pairedSamePath)
+            {
+                _syncFolderSelection = true;
+                LeftFolders.SelectedItem = RightFolders.SelectedItem = leftNode;
+                _syncFolderSelection = false;
+            }
             ExportButton.IsEnabled = true; UpdateSummary(); LeftCode.Focus();
         }
         catch (OperationCanceledException)
@@ -311,7 +680,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (empty is not null) File.Delete(empty);
+            if (empty is not null) try { File.Delete(empty); } catch (IOException) { }
             if (ReferenceEquals(_detailCancellation, cancellation)) { _detailCancellation = null; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪"; }
             cancellation.Dispose();
         }
@@ -321,7 +690,8 @@ public partial class MainWindow : Window
         LeftFileTitle.Text = left; LeftFileTitle.ToolTip = left; RightFileTitle.Text = right; RightFileTitle.ToolTip = right;
         LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.LeftLine is not null):N0} 行 · 左侧";
         RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.RightLine is not null):N0} 行 · 右侧";
-        if (_activeSession is not null) _activeSession.Title = Path.GetFileName(file.RelativePath);
+        // Tab titles are owned by session create/activate — do not rewrite the previous
+        // tab's title while a new file is still loading.
     }
     private static readonly HashSet<string> PictureExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
 
@@ -797,15 +1167,35 @@ public partial class MainWindow : Window
             if (_folderResult is not null)
             {
                 if (_folderResult.HasErrors || !ReferenceEquals(LeftFolders.ItemsSource, RightFolders.ItemsSource)) throw new InvalidOperationException("Folder panes are not aligned.");
+                // Path bar Enter: invalid / mixed kinds restore committed paths and keep the result.
+                string okLeft = LeftPath.Text, okRight = RightPath.Text;
+                LeftPath.Text = Path.Combine(okLeft, "__no_such_path__");
+                await CommitPathBarAsync();
+                if (!string.Equals(LeftPath.Text, okLeft, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(RightPath.Text, okRight, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Invalid path-bar Enter must restore committed paths.");
+                if (_folderResult is null) throw new InvalidOperationException("Invalid path-bar Enter must not clear the comparison.");
+                string? rightFile = Directory.EnumerateFiles(okRight, "*", SearchOption.AllDirectories).FirstOrDefault();
+                if (rightFile is not null)
+                {
+                    LeftPath.Text = okLeft;
+                    RightPath.Text = rightFile;
+                    await CommitPathBarAsync();
+                    if (!string.Equals(LeftPath.Text, okLeft, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(RightPath.Text, okRight, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("File+directory path-bar Enter must restore committed paths.");
+                }
                 await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 if (screenshot is not null) SaveScreenshot(screenshot);
                 var folder = _folderRows.FirstOrDefault(n => n.IsDirectory);
                 if (folder is not null)
                 {
+                    if (!folder.IsExpanded) ToggleFolder(folder); // trees start collapsed
                     int expanded = _folderRows.Count; ToggleFolder(folder);
                     if (_folderRows.Count >= expanded) throw new InvalidOperationException("Collapse did not hide descendants.");
                     ToggleFolder(folder);
                 }
+                ExpandAll(this, new RoutedEventArgs()); // need nested files visible for open/tab checks
                 FolderFilter.SelectedIndex = 1;
                 if (_folderRows.Any(n => !n.IsDirectory && n.Status == FileStatus.Equal)) throw new InvalidOperationException("Difference filter failed.");
                 FolderFilter.SelectedIndex = 0;
@@ -813,9 +1203,68 @@ public partial class MainWindow : Window
                 LeftFolders.SelectedItem = node;
                 await OpenNode(node);
                 if (_textFile is null) throw new InvalidOperationException("Opening directory file failed.");
+                if (TextView.Visibility != Visibility.Visible) throw new InvalidOperationException("OpenNode must switch to the text view.");
+                if (_textSessions.Count != 1) throw new InvalidOperationException("First folder file open must create exactly one text tab.");
+                string firstLeft = Path.Combine(_folderResult.LeftPath, node.RelativePath);
+                if (!string.Equals(_textSessions[0].LeftPath, firstLeft, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("First text tab stored the wrong left path.");
+                // Second distinct file must open as an independent tab (not reuse/clobber the first).
+                var node2 = _folderRows.FirstOrDefault(n => !n.IsDirectory && !ReferenceEquals(n, node) && n.Status != FileStatus.Equal)
+                    ?? _folderRows.FirstOrDefault(n => !n.IsDirectory && !ReferenceEquals(n, node));
+                if (node2 is not null)
+                {
+                    await OpenNode(node2);
+                    if (_textSessions.Count != 2)
+                        throw new InvalidOperationException($"Expected 2 independent file tabs, got {_textSessions.Count}.");
+                    string secondLeft = Path.Combine(_folderResult.LeftPath, node2.RelativePath);
+                    if (!string.Equals(_textSessions[0].LeftPath, firstLeft, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Opening a second file corrupted the first tab's path identity.");
+                    if (!string.Equals(_textSessions[1].LeftPath, secondLeft, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Second text tab stored the wrong left path.");
+                    await SwitchToSession(_textSessions[0]);
+                    if (!string.Equals(LeftPath.Text, firstLeft, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("Switching back to the first tab did not restore its paths.");
+                    // Cross-name pair via sticky picks + OpenSelectedFiles (same path as Enter/双击).
+                    if (node.LeftExists && node2.RightExists
+                        && !string.Equals(node.RelativePath, node2.RelativePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        SetView(false);
+                        _crossLeft = node; _crossRight = node2;
+                        _syncFolderSelection = true;
+                        LeftFolders.SelectedItem = node; RightFolders.SelectedItem = node2;
+                        _syncFolderSelection = false;
+                        // Non-Ctrl click on one sticky pick must keep the cross pair (double-click's 1st click).
+                        if (!IsCrossPair(_crossLeft, _crossRight)
+                            || !(ReferenceEquals(LeftFolders.SelectedItem, _crossLeft) || ReferenceEquals(LeftFolders.SelectedItem, _crossRight)))
+                            throw new InvalidOperationException("Cross sticky picks were not retained for open.");
+                        await OpenSelectedFiles();
+                        string crossLeft = Path.Combine(_folderResult.LeftPath, node.RelativePath);
+                        string crossRight = Path.Combine(_folderResult.RightPath, node2.RelativePath);
+                        if (!string.Equals(LeftPath.Text, crossLeft, StringComparison.OrdinalIgnoreCase)
+                            || !string.Equals(RightPath.Text, crossRight, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("Cross-name folder open did not load the selected left/right files.");
+                        if (_textSessions.Count < 3)
+                            throw new InvalidOperationException("Cross-name compare must open as its own tab.");
+                        await SwitchToSession(_textSessions[0]); // restore paired file for final hunk checks
+                    }
+                }
+                LeftFolders.SelectedItem = RightFolders.SelectedItem = node;
                 SetView(false);
-                if (!ReferenceEquals(LeftFolders.SelectedItem, node) || !ReferenceEquals(RightFolders.SelectedItem, node)) throw new InvalidOperationException("Folder selection was lost.");
-                SetView(true);
+                if (!string.Equals(LeftPath.Text, _folderResult.LeftPath, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(RightPath.Text, _folderResult.RightPath, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Returning to folder view must restore directory roots in the path bar.");
+                if (HunkLabel.Text.Length > 0)
+                    throw new InvalidOperationException("Folder view must clear file hunk status.");
+                if (!OpenButton.IsEnabled || PreviousFileButton.IsEnabled || NextFileButton.IsEnabled)
+                    throw new InvalidOperationException("Folder view toolbar enablement is wrong (Open on, Prev/Next off).");
+                if (SaveLeftButton.IsEnabled || SaveRightButton.IsEnabled)
+                    throw new InvalidOperationException("Folder view must disable path-bar save buttons.");
+                if (!ReferenceEquals(LeftFolders.SelectedItem, node) || !ReferenceEquals(RightFolders.SelectedItem, node))
+                    throw new InvalidOperationException("Folder selection was lost.");
+                await SwitchToSession(_textSessions[0]);
+                if (!string.Equals(LeftPath.Text, _textSessions[0].LeftPath, StringComparison.OrdinalIgnoreCase)
+                    || OpenButton.IsEnabled || !PreviousFileButton.IsEnabled)
+                    throw new InvalidOperationException("Returning to a file tab must restore file paths and text-toolbar enablement.");
                 if (screenshot is not null) screenshot = Path.Combine(Path.GetDirectoryName(screenshot)!, Path.GetFileNameWithoutExtension(screenshot) + ".text.png");
             }
             if (_presentation is null || !ReferenceEquals(LeftCode.Rows, RightCode.Rows)) throw new InvalidOperationException("Text panes do not share aligned rows.");

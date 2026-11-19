@@ -130,13 +130,22 @@ public partial class MainWindow
         if (SaveLeftButton is null) return;
         bool text = TextView.Visibility == Visibility.Visible && !_syncActive;
         bool validDiff = _bufferDiff is not null && _leftBuffer?.Version == _bufferDiff.LeftVersion && _rightBuffer?.Version == _bufferDiff.RightVersion;
-        SaveLeftButton.IsEnabled = _leftBuffer is not null && !_saving && !_syncActive;
-        SaveRightButton.IsEnabled = _rightBuffer is not null && !_saving && !_syncActive;
-        SaveAllButton.IsEnabled = (_leftBuffer is not null || _rightBuffer is not null) && !_saving && !_syncActive;
+        // Path-bar Save Left/Right sit next to the address boxes; disable on the folder tab
+        // so directory roots are not paired with file-buffer save actions.
+        SaveLeftButton.IsEnabled = text && _leftBuffer is not null && !_saving && !_syncActive;
+        SaveRightButton.IsEnabled = text && _rightBuffer is not null && !_saving && !_syncActive;
+        SaveAllButton.IsEnabled = text && (_leftBuffer is not null || _rightBuffer is not null) && !_saving && !_syncActive;
         UndoButton.IsEnabled = text && _activePane?.Buffer?.CanUndo == true;
         RedoButton.IsEnabled = text && _activePane?.Buffer?.CanRedo == true;
         MergeRightButton.IsEnabled = MergeLeftButton.IsEnabled = text && validDiff && _currentHunk >= 0 && MergeBox.SelectedItem is IBlockMerge;
         CopyAllRightButton.IsEnabled = CopyAllLeftButton.IsEnabled = text && validDiff && _presentation is { Hunks.Count: > 0 } && MergeBox.SelectedItem is IBlockMerge;
+        if (!text)
+        {
+            bool dirtyTabs = _textSessions.Any(s => s.IsDirty || (ReferenceEquals(s, _activeSession) && HasDirtyBuffers));
+            EditStatusLabel.Text = dirtyTabs ? "● 有未保存文件" : "目录比较";
+            EditStatusLabel.ToolTip = dirtyTabs ? "文件标签中有未保存修改；打开对应标签后可保存" : "当前为目录比较";
+            return;
+        }
         EditStatusLabel.Text = _leftBuffer is null ? "只读" : HasDirtyBuffers ? "● 未保存" : "已保存";
         EditStatusLabel.ToolTip = _leftBuffer is null ? "二进制、大文件或没有编辑插件时使用只读视图" : "修改先保存在内存中；点击保存图标写入磁盘";
         if (_leftBuffer is not null && _rightBuffer is not null)

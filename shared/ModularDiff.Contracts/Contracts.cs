@@ -50,21 +50,27 @@ public sealed record ComparisonRequest(string LeftPath, string RightPath, string
 {
     public ComparisonOptions EffectiveOptions => Options ?? new();
 }
-public enum FileStatus { Equal, Modified, LeftOnly, RightOnly, Error }
+public enum FileStatus { Equal, Modified, LeftOnly, RightOnly, Error, Pending }
 public sealed record DiffLine(EditKind Kind, int? LeftLine, int? RightLine,
     string? LeftText, string? RightText, string? LeftEnding, string? RightEnding);
 // 二进制差异区间:不等的连续字节段(相邻段间隔不超过 16 字节时合并,段数封顶防大文件膨胀)。
 public sealed record ByteDiff(long Offset, long Length);
 public sealed record FileComparison(string RelativePath, FileStatus Status, IReadOnlyList<DiffLine> Lines,
     bool IsBinary = false, bool IsApproximate = false, string? Note = null,
-    IReadOnlyList<ByteDiff>? BinaryDiffs = null);
+    IReadOnlyList<ByteDiff>? BinaryDiffs = null, bool IsDirectory = false);
 public sealed record ComparisonResult(string LeftPath, string RightPath, string ModuleId, string AlgorithmId,
     IReadOnlyList<FileComparison> Files, IReadOnlyList<string> Warnings)
 {
     public bool HasDifferences => Files.Any(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly);
     public bool HasErrors => Files.Any(f => f.Status == FileStatus.Error);
 }
-public sealed record ComparisonProgress(int Completed, int Total, string Path);
+/// <summary>Directory compares: <see cref="PartialResult"/> for the first (root) paint,
+/// <see cref="Added"/> for later inventory deltas (never re-send the full list),
+/// <see cref="FileUpdate"/> for a single resolved content status. UIs must not assume
+/// progress callbacks run on the UI thread.</summary>
+public sealed record ComparisonProgress(int Completed, int Total, string Path,
+    ComparisonResult? PartialResult = null, FileComparison? FileUpdate = null,
+    IReadOnlyList<FileComparison>? Added = null);
 
 public interface IComparisonModule : IPlugin
 {
