@@ -1,4 +1,5 @@
-using System.Collections.Concurrent;
+
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -63,19 +64,20 @@ public partial class MainWindow : Window
         int cascade = Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移，避免完全叠加难发现
         Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
         _plugins = App.Plugins;
+        ModularDiff.Gui.Controls.Lang.Changed += LocalizeUI;
         LocalizeUI();   // shared catalog — loaded once at App startup, disposed on exit
         ReportDeclarativeFileIssues();
         _engine = new(_plugins);
         _session = new(_plugins);
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
         AlgorithmBox.SelectedItem = _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault(p => p.Id == "myers");
-        ModuleBox.ItemsSource = new[] { new ModuleChoice(null, "自动选择") }.Concat(_plugins.GetAll<IComparisonModule>().Select(p => new ModuleChoice(p.Id, p.DisplayName))).ToArray();
+        ModuleBox.ItemsSource = new[] { new ModuleChoice(null, ModularDiff.Gui.Controls.Lang.Get("module_auto")) }.Concat(_plugins.GetAll<IComparisonModule>().Select(p => new ModuleChoice(p.Id, p.DisplayName))).ToArray();
         ModuleBox.SelectedIndex = 0;
         PresentationBox.ItemsSource = _plugins.GetAll<ITextPresentation>();
         PresentationBox.SelectedItem = _plugins.GetAll<ITextPresentation>().FirstOrDefault(p => p.Id == "side-by-side") ?? _plugins.GetAll<ITextPresentation>().FirstOrDefault();
         FormatBox.ItemsSource = _plugins.GetAll<IResultFormatter>(); FormatBox.SelectedIndex = 0;
         LeftPath.Text = Arg("--left") ?? ""; RightPath.Text = Arg("--right") ?? "";
-        PluginSummary.Text = $"{_plugins.GetAll<IPlugin>().Count} 个插件已加载";
+        PluginSummary.Text = ModularDiff.Gui.Controls.Lang.Get("plugins_loaded", _plugins.GetAll<IPlugin>().Count);
         LeftCode.ViewChanged += CodeScrolled; RightCode.ViewChanged += CodeScrolled;
         LeftCode.RowSelected += index => CodeSelected(index, LeftCode);
         RightCode.RowSelected += index => CodeSelected(index, RightCode);
@@ -85,7 +87,7 @@ public partial class MainWindow : Window
         LeftCode.ShowEndings = RightCode.ShowEndings = false;
         if (_plugins.Diagnostics.Count > 0)
         {
-            StatusLabel.Text = "插件加载失败：" + string.Join(" | ", _plugins.Diagnostics);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_plugins_failed", string.Join(" | ", _plugins.Diagnostics));
             CompareButton.IsEnabled = false;
         }
         Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
@@ -98,7 +100,7 @@ public partial class MainWindow : Window
         else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) =>
         {
             try { await CompareAndTrackSession(); }
-            catch (Exception ex) { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "md-crash.log"), ex.ToString()); StatusLabel.Text = "自动比较失败：" + ex.Message; }
+            catch (Exception ex) { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "md-crash.log"), ex.ToString()); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_auto_compare_failed", ex.Message); }
         };
         if (arguments.Contains("--wrap")) WrapToggle.IsChecked = true;
     }
@@ -114,18 +116,18 @@ public partial class MainWindow : Window
         foreach (string pattern in patterns)
         {
             try { _ = new System.Text.RegularExpressions.Regex(pattern); }
-            catch (ArgumentException ex) { throw new InvalidOperationException($"不重要差异规则无效：{pattern}（{ex.Message}）"); }
+            catch (ArgumentException ex) { throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_unimportant_rule", pattern, ex.Message)); }
         }
         return patterns.Length > 0 ? patterns : null;
     }
     private void BrowseFile(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Title = "选择比较文件" };
+        var dialog = new OpenFileDialog { Title = ModularDiff.Gui.Controls.Lang.Get("browse_compare_file") };
         if (dialog.ShowDialog(this) == true) Target(sender).Text = dialog.FileName;
     }
     private void BrowseFolder(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFolderDialog { Title = "选择比较目录" };
+        var dialog = new OpenFolderDialog { Title = ModularDiff.Gui.Controls.Lang.Get("browse_compare_folder") };
         if (dialog.ShowDialog(this) == true) Target(sender).Text = dialog.FolderName;
     }
     private TextBox Target(object sender) => (string)((Button)sender).Tag == "left" ? LeftPath : RightPath;
@@ -147,7 +149,7 @@ public partial class MainWindow : Window
         {
             LeftPath.Text = _committedLeft;
             RightPath.Text = _committedRight;
-            StatusLabel.Text = error ?? "路径无效，已恢复。";
+            StatusLabel.Text = error ?? ModularDiff.Gui.Controls.Lang.Get("status_path_restored");
             return;
         }
         if (!await CanLeaveEdits())
@@ -187,17 +189,17 @@ public partial class MainWindow : Window
         _folderSnapshotVersion++;
         while (_folderAdds.TryDequeue(out _)) { }
         while (_folderUpdates.TryDequeue(out _)) { }
-        _folderProgressStatus = ""; _folderProgressActivity = "比较中…"; _folderUiDirty = false;
+        _folderProgressStatus = ""; _folderProgressActivity = ModularDiff.Gui.Controls.Lang.Get("activity_comparing"); _folderUiDirty = false;
         LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         FolderView.Visibility = Visibility.Visible; TextView.Visibility = Visibility.Collapsed;
-        ActivityLabel.Text = "比较中…";
+        ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_comparing");
         StartFolderUiTimer();
         try
         {
-            if (string.IsNullOrWhiteSpace(LeftPath.Text) || string.IsNullOrWhiteSpace(RightPath.Text)) throw new InvalidOperationException("请填写左右两侧路径。");
-            if (AlgorithmBox.SelectedItem is not IDiffAlgorithm algorithm) throw new InvalidOperationException("没有可用的算法插件。");
+            if (string.IsNullOrWhiteSpace(LeftPath.Text) || string.IsNullOrWhiteSpace(RightPath.Text)) throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("status_fill_paths"));
+            if (AlgorithmBox.SelectedItem is not IDiffAlgorithm algorithm) throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("status_no_algorithm"));
             var request = new ComparisonRequest(Path.GetFullPath(LeftPath.Text), Path.GetFullPath(RightPath.Text), algorithm.Id,
                 new(IgnoreCaseBox.IsChecked == true, IgnoreWhitespaceBox.IsChecked == true, IgnoreEolBox.IsChecked == true, RecursiveBox.IsChecked == true,
                     UnimportantPatterns: ParseUnimportantPatterns()));
@@ -226,12 +228,12 @@ public partial class MainWindow : Window
             LeftPath.Text = request.LeftPath;
             RightPath.Text = request.RightPath;
         }
-        catch (OperationCanceledException) { StatusLabel.Text = "已取消比较。"; }
-        catch (Exception ex) { StatusLabel.Text = "比较失败：" + ex.Message; }
+        catch (OperationCanceledException) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_cancelled"); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_compare_failed_msg", ex.Message); }
         finally
         {
             StopFolderUiTimer();
-            _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪";
+            _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready");
         }
     }
 
@@ -276,15 +278,15 @@ public partial class MainWindow : Window
         if (progress.Path.StartsWith("scan:", StringComparison.Ordinal))
         {
             _folderProgressStatus = progress.Path == "scan:root"
-                ? "根目录已列出 · 继续扫描子目录…"
-                : $"扫描子目录… 已发现 {progress.Completed:N0} 个文件";
-            _folderProgressActivity = "扫描中…";
+                ? ModularDiff.Gui.Controls.Lang.Get("folder_scan_root")
+                : ModularDiff.Gui.Controls.Lang.Get("folder_scan_progress", progress.Completed.ToString("N0"));
+            _folderProgressActivity = ModularDiff.Gui.Controls.Lang.Get("activity_scanning");
             _folderUiDirty = true;
         }
         else if (progress.Total > 0)
         {
-            _folderProgressStatus = $"内容比较 {progress.Completed}/{progress.Total} · {progress.Path}";
-            _folderProgressActivity = "比较中…";
+            _folderProgressStatus = ModularDiff.Gui.Controls.Lang.Get("folder_compare_progress", progress.Completed, progress.Total, progress.Path);
+            _folderProgressActivity = ModularDiff.Gui.Controls.Lang.Get("activity_comparing");
             _folderUiDirty = true;
         }
     }
@@ -370,8 +372,8 @@ public partial class MainWindow : Window
             return;
         }
         static string Describe(IEditBuffer buffer) =>
-            $"{DocumentLines.Parse(buffer.Text).Count:N0} 行 · {buffer.Snapshot().Encoding.Name} · {(buffer.NewLine == "\r\n" ? "CRLF" : buffer.NewLine == "\r" ? "CR" : "LF")}";
-        FileStatsLabel.Text = $"左 {Describe(_leftBuffer)} ｜ 右 {Describe(_rightBuffer)}";
+            ModularDiff.Gui.Controls.Lang.Get("file_stats_lines", DocumentLines.Parse(buffer.Text).Count.ToString("N0"), buffer.Snapshot().Encoding.Name, buffer.NewLine == "\r\n" ? "CRLF" : buffer.NewLine == "\r" ? "CR" : "LF");
+        FileStatsLabel.Text = ModularDiff.Gui.Controls.Lang.Get("file_stats", Describe(_leftBuffer), Describe(_rightBuffer));
     }
 
     private void UpdateSummary()
@@ -380,8 +382,11 @@ public partial class MainWindow : Window
         if (result is null) return;
         int files = result.Files.Count(f => !f.IsDirectory);
         int pending = result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Pending);
-        StatusLabel.Text = $"{files:N0} 个文件 · {result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Equal):N0} 相同 · {result.Files.Count(f => !f.IsDirectory && f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly):N0} 差异 · {result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Error):N0} 错误"
-            + (pending > 0 ? $" · {pending:N0} 比较中" : "");
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_summary", files,
+                result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Equal),
+                result.Files.Count(f => !f.IsDirectory && f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly),
+                result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Error))
+            + (pending > 0 ? ModularDiff.Gui.Controls.Lang.Get("status_pending_suffix", pending) : "");
     }
     private void CancelClick(object sender, RoutedEventArgs e) { _syncCancellation?.Cancel(); _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); }
     private async void SwapClick(object sender, RoutedEventArgs e)
@@ -442,7 +447,8 @@ public partial class MainWindow : Window
         var target = selected is not null && _folderRows.Contains(selected) ? selected : _folderRows.FirstOrDefault();
         LeftFolders.SelectedItem = RightFolders.SelectedItem = target;
         _syncFolderSelection = false;
-        FolderSummary.Text = $"{_folderRows.Count(n => !n.IsDirectory)} 个可见文件 / {_folderResult?.Files.Count ?? 0} 个文件";
+        FolderSummary.Text = ModularDiff.Gui.Controls.Lang.Get("folder_visible_summary",
+            _folderRows.Count(n => !n.IsDirectory), _folderResult?.Files.Count ?? 0);
         if (nameFilter.Error is not null)
             StatusLabel.Text = nameFilter.Error;
     }
@@ -510,7 +516,7 @@ public partial class MainWindow : Window
         var left = _crossLeft ?? LeftFolders.SelectedItem as FolderNode;
         var right = _crossRight ?? RightFolders.SelectedItem as FolderNode;
         if (IsCrossPair(left, right))
-            StatusLabel.Text = $"将比较：{left!.Name}  ↔  {right!.Name}（Enter / 双击打开）";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_will_compare", left!.Name, right!.Name);
         else if (left is FolderNode node || right is FolderNode)
             StatusLabel.Text = (left ?? right)!.Description;
     }
@@ -612,14 +618,14 @@ public partial class MainWindow : Window
         _currentNode = leftNode; _textFile = null; _fileResult = null; _presentation = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
-        TextEmptyMessage.Text = "加载文件并对齐差异…"; TextEmptyState.Visibility = Visibility.Visible;
-        CancelButton.IsEnabled = true; ActivityLabel.Text = "加载文件…";
+        TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("text_loading"); TextEmptyState.Visibility = Visibility.Visible;
+        CancelButton.IsEnabled = true; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_loading_file");
         string? empty = null;
         try
         {
             bool leftMissing = !File.Exists(left);
             bool rightMissing = !File.Exists(right);
-            if (leftMissing && rightMissing) throw new InvalidOperationException("左右两侧文件都不存在。");
+            if (leftMissing && rightMissing) throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("status_both_missing"));
             ComparisonResult result;
             if (pairedSamePath && leftNode.File?.Status == FileStatus.Error)
                 result = new(left, right, "files", request.AlgorithmId, [leftNode.File], []);
@@ -672,24 +678,24 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            if (ReferenceEquals(_detailCancellation, cancellation)) TextEmptyMessage.Text = "已取消加载。可以返回目录选择其他文件。";
+            if (ReferenceEquals(_detailCancellation, cancellation)) TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("load_cancelled");
         }
         catch (Exception ex)
         {
-            if (!token.IsCancellationRequested) { TextEmptyMessage.Text = "无法加载文件：" + ex.Message; StatusLabel.Text = TextEmptyMessage.Text; }
+            if (!token.IsCancellationRequested) { TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("status_load_file_failed", ex.Message); StatusLabel.Text = TextEmptyMessage.Text; }
         }
         finally
         {
             if (empty is not null) try { File.Delete(empty); } catch (IOException) { }
-            if (ReferenceEquals(_detailCancellation, cancellation)) { _detailCancellation = null; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪"; }
+            if (ReferenceEquals(_detailCancellation, cancellation)) { _detailCancellation = null; CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready"); }
             cancellation.Dispose();
         }
     }
     private void SetTextHeaders(string left, string right, FileComparison file)
     {
         LeftFileTitle.Text = left; LeftFileTitle.ToolTip = left; RightFileTitle.Text = right; RightFileTitle.ToolTip = right;
-        LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.LeftLine is not null):N0} 行 · 左侧";
-        RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? "此侧不存在 · 占位对齐" : $"{file.Lines.Count(l => l.RightLine is not null):N0} 行 · 右侧";
+        LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_left", file.Lines.Count(l => l.LeftLine is not null));
+        RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_right", file.Lines.Count(l => l.RightLine is not null));
         // Tab titles are owned by session create/activate — do not rewrite the previous
         // tab's title while a new file is still loading.
     }
@@ -733,7 +739,7 @@ public partial class MainWindow : Window
             return;
         }
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
-        if (PresentationBox.SelectedItem is not ITextPresentation presenter) throw new InvalidOperationException("没有文本展示插件。");
+        if (PresentationBox.SelectedItem is not ITextPresentation presenter) throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("status_no_presentation"));
         long version = _presentationVersion;   // session manages version increments internally
         int context = TextFilter.SelectedIndex switch { 1 => 0, 2 => 3, _ => -1 };
         var presentation = await Task.Run(() => presenter.Build(file.Lines, context, token), token);
@@ -742,13 +748,13 @@ public partial class MainWindow : Window
         _presentation = presentation; _currentHunk = -1;
         _syncText = true; LeftCode.SetRows(presentation.Rows, !preservePosition); RightCode.SetRows(presentation.Rows, !preservePosition); _syncText = false;
         Overview.SetPresentation(presentation); UpdateOverview();
-        HunkLabel.Text = $"{presentation.Hunks.Count} 个差异块";
+        HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_count", presentation.Hunks.Count);
         UpdateEditState(); UpdateFileStats();
         TextEmptyState.Visibility = presentation.Rows.Count == 0 && _leftBuffer is null ? Visibility.Visible : Visibility.Collapsed;
-        TextEmptyMessage.Text = file.Status == FileStatus.Error ? file.Note ?? "文件读取错误。"
-            : file.IsBinary ? "此文件使用字节比较，不生成文本视图。\n" + file.Note
-            : "空文件：没有可显示的文本行。";
-        DetailLabel.Text = (file.IsApproximate ? "粗粒度对齐 · " : "") + (file.Note ?? "F7 / Shift+F7 跳转差异块 · Ctrl+F 查找 · 拖动选择行，Ctrl+C 复制");
+        TextEmptyMessage.Text = file.Status == FileStatus.Error ? file.Note ?? ModularDiff.Gui.Controls.Lang.Get("file_read_error")
+            : file.IsBinary ? ModularDiff.Gui.Controls.Lang.Get("binary_no_text", file.Note ?? "")
+            : ModularDiff.Gui.Controls.Lang.Get("empty_file");
+        DetailLabel.Text = (file.IsApproximate ? ModularDiff.Gui.Controls.Lang.Get("approx_align_prefix") : "") + (file.Note ?? ModularDiff.Gui.Controls.Lang.Get("detail_nav_hint"));
     }
     /// <summary>Binary files render as a virtualized side-by-side hex dump with the differing
     /// bytes colored; the view loads at most 16&nbsp;MB per side.</summary>
@@ -772,8 +778,8 @@ public partial class MainWindow : Window
             HexHost.Visibility = Visibility.Visible;
             if (file.BinaryDiffs!.Count > 0)
                 Hex.SetVerticalOffset(Math.Max(0, file.BinaryDiffs[0].Offset / 16 * Hex.RowHeight - 120));
-            HunkLabel.Text = $"{file.BinaryDiffs!.Count} 段字节差异";
-            StatusLabel.Text = $"十六进制比较 · 点击左侧定位光标，输入十六进制值编辑，Ctrl+S 保存";
+            HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("byte_diffs", file.BinaryDiffs!.Count);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_mode");
             // Patch export and offset navigation via the hex view.
             Hex.MouseRightButtonUp -= HexContextMenu;
             Hex.MouseRightButtonUp += HexContextMenu;
@@ -782,23 +788,23 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             HexHost.Visibility = Visibility.Collapsed;
-            StatusLabel.Text = "十六进制视图加载失败：" + ex.Message;
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_load_failed", ex.Message);
         }
     }
 
     private void HexContextMenu(object sender, MouseButtonEventArgs e)
     {
         var menu = new ContextMenu();
-        var export = new MenuItem { Header = "导出二进制差异报告…" };
+        var export = new MenuItem { Header = ModularDiff.Gui.Controls.Lang.Get("hex_export_report") };
         export.Click += (_, _) =>
         {
             var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "Text report|*.txt", FileName = "binary-patch.txt" };
             if (dialog.ShowDialog(this) == true)
-                try { System.IO.File.WriteAllText(dialog.FileName, Hex.ExportPatch()); StatusLabel.Text = "差异报告已保存：" + dialog.FileName; }
-                catch (Exception ex) { StatusLabel.Text = "导出失败：" + ex.Message; }
+                try { System.IO.File.WriteAllText(dialog.FileName, Hex.ExportPatch()); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_report_saved", dialog.FileName); }
+                catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ex.Message); }
         };
         menu.Items.Add(export);
-        var goTo = new MenuItem { Header = "跳转到偏移… (Ctrl+G)" };
+        var goTo = new MenuItem { Header = ModularDiff.Gui.Controls.Lang.Get("hex_goto_offset") };
         goTo.Click += (_, _) => HexGoToOffset();
         menu.Items.Add(goTo);
         menu.PlacementTarget = Hex;
@@ -815,7 +821,7 @@ public partial class MainWindow : Window
             Hex.GoToOffset(hexOffset);
         else if (long.TryParse(input, out long decOffset))
             Hex.GoToOffset(decOffset);
-        else StatusLabel.Text = "无效偏移量。支持十进制或 0x 十六进制。";
+        else StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_bad_offset");
     }
 
     /// <summary>Pictures render side by side; when dimensions match, differing pixels are
@@ -838,12 +844,12 @@ public partial class MainWindow : Window
             HexHost.Visibility = Visibility.Collapsed;
             PictureHost.Visibility = Visibility.Visible;
             HunkLabel.Text = file.Note ?? "";
-            StatusLabel.Text = "图片比较 · 右侧红色半透明为差异像素";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_picture_mode");
         }
         catch (Exception ex)
         {
             PictureHost.Visibility = Visibility.Collapsed;
-            StatusLabel.Text = "图片视图加载失败：" + ex.Message;
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_picture_failed", ex.Message);
         }
     }
 
@@ -909,7 +915,7 @@ public partial class MainWindow : Window
         if (_presentation is not null && index >= 0 && index < _presentation.Rows.Count)
         {
             _currentHunk = _presentation.Rows[index].HunkId;
-            HunkLabel.Text = _currentHunk >= 0 ? $"差异 {_currentHunk + 1} / {_presentation.Hunks.Count}" : $"{_presentation.Hunks.Count} 个差异块";
+            HunkLabel.Text = _currentHunk >= 0 ? ModularDiff.Gui.Controls.Lang.Get("hunks_index", _currentHunk + 1, _presentation.Hunks.Count) : ModularDiff.Gui.Controls.Lang.Get("hunks_count", _presentation.Hunks.Count);
         }
         else _currentHunk = -1;
         UpdateEditState();
@@ -974,23 +980,9 @@ public partial class MainWindow : Window
         if (issues.Count > 0)
         {
             string joined = string.Join("\n  ", issues);
-            StatusLabel.Text = $"⚠ {issues.Count} 个声明式文件加载失败（语法/主题/语言包）";
-            MessageBox.Show(this, "以下文件已跳过，其余正常加载：\n  " + joined, "声明式文件诊断", MessageBoxButton.OK, MessageBoxImage.Warning);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_declarative_failed", issues.Count);
+            MessageBox.Show(this, ModularDiff.Gui.Controls.Lang.Get("dlg_declarative_body", joined), ModularDiff.Gui.Controls.Lang.Get("dlg_declarative_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-    }
-
-    /// <summary>Routes the most visible UI text through the active language pack so a switch is instant.</summary>
-    private void LocalizeUI()
-    {
-        // Lang is a static class — use it directly.
-        Title = ModularDiff.Gui.Controls.Lang.Get("app_title");
-        FolderTab.Content = ModularDiff.Gui.Controls.Lang.Get("folder_tab");
-        SaveLeftButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("save_left");
-        SaveRightButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("save_right");
-        CompareButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("compare_button");
-        CancelButton.ToolTip = ModularDiff.Gui.Controls.Lang.Get("cancel_button");
-        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_ready");
-        LangToggle.Content = ModularDiff.Gui.Controls.Lang.CurrentCode == "zh-CN" ? "EN" : "中文";
     }
 
     private void ThemeToggleClick(object sender, RoutedEventArgs e)
@@ -999,7 +991,9 @@ public partial class MainWindow : Window
         ThemeToggle.Content = ModularDiff.Gui.Controls.Theme.CurrentName == "Dark" ? "\uE708" : "\uE706";
         Background = ModularDiff.Gui.Controls.Theme.WindowBackground;
         LeftCode.InvalidateVisual(); RightCode.InvalidateVisual();
-        StatusLabel.Text = ModularDiff.Gui.Controls.Theme.CurrentName == "Dark" ? "已切换到深色主题。" : "已切换到浅色主题。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Theme.CurrentName == "Dark"
+            ? ModularDiff.Gui.Controls.Lang.Get("status_dark_on")
+            : ModularDiff.Gui.Controls.Lang.Get("status_dark_off");
     }
 
     private void ShowEolClick(object sender, RoutedEventArgs e)
@@ -1024,9 +1018,9 @@ public partial class MainWindow : Window
         {
             int index = (selected + step + count) % count; var row = _presentation.Rows[index];
             if (row.Left?.Text.Contains(FindBox.Text, StringComparison.OrdinalIgnoreCase) == true || row.Right?.Text.Contains(FindBox.Text, StringComparison.OrdinalIgnoreCase) == true)
-            { LeftCode.SelectRow(index); RightCode.SelectRow(index); CodeSelected(index); StatusLabel.Text = $"找到：{FindBox.Text}"; return; }
+            { LeftCode.SelectRow(index); RightCode.SelectRow(index); CodeSelected(index); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_found_query", FindBox.Text); return; }
         }
-        StatusLabel.Text = $"未找到：{FindBox.Text}";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_not_found_query", FindBox.Text);
     }
 
     private void ReplaceToggleChanged(object sender, RoutedEventArgs e)
@@ -1044,25 +1038,25 @@ public partial class MainWindow : Window
     private async Task ReplaceNext()
     {
         var pane = _activePane ?? LeftCode;
-        if (pane.Buffer is null) { StatusLabel.Text = "此文件为只读。"; return; }
-        if (FindBox.Text.Length == 0) { StatusLabel.Text = "请输入要查找的内容。"; return; }
+        if (pane.Buffer is null) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_readonly_file"); return; }
+        if (FindBox.Text.Length == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_enter_find"); return; }
         string text = pane.Buffer.Text;
         int from = Math.Min(Math.Max(pane.CaretOffset, 0), text.Length);
         int index = text.IndexOf(FindBox.Text, from, StringComparison.OrdinalIgnoreCase);
         if (index < 0) index = text.IndexOf(FindBox.Text, StringComparison.OrdinalIgnoreCase);
-        if (index < 0) { StatusLabel.Text = $"未找到：{FindBox.Text}"; return; }
+        if (index < 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_not_found_query", FindBox.Text); return; }
         pane.Focus();
         pane.SetCaret(index, false, false);
         pane.SetCaret(index + FindBox.Text.Length, true, false);
         pane.ReplaceSelection(ReplaceBox.Text, "Replace");
         await _editTask;
-        StatusLabel.Text = $"已替换 1 处 · {FindBox.Text} → {ReplaceBox.Text}";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_replaced_one", FindBox.Text, ReplaceBox.Text);
     }
     private async void ReplaceAllClick(object sender, RoutedEventArgs e)
     {
         var pane = _activePane ?? LeftCode;
-        if (pane.Buffer is null) { StatusLabel.Text = "此文件为只读。"; return; }
-        if (FindBox.Text.Length == 0) { StatusLabel.Text = "请输入要查找的内容。"; return; }
+        if (pane.Buffer is null) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_readonly_file"); return; }
+        if (FindBox.Text.Length == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_enter_find"); return; }
         string text = pane.Buffer.Text;
         var builder = new StringBuilder(text.Length);
         int at = 0, count = 0;
@@ -1074,9 +1068,9 @@ public partial class MainWindow : Window
             at = found + FindBox.Text.Length;
             count++;
         }
-        if (count == 0) { StatusLabel.Text = $"未找到：{FindBox.Text}"; return; }
-        pane.Buffer.Apply(new Contracts.TextEdit(0, text.Length, builder.ToString(), $"全部替换 ×{count}"));
-        AfterProgrammaticEdit(pane, $"已替换 {count} 处 · {FindBox.Text} → {ReplaceBox.Text}");
+        if (count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_not_found_query", FindBox.Text); return; }
+        pane.Buffer.Apply(new Contracts.TextEdit(0, text.Length, builder.ToString(), ModularDiff.Gui.Controls.Lang.Get("edit_desc_replace_all", count)));
+        AfterProgrammaticEdit(pane, ModularDiff.Gui.Controls.Lang.Get("status_replaced_n", count, FindBox.Text, ReplaceBox.Text));
         await _editTask;
     }
     private async void WindowKeyDown(object sender, KeyEventArgs e)
@@ -1087,8 +1081,8 @@ public partial class MainWindow : Window
             if (e.Key == Key.S && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
                 e.Handled = true;
-                if (Hex.IsDirty && !Hex.Save()) StatusLabel.Text = "十六进制保存失败。";
-                else if (Hex.IsDirty) StatusLabel.Text = "十六进制修改已保存。";
+                if (Hex.IsDirty && !Hex.Save()) StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_save_failed");
+                else if (Hex.IsDirty) StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_saved");
                 return;
             }
             if (e.Key == Key.G && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
@@ -1138,11 +1132,11 @@ public partial class MainWindow : Window
             var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             foreach (string input in new[] { result.LeftPath, result.RightPath, _rootRequest?.LeftPath, _rootRequest?.RightPath }.OfType<string>())
                 if (output.Equals(input, comparison) || (Directory.Exists(input) && output.StartsWith(Path.TrimEndingDirectorySeparator(input) + Path.DirectorySeparatorChar, comparison)))
-                    throw new InvalidOperationException("请将报告保存到被比较的文件或目录之外。");
+                    throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_export_outside"));
             await using var writer = new StreamWriter(output, false, new UTF8Encoding(false));
-            await formatter.WriteAsync(result, writer); StatusLabel.Text = "报告已保存：" + output;
+            await formatter.WriteAsync(result, writer); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_saved", output);
         }
-        catch (Exception ex) { StatusLabel.Text = "导出失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ex.Message); }
     }
     private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
     {

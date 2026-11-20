@@ -26,7 +26,7 @@ public partial class MainWindow
     private void SaveSessionClick(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(LeftPath.Text) || string.IsNullOrWhiteSpace(RightPath.Text))
-        { StatusLabel.Text = "请先填写左右路径，再保存会话。"; return; }
+        { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_need_paths"); return; }
         string suggestion = Path.GetFileName(LeftPath.Text.TrimEnd('\\', '/')) + " ↔ " + Path.GetFileName(RightPath.Text.TrimEnd('\\', '/'));
         string? name = PromptSessionName(suggestion);
         if (string.IsNullOrWhiteSpace(name)) return;
@@ -38,16 +38,16 @@ public partial class MainWindow
         SessionStore.Save(_sessions);
         RefreshSessionLists();
         SessionBox.SelectedItem = name;
-        StatusLabel.Text = "会话已保存：" + name;
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_saved", name);
     }
 
     private void DeleteSessionClick(object sender, RoutedEventArgs e)
     {
-        if (SessionBox.SelectedItem is not string name) { StatusLabel.Text = "请先在会话列表中选择要删除的会话。"; return; }
+        if (SessionBox.SelectedItem is not string name) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_pick_delete"); return; }
         _sessions = _sessions.RemoveNamed(name);
         SessionStore.Save(_sessions);
         RefreshSessionLists();
-        StatusLabel.Text = "会话已删除：" + name;
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_deleted", name);
     }
 
     private async void SessionSelected(object sender, SelectionChangedEventArgs e)
@@ -100,18 +100,18 @@ public partial class MainWindow
         var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => ReferenceEquals(w, this));
         var dialog = new Window
         {
-            Title = "保存比较会话", Width = 380, SizeToContent = SizeToContent.Height,
+            Title = ModularDiff.Gui.Controls.Lang.Get("dlg_session_title"), Width = 380, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = owner, ResizeMode = ResizeMode.NoResize,
         };
         var box = new TextBox { Text = suggestion, Margin = new Thickness(12, 4, 12, 8) };
-        var ok = new Button { Content = "保存", Width = 92, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "取消", Width = 66, IsCancel = true };
+        var ok = new Button { Content = ModularDiff.Gui.Controls.Lang.Get("dlg_save"), Width = 92, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = ModularDiff.Gui.Controls.Lang.Get("dlg_cancel"), Width = 66, IsCancel = true };
         bool? confirmed = null;
         ok.Click += (_, _) => { confirmed = true; dialog.Close(); };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
         buttons.Children.Add(ok); buttons.Children.Add(cancel);
         var panel = new StackPanel();
-        panel.Children.Add(new TextBlock { Text = "会话名称：", Margin = new Thickness(12, 12, 12, 0) });
+        panel.Children.Add(new TextBlock { Text = ModularDiff.Gui.Controls.Lang.Get("dlg_session_name"), Margin = new Thickness(12, 12, 12, 0) });
         panel.Children.Add(box); panel.Children.Add(buttons);
         dialog.Content = panel;
         box.SelectAll(); box.Loaded += (_, _) => box.Focus();

@@ -15,7 +15,7 @@ public partial class MainWindow
     private sealed class TextSession
     {
         public required string LeftPath, RightPath;
-        public string Title = "新比较";
+        public string Title = ModularDiff.Gui.Controls.Lang.Get("tab_new_compare");
         public ComparisonResult? FileResult;
         public TextPresentation? Presentation;
         public FileComparison? TextFile;
@@ -74,7 +74,7 @@ public partial class MainWindow
     {
         var session = CreateSession(left, right);
         session.Title = string.IsNullOrWhiteSpace(Path.GetFileName(left)) && string.IsNullOrWhiteSpace(Path.GetFileName(right))
-            ? "新比较" : Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
+            ? ModularDiff.Gui.Controls.Lang.Get("tab_new_compare") : Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
         BuildTabButton(session);
         await SwitchToSession(session);
         return session;
@@ -88,7 +88,7 @@ public partial class MainWindow
         {
             Content = "×", Width = 18, Height = 18, FontSize = 13, Margin = new Thickness(5, 0, 0, 0),
             Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent,
-            VerticalContentAlignment = VerticalAlignment.Center, ToolTip = "关闭此比较",
+            VerticalContentAlignment = VerticalAlignment.Center, ToolTip = ModularDiff.Gui.Controls.Lang.Get("tab_close_tip"),
         };
         close.Click += (_, _) => _ = CloseTextTab(session);
         panel.Children.Add(label);
@@ -119,7 +119,7 @@ public partial class MainWindow
         if (ReferenceEquals(session, _activeSession)) SaveSessionState(session);
         if (session.IsDirty)
         {
-            var choice = MessageBox.Show(this, $"「{session.Title}」有未保存的修改。\n\n关闭前保存？", "未保存的修改",
+            var choice = MessageBox.Show(this, ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_tab", session.Title), ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_title"),
                 MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
             if (choice == MessageBoxResult.Cancel) return;
             if (choice == MessageBoxResult.Yes)
@@ -250,7 +250,7 @@ public partial class MainWindow
         RememberCommittedPaths(session.LeftPath, session.RightPath);
         UpdateSummary(); UpdateEditState(); UpdateFileStats();
         if (session.Presentation is not null)
-            HunkLabel.Text = $"{session.Presentation.Hunks.Count} 个差异块";
+            HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_count", session.Presentation.Hunks.Count);
         else
             HunkLabel.Text = "";
         OpenButton.IsEnabled = false;

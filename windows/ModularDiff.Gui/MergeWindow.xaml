@@ -10,18 +10,18 @@
         <Grid Grid.Row="0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <TextBlock Text="公共祖先 (base)" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBlock x:Name="BaseLabel" Text="公共祖先 (base)" Margin="0,4,8,4" VerticalAlignment="Center"/>
             <TextBox x:Name="BasePath" Grid.Column="1" Margin="0,4" ToolTip="三方共同的原始版本"/>
-            <Button Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseBase"/>
-            <TextBlock Text="左侧 (我的修改)" Grid.Row="1" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <Button x:Name="BrowseBaseButton" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseBase"/>
+            <TextBlock x:Name="LeftLabel" Text="左侧 (我的修改)" Grid.Row="1" Margin="0,4,8,4" VerticalAlignment="Center"/>
             <TextBox x:Name="LeftPath" Grid.Row="1" Grid.Column="1" Margin="0,4" ToolTip="这一侧的修改，冲突时标记为 LEFT"/>
-            <Button Grid.Row="1" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseLeft"/>
-            <TextBlock Text="右侧 (对方的修改)" Grid.Row="2" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <Button x:Name="BrowseLeftButton" Grid.Row="1" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseLeft"/>
+            <TextBlock x:Name="RightLabel" Text="右侧 (对方的修改)" Grid.Row="2" Margin="0,4,8,4" VerticalAlignment="Center"/>
             <TextBox x:Name="RightPath" Grid.Row="2" Grid.Column="1" Margin="0,4" ToolTip="另一侧的修改，冲突时标记为 RIGHT"/>
-            <Button Grid.Row="2" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseRight"/>
+            <Button x:Name="BrowseRightButton" Grid.Row="2" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseRight"/>
         </Grid>
         <WrapPanel Grid.Row="1" Margin="0,2,0,6">
-            <Button Content="合并" Background="#3569AE" Foreground="White" Padding="14,4" Click="MergeClick" ToolTip="执行三路合并：不同位置的修改自动合入，同一位置的分歧标为冲突"/>
+            <Button x:Name="MergeButton" Content="合并" Background="#3569AE" Foreground="White" Padding="14,4" Click="MergeClick" ToolTip="执行三路合并：不同位置的修改自动合入，同一位置的分歧标为冲突"/>
             <Button x:Name="PreviousConflict" Content="◀ 上一冲突" Margin="16,0,4,0" Click="PreviousConflictClick" IsEnabled="False"/>
             <Button x:Name="NextConflict" Content="下一冲突 ▶" Margin="4,0,12,0" Click="NextConflictClick" IsEnabled="False"/>
             <TextBlock x:Name="ConflictLabel" VerticalAlignment="Center" Foreground="#A35D39" Margin="0,0,16,0" Text="未合并"/>

@@ -21,11 +21,11 @@ public partial class MainWindow
     private void StartAlignWith(DiffPane pane)
     {
         var lines = pane.SelectedSourceLines();
-        if (lines.Count == 0) { StatusLabel.Text = "请先选中要对齐的行。"; return; }
+        if (lines.Count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_select_align_rows"); return; }
         _awaitingAlignTarget = true;
         _alignSourceIsLeft = ReferenceEquals(pane, LeftCode);
         _alignSourceLine = lines[0];
-        StatusLabel.Text = $"请在{(_alignSourceIsLeft ? "右" : "左")}侧点击目标行完成对齐（Esc 取消）。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_pick_target", ModularDiff.Gui.Controls.Lang.Get(_alignSourceIsLeft ? "side_right" : "side_left"));
         // Wire a one-shot click handler on the other pane.
         var target = _alignSourceIsLeft ? RightCode : LeftCode;
         target.MouseLeftButtonUp -= AlignTargetClicked;
@@ -39,11 +39,11 @@ public partial class MainWindow
         target.MouseLeftButtonUp -= AlignTargetClicked;
         _awaitingAlignTarget = false;
         int targetLine = target.SelectedSourceLines().FirstOrDefault();
-        if (targetLine < 1) { StatusLabel.Text = "未选中目标行。"; return; }
+        if (targetLine < 1) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_no_target"); return; }
         int left = _alignSourceIsLeft ? _alignSourceLine : targetLine;
         int right = _alignSourceIsLeft ? targetLine : _alignSourceLine;
         _alignmentHints.Add((left, right));
-        StatusLabel.Text = $"已添加对齐：左行 {left} ↔ 右行 {right}。正在重新对齐…";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_added", left, right);
         _ = RealignWithHints();
         e.Handled = true;
     }
@@ -51,11 +51,11 @@ public partial class MainWindow
     private void IsolateSelection(DiffPane pane)
     {
         var lines = pane.SelectedSourceLines();
-        if (lines.Count == 0) { StatusLabel.Text = "请先选中要隔离的行。"; return; }
+        if (lines.Count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_select_isolate"); return; }
         bool isLeft = ReferenceEquals(pane, LeftCode);
         foreach (var line in lines)
             if (isLeft) _isolatedLeft.Add(line); else _isolatedRight.Add(line);
-        StatusLabel.Text = $"已隔离 {lines.Count} 行（不再参与匹配）。正在重新对齐…";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_isolated", lines.Count);
         _ = RealignWithHints();
     }
 
@@ -64,7 +64,7 @@ public partial class MainWindow
         _alignmentHints.Clear();
         _isolatedLeft.Clear();
         _isolatedRight.Clear();
-        StatusLabel.Text = "已清除所有手动对齐和隔离。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_cleared");
         _ = RealignWithHints();
     }
 
@@ -87,9 +87,9 @@ public partial class MainWindow
             LeftCode.SetRows(presentation.Rows); RightCode.SetRows(presentation.Rows);
             _syncText = false;
             Overview.SetPresentation(presentation);
-            HunkLabel.Text = $"{presentation.Hunks.Count} 个差异块";
+            HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_count", presentation.Hunks.Count);
         }
-        catch (Exception ex) { StatusLabel.Text = "手动对齐失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_failed", ex.Message); }
     }
 
     /// <summary>Cancel a pending Align With (Esc key).</summary>
@@ -99,6 +99,6 @@ public partial class MainWindow
         _awaitingAlignTarget = false;
         LeftCode.MouseLeftButtonUp -= AlignTargetClicked;
         RightCode.MouseLeftButtonUp -= AlignTargetClicked;
-        StatusLabel.Text = "已取消手动对齐。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_cancelled");
     }
 }

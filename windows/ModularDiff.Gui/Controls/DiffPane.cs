@@ -205,7 +205,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
             if (row.HiddenLines > 0)
             {
                 dc.DrawRectangle(Ghost, null, rect);
-                dc.DrawText(Format($"  ⋯  已折叠 {row.HiddenLines:N0} 行相同内容 · 双击展开", Muted, 12), new(55, y + 3));
+                dc.DrawText(Format(Lang.Get("diff_folded", row.HiddenLines.ToString("N0")), Muted, 12), new(55, y + 3));
                 continue;
             }
             var background = cell is null ? Ghost : !row.IsDifferent ? Theme.PanelBackground : other is not null ? Modified : IsLeft ? Deleted : Inserted;
@@ -416,7 +416,7 @@ public sealed partial class DiffPane : FrameworkElement, IScrollInfo
         protected override void SetFocusCore() => owner.Focus();
         protected override string GetClassNameCore() => "DiffPane";
         protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Document;
-        protected override string GetNameCore() => (owner.IsLeft ? "左侧代码" : "右侧代码") + (owner.Buffer is null ? "，只读" : "，可编辑");
+        protected override string GetNameCore() => Lang.Get(owner.IsLeft ? "a11y_code_left" : "a11y_code_right") + Lang.Get(owner.Buffer is null ? "a11y_readonly" : "a11y_editable");
     }
     public bool CanHorizontallyScroll { get; set; } = true;
     public bool CanVerticallyScroll { get; set; } = true;

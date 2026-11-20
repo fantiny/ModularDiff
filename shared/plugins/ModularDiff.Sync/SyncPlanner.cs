@@ -45,14 +45,15 @@ public sealed class SyncPreview : ISyncPreview
     public string DisplayName => "Actionable sync preview";
     public IReadOnlyList<SyncPreviewItem> Describe(SyncPlan plan) => plan.Items.Select(item =>
     {
-        var choices = new List<SyncActionChoice> { new(SyncAction.Skip, "跳过") };
+        // Labels/state are Lang keys resolved in SyncPreviewWindow so the plugin stays GUI-free.
+        var choices = new List<SyncActionChoice> { new(SyncAction.Skip, "sync_choice_skip") };
         if (item.Problem is null && !SyncFiles.SameContent(item.Left, item.Right))
         {
-            if (item.Left.Exists) choices.Add(new(SyncAction.LeftToRight, item.Right.Exists ? "→ 覆盖右侧" : "→ 新增右侧"));
-            if (item.Right.Exists) choices.Add(new(SyncAction.RightToLeft, item.Left.Exists ? "← 覆盖左侧" : "← 新增左侧"));
+            if (item.Left.Exists) choices.Add(new(SyncAction.LeftToRight, item.Right.Exists ? "sync_choice_overwrite_right" : "sync_choice_add_right"));
+            if (item.Right.Exists) choices.Add(new(SyncAction.RightToLeft, item.Left.Exists ? "sync_choice_overwrite_left" : "sync_choice_add_left"));
         }
-        string Info(SyncStamp stamp) => stamp.Exists ? $"{stamp.Length:N0} B · {new DateTime(stamp.ModifiedUtcTicks, DateTimeKind.Utc).ToLocalTime():yyyy-MM-dd HH:mm:ss}" : "不存在";
-        string state = item.Problem ?? (item.Conflict ? "冲突：请选择方向或跳过" : SyncFiles.SameContent(item.Left, item.Right) ? "字节相同" : item.Left.Exists && item.Right.Exists ? "内容不同" : item.Left.Exists ? "仅左侧" : item.Right.Exists ? "仅右侧" : "两侧均不存在");
+        string Info(SyncStamp stamp) => stamp.Exists ? $"{stamp.Length:N0} B · {new DateTime(stamp.ModifiedUtcTicks, DateTimeKind.Utc).ToLocalTime():yyyy-MM-dd HH:mm:ss}" : "sync_stamp_missing";
+        string state = item.Problem ?? (item.Conflict ? "sync_state_conflict" : SyncFiles.SameContent(item.Left, item.Right) ? "sync_state_same" : item.Left.Exists && item.Right.Exists ? "file_status_modified" : item.Left.Exists ? "file_status_left_only" : item.Right.Exists ? "file_status_right_only" : "sync_state_neither");
         return new SyncPreviewItem(item.RelativePath, state, Info(item.Left), Info(item.Right), choices, item.SuggestedAction);
     }).ToArray();
 }

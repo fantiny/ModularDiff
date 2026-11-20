@@ -19,7 +19,7 @@ internal static class SyncTests
             await File.WriteAllTextAsync(Path.Combine(a, "changed"), "new"); await File.WriteAllTextAsync(Path.Combine(b, "changed"), "old"); await File.WriteAllTextAsync(Path.Combine(b, "keep"), "keep");
             var plan = await planner.PlanAsync(a, b, ["nested/binary", "changed", "keep"], SyncMode.LeftToRight);
             Check(!File.Exists(Path.Combine(b, "nested", "binary")) && await File.ReadAllTextAsync(Path.Combine(b, "changed")) == "old", "Preview wrote files");
-            Check(preview.Describe(plan).Single(i => i.RelativePath == "changed").Choices.Any(c => c.Label.Contains("覆盖")), "Overwrite not visible");
+            Check(preview.Describe(plan).Single(i => i.RelativePath == "changed").Choices.Any(c => c.Action == SyncAction.LeftToRight), "Overwrite not visible");
             var result = await Execute(plan); Check(result.Entries.Count(i => i.Outcome == SyncOutcome.Copied) == 2, "Copy count");
             Check((await File.ReadAllBytesAsync(Path.Combine(b, "nested", "binary"))).SequenceEqual(bytes) && await File.ReadAllTextAsync(Path.Combine(b, "changed")) == "new" && File.Exists(Path.Combine(b, "keep")), "Wrong copy content");
             Check(!Directory.EnumerateFiles(b, ".modulardiff-sync-*", SearchOption.AllDirectories).Any(), "Temporary file leaked");

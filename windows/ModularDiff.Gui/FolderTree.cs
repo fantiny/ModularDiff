@@ -37,12 +37,12 @@ public sealed class FolderNode
     };
     public string StatusText => Status switch
     {
-        FileStatus.Equal => "相同",
-        FileStatus.Modified => "内容不同",
-        FileStatus.LeftOnly => "仅左侧",
-        FileStatus.RightOnly => "仅右侧",
-        FileStatus.Pending => "比较中",
-        _ => "读取错误",
+        FileStatus.Equal => Controls.Lang.Get("file_status_equal"),
+        FileStatus.Modified => Controls.Lang.Get("file_status_modified"),
+        FileStatus.LeftOnly => Controls.Lang.Get("file_status_left_only"),
+        FileStatus.RightOnly => Controls.Lang.Get("file_status_right_only"),
+        FileStatus.Pending => Controls.Lang.Get("file_status_pending"),
+        _ => Controls.Lang.Get("file_status_error"),
     };
     public string Color => Status switch
     {
@@ -250,10 +250,10 @@ public sealed class FolderTree
         try
         {
             var file = new FileInfo(path);
-            if (!file.Exists) return ("—", "不可读取");
+            if (!file.Exists) return ("—", Controls.Lang.Get("file_unreadable"));
             long size = file.Length;
             return (size < 1024 ? $"{size} B" : size < 1024 * 1024 ? $"{size / 1024d:0.0} KB" : $"{size / 1024d / 1024d:0.0} MB", file.LastWriteTime.ToString("yyyy-MM-dd HH:mm"));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ("—", "不可读取"); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ("—", Controls.Lang.Get("file_unreadable")); }
     }
 }

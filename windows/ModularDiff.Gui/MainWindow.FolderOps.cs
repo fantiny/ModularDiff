@@ -27,7 +27,7 @@ public partial class MainWindow
         if (selected.Length > 1)
         {
             var multi = new ContextMenu();
-            var copyAll = new MenuItem { Header = $"复制 {selected.Length} 个文件到" + (fromLeft ? "右侧" : "左侧") };
+            var copyAll = new MenuItem { Header = ModularDiff.Gui.Controls.Lang.Get("folder_copy_n", selected.Length, ModularDiff.Gui.Controls.Lang.Get(fromLeft ? "side_right" : "side_left")) };
             copyAll.Click += (_, _) => _ = CopyFolderFiles(selected, fromLeft);
             multi.Items.Add(copyAll);
             multi.PlacementTarget = grid;
@@ -52,12 +52,12 @@ public partial class MainWindow
                 && !string.Equals(node.RelativePath, other.RelativePath, StringComparison.OrdinalIgnoreCase)
                 && (fromLeft ? node.LeftExists && other.RightExists : other.LeftExists && node.RightExists);
             string crossTitle = fromLeft ? $"{node.Name} ↔ {other!.Name}" : $"{other!.Name} ↔ {node.Name}";
-            Item(cross ? "打开比较：" + crossTitle : "打开比较", true, () => _ = OpenSelectedFiles());
+            Item(cross ? ModularDiff.Gui.Controls.Lang.Get("menu_open_compare_cross", crossTitle) : ModularDiff.Gui.Controls.Lang.Get("menu_open_compare"), true, () => _ = OpenSelectedFiles());
             if (cross)
-                Item("仅打开此行（同名配对）", true, () => _ = OpenNode(node));
-            Item("复制到" + (fromLeft ? "右侧" : "左侧"), File.Exists(clicked), () => _ = CopyFolderFile(node, fromLeft));
+                Item(ModularDiff.Gui.Controls.Lang.Get("menu_open_paired_only"), true, () => _ = OpenNode(node));
+            Item(fromLeft ? ModularDiff.Gui.Controls.Lang.Get("menu_copy_to_right") : ModularDiff.Gui.Controls.Lang.Get("menu_copy_to_left"), File.Exists(clicked), () => _ = CopyFolderFile(node, fromLeft));
         }
-        Item("在资源管理器中显示(" + (fromLeft ? "左" : "右") + "侧)", File.Exists(clicked) || Directory.Exists(clicked),
+        Item(fromLeft ? ModularDiff.Gui.Controls.Lang.Get("menu_reveal_left") : ModularDiff.Gui.Controls.Lang.Get("menu_reveal_right"), File.Exists(clicked) || Directory.Exists(clicked),
             () => Process.Start("explorer.exe", "/select,\"" + clicked + "\""));
         menu.PlacementTarget = (UIElement)sender;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
@@ -87,7 +87,7 @@ public partial class MainWindow
         await CompareAsync();
         var restored = _folderRows.FirstOrDefault(n => n.RelativePath == reopen);
         if (restored is not null) LeftFolders.SelectedItem = RightFolders.SelectedItem = restored;
-        StatusLabel.Text = $"批量复制完成：{copied} 成功" + (failed > 0 ? $", {failed} 失败" : "") + "。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_batch_copy_done", copied, failed > 0 ? ModularDiff.Gui.Controls.Lang.Get("status_batch_copy_fail_suffix", failed) : "");
     }
 
     private async Task CopyFolderFile(FolderNode node, bool fromLeft)
@@ -98,10 +98,10 @@ public partial class MainWindow
         if (!fromLeft) (source, target) = (target, source);
         try
         {
-            if (!File.Exists(source)) { StatusLabel.Text = "源文件不存在：" + source; return; }
+            if (!File.Exists(source)) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_source_missing", source); return; }
             if (File.Exists(target))
             {
-                var choice = MessageBox.Show(this, "目标已存在，是否覆盖？\n\n" + target, "复制到另一侧", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                var choice = MessageBox.Show(this, ModularDiff.Gui.Controls.Lang.Get("dlg_copy_overwrite", target), ModularDiff.Gui.Controls.Lang.Get("dlg_copy_overwrite_title"), MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (choice != MessageBoxResult.Yes) return;
             }
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
@@ -110,8 +110,8 @@ public partial class MainWindow
             await CompareAsync();   // refresh the folder comparison after the copy
             var restored = _folderRows.FirstOrDefault(n => n.RelativePath == reopen);
             if (restored is not null) LeftFolders.SelectedItem = RightFolders.SelectedItem = restored;
-            StatusLabel.Text = "已复制：" + target;
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copied_to", target);
         }
-        catch (Exception ex) { StatusLabel.Text = "复制失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_failed", ex.Message); }
     }
 }

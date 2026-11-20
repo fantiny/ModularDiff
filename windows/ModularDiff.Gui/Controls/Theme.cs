@@ -79,11 +79,11 @@ public static class Theme
         }
         catch (System.Text.Json.JsonException ex)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行 — {ex.Message}");
+            _loadDiagnostics.Add(Lang.Get("theme_json_line", Path.GetFileName(path) ?? path, (ex.LineNumber ?? -1) + 1, ex.Message ?? ""));
         }
         catch (KeyNotFoundException ex)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
+            _loadDiagnostics.Add(Lang.Get("theme_missing_field", Path.GetFileName(path) ?? path, ex.Message ?? ""));
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {

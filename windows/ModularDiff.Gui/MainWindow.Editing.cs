@@ -60,7 +60,7 @@ public partial class MainWindow
             UpdateFileStats();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
-        { ClearEditors(); StatusLabel.Text = "文件保持只读：" + ex.Message; }
+        { ClearEditors(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_readonly_keep", ex.Message); }
         UpdateEditState();
     }
     private void EditRequested(DiffPane pane, TextEdit edit)
@@ -71,9 +71,9 @@ public partial class MainWindow
             pane.Buffer.Apply(edit); _activePane = pane;
             ShowDraft(); UpdateEditState();
             if (_autoRealign) _editTask = RecompareBuffers(true);
-            else HunkLabel.Text = "未对齐 · 点 ⟳ 重算";
+            else HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_unaligned");
         }
-        catch (Exception ex) { StatusLabel.Text = "编辑失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_edit_failed", ex.Message); }
     }
     private void ShowDraft()
     {
@@ -88,7 +88,7 @@ public partial class MainWindow
             rows.Add(new(i, a, b));
         }
         _syncText = true; LeftCode.SetRows(rows, false); RightCode.SetRows(rows, false); _syncText = false;
-        TextEmptyState.Visibility = Visibility.Collapsed; HunkLabel.Text = "重比较…"; ActivityLabel.Text = "缓冲已更新";
+        TextEmptyState.Visibility = Visibility.Collapsed; HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_recomparing"); ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_buffer_updated");
         Overview.SetPresentation(null); ExportButton.IsEnabled = false;
     }
     private async Task RecompareBuffers(bool debounce)
@@ -115,14 +115,14 @@ public partial class MainWindow
             if (_presentation is not null && row >= 0 && row < _presentation.Rows.Count)
             {
                 _currentHunk = _presentation.Rows[row].HunkId;
-                if (_currentHunk >= 0) HunkLabel.Text = $"差异 {_currentHunk + 1} / {_presentation.Hunks.Count}";
+                if (_currentHunk >= 0) HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_index", _currentHunk + 1, _presentation.Hunks.Count);
             }
-            ExportButton.IsEnabled = true; ActivityLabel.Text = "就绪"; UpdateEditState();
+            ExportButton.IsEnabled = true; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready"); UpdateEditState();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            if (!token.IsCancellationRequested) { _bufferDiff = null; UpdateEditState(); StatusLabel.Text = "重比较失败，编辑已保留：" + ex.Message; }
+            if (!token.IsCancellationRequested) { _bufferDiff = null; UpdateEditState(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recompare_failed", ex.Message); }
         }
     }
     private void UpdateEditState()
@@ -142,18 +142,18 @@ public partial class MainWindow
         if (!text)
         {
             bool dirtyTabs = _textSessions.Any(s => s.IsDirty || (ReferenceEquals(s, _activeSession) && HasDirtyBuffers));
-            EditStatusLabel.Text = dirtyTabs ? "● 有未保存文件" : "目录比较";
-            EditStatusLabel.ToolTip = dirtyTabs ? "文件标签中有未保存修改；打开对应标签后可保存" : "当前为目录比较";
+            EditStatusLabel.Text = dirtyTabs ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty_tabs") : ModularDiff.Gui.Controls.Lang.Get("edit_status_folder");
+            EditStatusLabel.ToolTip = dirtyTabs ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty_tabs_tip") : ModularDiff.Gui.Controls.Lang.Get("edit_status_folder_tip");
             return;
         }
-        EditStatusLabel.Text = _leftBuffer is null ? "只读" : HasDirtyBuffers ? "● 未保存" : "已保存";
-        EditStatusLabel.ToolTip = _leftBuffer is null ? "二进制、大文件或没有编辑插件时使用只读视图" : "修改先保存在内存中；点击保存图标写入磁盘";
+        EditStatusLabel.Text = _leftBuffer is null ? ModularDiff.Gui.Controls.Lang.Get("edit_status_readonly") : HasDirtyBuffers ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty") : ModularDiff.Gui.Controls.Lang.Get("edit_status_saved");
+        EditStatusLabel.ToolTip = _leftBuffer is null ? ModularDiff.Gui.Controls.Lang.Get("readonly_tooltip") : ModularDiff.Gui.Controls.Lang.Get("dirty_tooltip");
         if (_leftBuffer is not null && _rightBuffer is not null)
         {
             LeftFileTitle.Text = (_leftBuffer.IsDirty ? "● " : "") + _leftBuffer.Path;
             RightFileTitle.Text = (_rightBuffer.IsDirty ? "● " : "") + _rightBuffer.Path;
-            LeftFileTitle.ToolTip = $"{_leftBuffer.Path}\n{_leftBuffer.Snapshot().Encoding.Name} · {(_leftBuffer.IsDirty ? "未保存" : "已保存")}";
-            RightFileTitle.ToolTip = $"{_rightBuffer.Path}\n{_rightBuffer.Snapshot().Encoding.Name} · {(_rightBuffer.IsDirty ? "未保存" : "已保存")}";
+            LeftFileTitle.ToolTip = $"{_leftBuffer.Path}\n{_leftBuffer.Snapshot().Encoding.Name} · {(_leftBuffer.IsDirty ? ModularDiff.Gui.Controls.Lang.Get("unsaved_label") : ModularDiff.Gui.Controls.Lang.Get("saved_label"))}";
+            RightFileTitle.ToolTip = $"{_rightBuffer.Path}\n{_rightBuffer.Snapshot().Encoding.Name} · {(_rightBuffer.IsDirty ? ModularDiff.Gui.Controls.Lang.Get("unsaved_label") : ModularDiff.Gui.Controls.Lang.Get("saved_label"))}";
             if (_activeSession is not null) _activeSession.IsDirty = HasDirtyBuffers;
         }
     }
@@ -186,9 +186,9 @@ public partial class MainWindow
             ShowDraft(); UpdateEditState();
             _editTask = RecompareBuffers(false);
             await _editTask;
-            StatusLabel.Text = $"已复制 {copied} 个差异块到{(toRight ? "右侧" : "左侧")}。";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copied_hunks", copied, ModularDiff.Gui.Controls.Lang.Get(toRight ? "side_right" : "side_left"));
         }
-        catch (Exception ex) { StatusLabel.Text = $"批量复制失败（已处理 {copied} 块）：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_all_failed", copied, ex.Message); }
     }
     private async Task CopyBlock(bool toRight)
     {
@@ -201,7 +201,7 @@ public partial class MainWindow
             await _editTask;
             NavigateHunk(1);   // like Beyond Compare: after a block copy, advance to the next difference
         }
-        catch (Exception ex) { StatusLabel.Text = "块复制失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_block_failed", ex.Message); }
     }
     private void HistoryRequested(DiffPane pane, bool redo)
     {
@@ -229,27 +229,27 @@ public partial class MainWindow
                 var disk = await storage.SaveAsync(snapshot);
                 buffer.AcceptSave(snapshot, disk); count++;
             }
-            if (_folderResult is not null && count > 0) FolderSummary.ToolTip = "文件已保存；目录摘要可通过目录视图 F5 刷新。";
+            if (_folderResult is not null && count > 0) FolderSummary.ToolTip = ModularDiff.Gui.Controls.Lang.Get("folder_saved_tip");
             _editTask = RecompareBuffers(false); await _editTask;
-            StatusLabel.Text = count == 0 ? "没有需要保存的修改。" : $"已保存 {count} 个文件。";
+            StatusLabel.Text = count == 0 ? ModularDiff.Gui.Controls.Lang.Get("status_nothing_to_save") : ModularDiff.Gui.Controls.Lang.Get("status_saved_count", count);
             return true;
         }
         catch (Exception ex)
         {
-            StatusLabel.Text = $"已保存 {count} 个文件；保存未完成：{ex.Message}";
-            if (!_arguments.Contains("--edit-smoke-test")) MessageBox.Show(this, StatusLabel.Text, "保存失败 — 编辑仍保留", MessageBoxButton.OK, MessageBoxImage.Warning);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_saved_partial", count, ex.Message);
+            if (!_arguments.Contains("--edit-smoke-test")) MessageBox.Show(this, StatusLabel.Text, ModularDiff.Gui.Controls.Lang.Get("dlg_save_failed_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }
         finally { _saving = false; UpdateEditState(); }
     }
     private async Task<bool> CanLeaveEdits()
     {
-        if (_saving) { StatusLabel.Text = "正在保存，请稍候。"; return false; }
+        if (_saving) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_saving_wait"); return false; }
         if (!HasDirtyBuffers && !Hex.IsDirty) return true;
         var choice = MessageBox.Show(this, Hex.IsDirty && !HasDirtyBuffers
-                ? "十六进制视图有未保存的字节修改。\n\n是：保存后继续\n否：放弃修改\n取消：留在当前文件"
-                : "左右文件中有未保存的修改。\n\n是：保存修改后继续\n否：放弃修改\n取消：留在当前文件",
-            "未保存的修改", MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+                ? ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_hex")
+                : ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_text"),
+            ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_title"), MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
         if (choice == MessageBoxResult.No) return true;
         if (choice != MessageBoxResult.Yes) return false;
         // 文本与十六进制编辑一并保存 —— 此前 hex 修改不在任何离开/关闭提示内,静默丢弃(审查发现)。

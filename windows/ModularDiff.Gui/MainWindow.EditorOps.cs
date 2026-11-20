@@ -21,7 +21,7 @@ public partial class MainWindow
         var dest = toRight ? RightCode : LeftCode;
         if (source.Buffer is null || dest.Buffer is null || _presentation is null) return;
         var selected = source.SelectedSourceLines();
-        if (selected.Count == 0) { StatusLabel.Text = "请先选中要复制的行。"; return; }
+        if (selected.Count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_select_copy_rows"); return; }
 
         try
         {
@@ -47,7 +47,7 @@ public partial class MainWindow
                     destLast = dstCell.LineNumber;
                 }
             }
-            if (destFirst < 0) { StatusLabel.Text = "选中区域在对侧没有对应位置（可能全部是新增行）。"; return; }
+            if (destFirst < 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_no_dest_selection"); return; }
 
             // Build the TextEdit on the destination buffer.
             var firstDoc = dest.Line(destFirst);
@@ -55,11 +55,11 @@ public partial class MainWindow
             if (firstDoc is null || lastDoc is null) return;
             int offset = firstDoc.Offset;
             int length = lastDoc.Offset + lastDoc.Length - offset;
-            dest.Buffer.Apply(new TextEdit(offset, length, replacement, $"复制选中行 {(toRight ? "左→右" : "右→左")}"));
+            dest.Buffer.Apply(new TextEdit(offset, length, replacement, ModularDiff.Gui.Controls.Lang.Get("edit_desc_copy_sel", ModularDiff.Gui.Controls.Lang.Get(toRight ? "dir_ltr" : "dir_rtl"))));
             _activePane = dest;
-            AfterProgrammaticEdit(dest, $"已复制 {selected.Count} 行到{(toRight ? "右侧" : "左侧")}。");
+            AfterProgrammaticEdit(dest, ModularDiff.Gui.Controls.Lang.Get("status_copied_sel_rows", selected.Count, ModularDiff.Gui.Controls.Lang.Get(toRight ? "side_right" : "side_left")));
         }
-        catch (Exception ex) { StatusLabel.Text = "复制选中行失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_sel_failed", ex.Message); }
     }
 
     // ─── 1b: single-line copy to other side ───
@@ -71,7 +71,7 @@ public partial class MainWindow
         var dest = toRight ? RightCode : LeftCode;
         if (source.Buffer is null || dest.Buffer is null || _presentation is null) return;
         var selected = source.SelectedSourceLines();
-        if (selected.Count == 0) { StatusLabel.Text = "请将光标放在要复制的行上。"; return; }
+        if (selected.Count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_place_cursor_line"); return; }
         try
         {
             int srcLine = selected[0];
@@ -84,18 +84,18 @@ public partial class MainWindow
                 .Where(r => (toRight ? r.Left : r.Right)?.LineNumber == srcLine)
                 .Select(r => toRight ? r.Right : r.Left)
                 .FirstOrDefault();
-            if (dstCell is null) { StatusLabel.Text = "该行在对侧没有对应位置。"; return; }
+            if (dstCell is null) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_no_peer_line"); return; }
             var destDoc = dest.Line(dstCell.LineNumber);
             if (destDoc is null) return;
             // 被替换的范围含目标行的行尾符(DocumentLine.Length = Text + Ending),替换文本必须带上
             // 同样的行尾 —— 此前裸文本替换会把下一行拼接进来(每次 Ctrl+L 损坏一次缓冲区)。
             string destEol = dest.Buffer.Text.Contains("\r\n") ? "\r\n" : "\n";
             dest.Buffer.Apply(new TextEdit(destDoc.Offset, destDoc.Length, doc.Text + destEol,
-                $"复制行 {(toRight ? "左→右" : "右→左")}"));
+                ModularDiff.Gui.Controls.Lang.Get("edit_desc_copy_line", ModularDiff.Gui.Controls.Lang.Get(toRight ? "dir_ltr" : "dir_rtl"))));
             _activePane = dest;
-            AfterProgrammaticEdit(dest, "已复制 1 行。");
+            AfterProgrammaticEdit(dest, ModularDiff.Gui.Controls.Lang.Get("status_copied_one_row"));
         }
-        catch (Exception ex) { StatusLabel.Text = "复制行失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_line_failed", ex.Message); }
     }
 
     // ─── 1e: Go To line number ───
@@ -103,10 +103,10 @@ public partial class MainWindow
     private void GoToLine()
     {
         var pane = _activePane ?? LeftCode;
-        if (pane.Buffer is null) { StatusLabel.Text = "请先打开一个文件。"; return; }
+        if (pane.Buffer is null) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_open_file_first"); return; }
         string? input = PromptLineNumber(pane.LineCount);
         if (!int.TryParse(input, out int line) || line < 1 || line > pane.LineCount)
-        { if (input is not null) StatusLabel.Text = $"行号必须在 1–{pane.LineCount} 之间。"; return; }
+        { if (input is not null) StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_line_range", pane.LineCount); return; }
         pane.Focus();
         pane.SetCaret(pane.Line(line)!.Offset);
         pane.SelectRow(pane.SelectedRow);
@@ -117,13 +117,13 @@ public partial class MainWindow
         var owner = this;
         var dialog = new Window
         {
-            Title = "跳转到行", Width = 320, SizeToContent = SizeToContent.Height,
+            Title = ModularDiff.Gui.Controls.Lang.Get("dlg_goto_line_title"), Width = 320, SizeToContent = SizeToContent.Height,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = owner, ResizeMode = ResizeMode.NoResize,
         };
         var box = new TextBox { Text = "1", Margin = new Thickness(12, 4, 12, 8) };
-        var hint = new TextBlock { Text = $"行号 (1–{max})：", Margin = new Thickness(12, 12, 12, 0) };
-        var ok = new Button { Content = "跳转", Width = 80, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
-        var cancel = new Button { Content = "取消", Width = 60, IsCancel = true };
+        var hint = new TextBlock { Text = ModularDiff.Gui.Controls.Lang.Get("dlg_goto_line_hint", max), Margin = new Thickness(12, 12, 12, 0) };
+        var ok = new Button { Content = ModularDiff.Gui.Controls.Lang.Get("dlg_goto"), Width = 80, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = ModularDiff.Gui.Controls.Lang.Get("dlg_cancel"), Width = 60, IsCancel = true };
         string? result = null;
         ok.Click += (_, _) => { if (int.TryParse(box.Text.Trim(), out _)) { result = box.Text.Trim(); dialog.Close(); } };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
@@ -149,21 +149,21 @@ public partial class MainWindow
         if (_bookmarks.TryGetValue(number, out var existing) && existing.Pane == pane && existing.Line == line)
         {
             _bookmarks.Remove(number);
-            StatusLabel.Text = $"书签 {number} 已清除。";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_bookmark_cleared", number);
         }
         else
         {
             _bookmarks[number] = (pane, line);
-            StatusLabel.Text = $"书签 {number} → {pane.Line(line)?.Text}";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_bookmark_set", number, pane.Line(line)?.Text ?? "");
         }
     }
 
     private void GoToBookmark(int number)
     {
-        if (!_bookmarks.TryGetValue(number, out var mark)) { StatusLabel.Text = $"书签 {number} 未设置。"; return; }
+        if (!_bookmarks.TryGetValue(number, out var mark)) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_bookmark_missing", number); return; }
         mark.Pane.Focus();
         var doc = mark.Pane.Line(mark.Line);
-        if (doc is null) { StatusLabel.Text = $"书签 {number} 的行已不存在。"; return; }
+        if (doc is null) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_bookmark_gone", number); return; }
         mark.Pane.SetCaret(doc.Offset);
         int row = mark.Pane.SelectedRow;
         LeftCode.SelectRow(row); RightCode.SelectRow(row); CodeSelected(row);
@@ -177,7 +177,7 @@ public partial class MainWindow
         int currentRow = pane.SelectedRow;
         if (currentRow < 0 || currentRow >= _presentation.Rows.Count) return;
         int hunkId = _presentation.Rows[currentRow].HunkId;
-        if (hunkId < 0) { StatusLabel.Text = "光标不在差异块内。"; return; }
+        if (hunkId < 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_not_in_hunk"); return; }
         // DiffHunk.StartRow/EndRow 是展示行空间,而 SelectColumn 需要文档行号 —— 两个坐标系在
         // 出现不成对行(增/删)后即分叉。经该块的行解析真实行号(此前直接传展示行号,选错行后
         // 打字会改错行)。
@@ -186,7 +186,7 @@ public partial class MainWindow
             .Select(r => leftPane ? r.Left : r.Right).OfType<TextCell>().ToList();
         if (cells.Count == 0) return;
         pane.SelectColumn(cells[0].LineNumber, cells[^1].LineNumber, 0, int.MaxValue);
-        StatusLabel.Text = $"已选中差异块 {hunkId + 1}（{cells.Count} 行）。";
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hunk_selected", hunkId + 1, cells.Count);
     }
 
     // File transforms moved to FileTypes plugin (GenericFileTools provider).
@@ -211,7 +211,7 @@ public partial class MainWindow
             TextSplitter.HorizontalAlignment = HorizontalAlignment.Stretch; TextSplitter.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(RightCodeScroll, 2); Grid.SetRow(RightCodeScroll, 2);
             Grid.SetColumn(Overview, 3); Grid.SetRow(Overview, 3);
-            StatusLabel.Text = "已切换为上下布局。";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_layout_vertical");
         }
         else
         {
@@ -226,7 +226,7 @@ public partial class MainWindow
             TextSplitter.VerticalAlignment = VerticalAlignment.Stretch; TextSplitter.HorizontalAlignment = HorizontalAlignment.Center;
             Grid.SetRow(RightCodeScroll, 0); Grid.SetColumn(RightCodeScroll, 2);
             Grid.SetRow(Overview, 0); Grid.SetColumn(Overview, 3);
-            StatusLabel.Text = "已切换为左右布局。";
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_layout_horizontal");
         }
         foreach (UIElement child in grid.Children)
             if (child is not ScrollViewer && child is not GridSplitter && child is not DiffOverview)
@@ -279,8 +279,8 @@ public partial class MainWindow
             {
                 int length = doc.Length;
                 if (doc.Offset + length < pane.Buffer.Text.Length) length += pane.Buffer.NewLine.Length;
-                pane.Buffer.Apply(new TextEdit(doc.Offset, length, "", "删除行"));
-                AfterProgrammaticEdit(pane, "已删除当前行。");
+                pane.Buffer.Apply(new TextEdit(doc.Offset, length, "", ModularDiff.Gui.Controls.Lang.Get("edit_desc_delete_line")));
+                AfterProgrammaticEdit(pane, ModularDiff.Gui.Controls.Lang.Get("status_deleted_row"));
             }
             return true;
         }

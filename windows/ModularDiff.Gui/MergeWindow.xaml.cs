@@ -42,6 +42,9 @@ public partial class MergeWindow : Window
         _gitOutputPath = gitOutputPath;
         _plugins = App.Plugins;   // shared catalog, disposed by App
         InitializeComponent();
+        LocalizeUI();
+        Controls.Lang.Changed += LocalizeUI;
+        Closed += (_, _) => Controls.Lang.Changed -= LocalizeUI;
         if (_gitOutputPath is not null)
             Closing += (_, _) =>
             {
@@ -66,13 +69,37 @@ public partial class MergeWindow : Window
 
     private static Brush Brush(string color) => (Brush)new BrushConverter().ConvertFromString(color)!;
 
-    private void BrowseBase(object sender, RoutedEventArgs e) => Browse(BasePath, "选择公共祖先文件");
-    private void BrowseLeft(object sender, RoutedEventArgs e) => Browse(LeftPath, "选择左侧（我的）文件");
-    private void BrowseRight(object sender, RoutedEventArgs e) => Browse(RightPath, "选择右侧（对方的）文件");
+    private void BrowseBase(object sender, RoutedEventArgs e) => Browse(BasePath, Controls.Lang.Get("merge_browse_base"));
+    private void BrowseLeft(object sender, RoutedEventArgs e) => Browse(LeftPath, Controls.Lang.Get("merge_browse_left"));
+    private void BrowseRight(object sender, RoutedEventArgs e) => Browse(RightPath, Controls.Lang.Get("merge_browse_right"));
     private static void Browse(TextBox box, string title)
     {
         var dialog = new OpenFileDialog { Title = title };
         if (dialog.ShowDialog() is true) box.Text = dialog.FileName;
+    }
+
+    private void LocalizeUI()
+    {
+        Title = Controls.Lang.Get("merge_window_title");
+        BaseLabel.Text = Controls.Lang.Get("merge_base");
+        LeftLabel.Text = Controls.Lang.Get("merge_left");
+        RightLabel.Text = Controls.Lang.Get("merge_right");
+        BasePath.ToolTip = Controls.Lang.Get("merge_base_tip");
+        LeftPath.ToolTip = Controls.Lang.Get("merge_left_path_tip");
+        RightPath.ToolTip = Controls.Lang.Get("merge_right_path_tip");
+        BrowseBaseButton.Content = BrowseLeftButton.Content = BrowseRightButton.Content = Controls.Lang.Get("merge_browse");
+        MergeButton.Content = Controls.Lang.Get("merge_button_text");
+        MergeButton.ToolTip = Controls.Lang.Get("merge_run_tip");
+        PreviousConflict.Content = Controls.Lang.Get("merge_prev");
+        NextConflict.Content = Controls.Lang.Get("merge_next");
+        TakeLeft.Content = Controls.Lang.Get("merge_take_left");
+        TakeRight.Content = Controls.Lang.Get("merge_take_right");
+        TakeLeft.ToolTip = Controls.Lang.Get("merge_take_left_tip");
+        TakeRight.ToolTip = Controls.Lang.Get("merge_take_right_tip");
+        Save.Content = Controls.Lang.Get("merge_save");
+        Result.ToolTip = Controls.Lang.Get("merge_result_tip");
+        if (!_everMerged) StatusLabel.Text = Controls.Lang.Get("merge_hint");
+        UpdateNavigation();
     }
 
     private async void MergeClick(object sender, RoutedEventArgs e) => await MergeAsync();
@@ -85,8 +112,8 @@ public partial class MergeWindow : Window
         try
         {
             if (!File.Exists(BasePath.Text) || !File.Exists(LeftPath.Text) || !File.Exists(RightPath.Text))
-            { StatusLabel.Text = "三个路径都必须是存在的文件。"; return; }
-            StatusLabel.Text = "合并中…";
+            { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_need_three_files"); return; }
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_working");
             string baseText = await File.ReadAllTextAsync(BasePath.Text);
             string leftText = await File.ReadAllTextAsync(LeftPath.Text);
             string rightText = await File.ReadAllTextAsync(RightPath.Text);
@@ -101,9 +128,9 @@ public partial class MergeWindow : Window
             _painting = false;
             PaintConflicts();
             _everMerged = true;
-            StatusLabel.Text = merged.Clean ? "合并完成：无冲突，结果可直接保存。" : $"合并完成：{merged.Conflicts} 处冲突（黄色=左侧，绿色=右侧），逐个决策后保存。";
+            StatusLabel.Text = merged.Clean ? ModularDiff.Gui.Controls.Lang.Get("merge_clean_status") : ModularDiff.Gui.Controls.Lang.Get("merge_conflicts_status", merged.Conflicts);
         }
-        catch (Exception ex) { StatusLabel.Text = "合并失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_failed", ex.Message); }
     }
 
     /// <summary>Re-parses conflict markers, colors the blocks and refreshes navigation state.</summary>
@@ -154,7 +181,9 @@ public partial class MergeWindow : Window
         PreviousConflict.IsEnabled = NextConflict.IsEnabled = any;
         TakeLeft.IsEnabled = TakeRight.IsEnabled = any;
         Save.IsEnabled = Result.Document.Blocks.Count > 0;
-        ConflictLabel.Text = any ? $"冲突 {_currentConflict + 1} / {_conflicts.Count}" : _painting ? "" : "无冲突";
+        ConflictLabel.Text = any
+            ? Controls.Lang.Get("merge_conflict_index", _currentConflict + 1, _conflicts.Count)
+            : _painting ? "" : Controls.Lang.Get("merge_no_conflicts");
     }
 
     private void ResultChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -197,14 +226,14 @@ public partial class MergeWindow : Window
         }
         _currentConflict = Math.Min(_currentConflict, _conflicts.Count - 2);
         PaintConflicts();
-        StatusLabel.Text = _conflicts.Count == 0 ? "全部冲突已解决。" : $"已采用{(left ? "左侧" : "右侧")}，剩余 {_conflicts.Count} 处冲突。";
+        StatusLabel.Text = _conflicts.Count == 0 ? ModularDiff.Gui.Controls.Lang.Get("merge_all_resolved") : ModularDiff.Gui.Controls.Lang.Get("merge_took_side", ModularDiff.Gui.Controls.Lang.Get(left ? "side_left" : "side_right"), _conflicts.Count);
     }
 
     private async void SaveClick(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog
         {
-            Title = "保存合并结果",
+            Title = Controls.Lang.Get("merge_save_dialog_title"),
             FileName = string.IsNullOrWhiteSpace(LeftPath.Text) ? "merged.txt" : Path.GetFileName(LeftPath.Text),
         };
         if (dialog.ShowDialog(this) != true) return;
@@ -212,8 +241,8 @@ public partial class MergeWindow : Window
         {
             var text = new TextRange(Result.Document.ContentStart, Result.Document.ContentEnd).Text;
             await File.WriteAllTextAsync(dialog.FileName, text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
-            StatusLabel.Text = "已保存：" + dialog.FileName;
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_saved", dialog.FileName);
         }
-        catch (Exception ex) { StatusLabel.Text = "保存失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_save_failed", ex.Message); }
     }
 }

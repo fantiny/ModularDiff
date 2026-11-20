@@ -10,7 +10,7 @@ public sealed class DiffOverview : FrameworkElement
     private TextPresentation? _presentation;
     private int _first, _last;
     public event Action<int>? NavigateRequested;
-    public DiffOverview() { Cursor = Cursors.Hand; ToolTip = "点击概览跳转到对应位置"; }
+    public DiffOverview() { Cursor = Cursors.Hand; ToolTip = Lang.Get("overview_tip"); }
     public void SetPresentation(TextPresentation? presentation) { _presentation = presentation; InvalidateVisual(); }
     public void SetViewport(int first, int last) { _first = first; _last = last; InvalidateVisual(); }
     protected override void OnRender(DrawingContext dc)

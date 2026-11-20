@@ -8,8 +8,8 @@ public partial class MainWindow
 {
     private string? _historyRootOverride;
     private SyncSafetyContext SafetyContext => new(_historyRootOverride ?? Arg("--sync-history-root") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "SyncHistory"),
-        SyncBackupBox.SelectedItem as ISyncBackup ?? throw new InvalidOperationException("缺少同步备份插件。"),
-        SyncJournalBox.SelectedItem as ISyncJournal ?? throw new InvalidOperationException("缺少同步记录插件。"));
+        SyncBackupBox.SelectedItem as ISyncBackup ?? throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_missing_backup_plugin")),
+        SyncJournalBox.SelectedItem as ISyncJournal ?? throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_missing_journal_plugin")));
     private void InitializeSyncSafety()
     {
         SyncBackupBox.ItemsSource = _plugins.GetAll<ISyncBackup>(); SyncBackupBox.SelectedIndex = 0;
@@ -26,7 +26,7 @@ public partial class MainWindow
             var window = new SyncHistoryWindow(SafetyContext, recovery) { Owner = this }; window.ShowDialog();
             if (window.RecoveryAttempted && _folderResult is not null) await RefreshAfterSync();
         }
-        catch (Exception ex) { StatusLabel.Text = "恢复窗口失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recovery_failed", ex.Message); }
         finally { _syncActive = _busy = false; TextView.IsEnabled = true; UpdateEditState(); }
     }
 }

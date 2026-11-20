@@ -29,11 +29,11 @@ internal static class ExplorerIntegration
     }
     public static void SetClassicMenu(bool enabled)
     {
-        if (!SupportsClassicMenu) throw new PlatformNotSupportedException("此设置仅适用于 Windows 11。");
+        if (!SupportsClassicMenu) throw new PlatformNotSupportedException(Controls.Lang.Get("explorer_win11_only_err"));
         using var existing = Registry.CurrentUser.OpenSubKey(ClassicKey, writable: true);
         var value = existing?.GetValue("");
         if (value is not null && value is not "")
-            throw new IOException("此注册表项已有其他配置，未修改。请先检查系统设置。");
+            throw new IOException(Controls.Lang.Get("explorer_reg_conflict"));
         if (enabled)
         {
             using var key = Registry.CurrentUser.CreateSubKey(ClassicKey);
@@ -70,10 +70,10 @@ internal static class ExplorerIntegration
 
     public static void Install()
     {
-        string exe = Environment.ProcessPath ?? throw new IOException("无法确定 EXE 路径。");
-        if (!string.Equals(Path.GetFileName(exe), "ModularDiff.Gui.exe", StringComparison.OrdinalIgnoreCase)) throw new IOException("请使用发布版 ModularDiff.Gui.exe 安装右键菜单。");
+        string exe = Environment.ProcessPath ?? throw new IOException(Controls.Lang.Get("explorer_no_exe"));
+        if (!string.Equals(Path.GetFileName(exe), "ModularDiff.Gui.exe", StringComparison.OrdinalIgnoreCase)) throw new IOException(Controls.Lang.Get("explorer_need_publish"));
         string dll = HandlerDllPath();
-        if (!File.Exists(dll)) throw new IOException("未找到右键菜单组件 ModularDiff.ShellExt.dll，请重新构建（build.ps1）。");
+        if (!File.Exists(dll)) throw new IOException(Controls.Lang.Get("explorer_no_shellex"));
         using (Registry.CurrentUser.CreateSubKey(@"Software\Classes\CLSID\" + Clsid + @"\InprocServer32"))
         {
             Registry.SetValue(@"HKEY_CURRENT_USER\Software\Classes\CLSID\" + Clsid + @"\InprocServer32", "", dll);

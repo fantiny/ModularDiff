@@ -31,35 +31,36 @@ public partial class MainWindow
             menu.Items.Add(item);
         }
         bool hasSelection = pane.SelectedText().Length > 0;
-        Add("撤销", pane.Buffer.CanUndo, () => HistoryRequested(pane, false));
-        Add("重做", pane.Buffer.CanRedo, () => HistoryRequested(pane, true));
+        bool toRight = ReferenceEquals(pane, LeftCode);
+        Add(Lang.Get("menu_undo"), pane.Buffer.CanUndo, () => HistoryRequested(pane, false));
+        Add(Lang.Get("menu_redo"), pane.Buffer.CanRedo, () => HistoryRequested(pane, true));
         menu.Items.Add(new Separator());
-        Add("剪切", hasSelection, () => { SafeClipboard(() => Clipboard.SetText(pane.SelectedText())); pane.ReplaceSelection("", "Cut"); });
-        Add("复制", hasSelection, () => SafeClipboard(() => Clipboard.SetText(pane.SelectedText())));
-        Add("粘贴", Clipboard.ContainsText(), () => pane.ReplaceSelection(Clipboard.GetText(), "Paste"));
-        Add("全部复制左→右", TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
+        Add(Lang.Get("menu_cut"), hasSelection, () => { SafeClipboard(() => Clipboard.SetText(pane.SelectedText())); pane.ReplaceSelection("", "Cut"); });
+        Add(Lang.Get("menu_copy"), hasSelection, () => SafeClipboard(() => Clipboard.SetText(pane.SelectedText())));
+        Add(Lang.Get("menu_paste"), Clipboard.ContainsText(), () => pane.ReplaceSelection(Clipboard.GetText(), "Paste"));
+        Add(Lang.Get("menu_copy_all_right"), TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
             () => _ = CopyAllBlocks(true));
-        Add("全部复制右→左", TextView.Visibility == Visibility.Visible && MergeLeftButton.IsEnabled,
+        Add(Lang.Get("menu_copy_all_left"), TextView.Visibility == Visibility.Visible && MergeLeftButton.IsEnabled,
             () => _ = CopyAllBlocks(false));
         menu.Items.Add(new Separator());
-        Add("复制差异块到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+        Add(Lang.Get(toRight ? "menu_copy_diff_right" : "menu_copy_diff_left"),
             TextView.Visibility == Visibility.Visible && MergeRightButton.IsEnabled,
-            () => _ = CopyBlock(ReferenceEquals(pane, LeftCode)));
-        Add("复制选中行到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+            () => _ = CopyBlock(toRight));
+        Add(Lang.Get(toRight ? "menu_copy_selection_right" : "menu_copy_selection_left"),
             hasSelection && TextView.Visibility == Visibility.Visible,
-            () => CopySelectionToSide(ReferenceEquals(pane, LeftCode)));
-        Add("复制当前行到" + (ReferenceEquals(pane, LeftCode) ? "右侧" : "左侧"),
+            () => CopySelectionToSide(toRight));
+        Add(Lang.Get(toRight ? "menu_copy_line_right" : "menu_copy_line_left"),
             TextView.Visibility == Visibility.Visible && pane.Buffer is not null,
-            () => CopyLineToSide(ReferenceEquals(pane, LeftCode)));
+            () => CopyLineToSide(toRight));
         menu.Items.Add(new Separator());
         // File transforms come exclusively from IFileTypeProvider plugins (GenericFileTools covers all types).
         // Manual alignment (Beyond Compare's Align With / Isolate)
         if (TextView.Visibility == Visibility.Visible && pane.Buffer is not null)
         {
             menu.Items.Add(new Separator());
-            Add("与此行对齐…（点击另一侧目标行）", hasSelection, () => StartAlignWith(pane));
-            Add("隔离选中行（不参与匹配）", hasSelection, () => IsolateSelection(pane));
-            Add("清除所有手动对齐", _alignmentHints.Count > 0 || _isolatedLeft.Count > 0 || _isolatedRight.Count > 0,
+            Add(Lang.Get("menu_align_with"), hasSelection, () => StartAlignWith(pane));
+            Add(Lang.Get("menu_isolate"), hasSelection, () => IsolateSelection(pane));
+            Add(Lang.Get("menu_clear_align"), _alignmentHints.Count > 0 || _isolatedLeft.Count > 0 || _isolatedRight.Count > 0,
                 () => ClearAlignmentHints());
         }
         // File-type-specific actions from IFileTypeProvider plugins (JSON format, C# comment, XML pretty, etc.)
@@ -108,8 +109,10 @@ public partial class MainWindow
                     int[] targets = [.. candidates.Where(n => n == line || chosen.CanSplit(path, pane.Line(n)?.Text ?? "")).Order()];
                     var item = new MenuItem
                     {
-                        Header = targets.Length > 1 ? $"换行 · {chosen.DisplayName}（{targets.Length} 行）" : "换行 · " + chosen.DisplayName,
-                        ToolTip = "把所选行按各自领域规则拆成多行；行尾风格沿用原行",
+                        Header = targets.Length > 1
+                            ? Lang.Get("menu_split_many", chosen.DisplayName, targets.Length)
+                            : Lang.Get("menu_split_one", chosen.DisplayName),
+                        ToolTip = Lang.Get("menu_split_tip"),
                     };
                     item.Click += (_, _) => ApplySplit(pane, chosen, targets);
                     menu.Items.Add(item);
@@ -154,32 +157,32 @@ public partial class MainWindow
                 else block.Append(last.Ending);   // the block's final ending matches the replaced range exactly
             }
             if (applied == 0) return;
-            buffer.Apply(new TextEdit(first.Offset, last.Offset + last.Length - first.Offset, block.ToString(), $"换行 · {splitter.DisplayName}"));
-            AfterProgrammaticEdit(pane, $"已按「{splitter.DisplayName}」换行 {applied} 行");
+            buffer.Apply(new TextEdit(first.Offset, last.Offset + last.Length - first.Offset, block.ToString(), Lang.Get("edit_desc_split", splitter.DisplayName)));
+            AfterProgrammaticEdit(pane, Lang.Get("status_split_done", splitter.DisplayName, applied));
         }
-        catch (Exception ex) { StatusLabel.Text = "换行失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_split_failed", ex.Message); }
     }
 
     private void FormatSideClick(object sender, RoutedEventArgs e)
     {
         var pane = _activePane ?? LeftCode;
-        if (pane.Buffer is null) { StatusLabel.Text = "此文件为只读，无法格式化。"; return; }
+        if (pane.Buffer is null) { StatusLabel.Text = Lang.Get("status_readonly_format"); return; }
         var buffer = pane.Buffer;
         var formatter = _plugins.GetAll<ICodeFormatter>().FirstOrDefault(f => f.CanFormat(buffer.Path));
         if (formatter is null)
         {
             string available = string.Join("、", _plugins.GetAll<ICodeFormatter>().Select(f => f.DisplayName));
-            StatusLabel.Text = $"没有支持 {Path.GetFileName(buffer.Path)} 的格式化插件{(available.Length > 0 ? $"（当前插件：{available}）" : "")}。";
+            StatusLabel.Text = Lang.Get("status_no_formatter", Path.GetFileName(buffer.Path), available.Length > 0 ? Lang.Get("status_formatter_list", available) : "");
             return;
         }
         try
         {
             var formatted = formatter.Format([.. DocumentLines.Parse(buffer.Text).Select(l => l.Text)]);
             // 行尾风格/结尾换行沿原文 —— 走 Core 助手;此前手写 join 把 CRLF 拼成 LFCR(审查 K3)。
-            buffer.Apply(new TextEdit(0, buffer.Text.Length, LineText.Rebuild(formatted, buffer.Text), $"格式化 · {formatter.DisplayName}"));
-            AfterProgrammaticEdit(pane, $"已按「{formatter.DisplayName}」格式化{(ReferenceEquals(pane, LeftCode) ? "左" : "右")}侧");
+            buffer.Apply(new TextEdit(0, buffer.Text.Length, LineText.Rebuild(formatted, buffer.Text), Lang.Get("edit_desc_format", formatter.DisplayName)));
+            AfterProgrammaticEdit(pane, Lang.Get("status_format_done", formatter.DisplayName, Lang.Get(ReferenceEquals(pane, LeftCode) ? "side_left" : "side_right")));
         }
-        catch (Exception ex) { StatusLabel.Text = "格式化失败：" + ex.Message; }
+        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_format_failed", ex.Message); }
     }
 
     private async void RealignClick(object sender, RoutedEventArgs e)
@@ -187,13 +190,17 @@ public partial class MainWindow
         if (_leftBuffer is null || _rightBuffer is null) return;
         _editTask = RecompareBuffers(false);
         await _editTask;
-        if (StatusLabel.Text.Length == 0 || !StatusLabel.Text.Contains("失败")) StatusLabel.Text = "已按当前算法与忽略选项重新对齐。";
+        string failToken = Lang.Get("fail_token");
+        bool failed = StatusLabel.Text.Contains(failToken, StringComparison.Ordinal)
+            || StatusLabel.Text.Contains("fail", StringComparison.OrdinalIgnoreCase);
+        if (StatusLabel.Text.Length == 0 || !failed)
+            StatusLabel.Text = Lang.Get("status_realigned");
     }
 
     private void AutoRealignChanged(object sender, RoutedEventArgs e)
     {
         _autoRealign = AutoRealignToggle.IsChecked == true;
-        if (!_autoRealign && HasDirtyBuffers) HunkLabel.Text = "未对齐 · 点 ⟳ 重算";
+        if (!_autoRealign && HasDirtyBuffers) HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_unaligned");
     }
 
     /// <summary>Shared tail for edits issued from line tools: refresh the draft view and
@@ -203,6 +210,6 @@ public partial class MainWindow
         _activePane = pane;
         ShowDraft(); UpdateEditState();
         if (_autoRealign) _editTask = RecompareBuffers(false);
-        else { HunkLabel.Text = "未对齐 · 点 ⟳ 重算"; StatusLabel.Text = message; }
+        else { HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_unaligned"); StatusLabel.Text = message; }
     }
 }

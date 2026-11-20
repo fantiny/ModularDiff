@@ -45,30 +45,30 @@ public partial class MainWindow
         if (_busy || _folderResult is null || _rootRequest is null || SyncPlannerBox.SelectedItem is not ISyncPlanner planner
             || SyncPreviewBox.SelectedItem is not ISyncPreview preview || SyncExecutorBox.SelectedItem is not ISyncExecutor executor) return;
         var paths = SyncPaths(batch);
-        if (paths.Count == 0) { StatusLabel.Text = "没有可同步的文件；请选择文件或目录。"; return; }
+        if (paths.Count == 0) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_no_sync_files"); return; }
         if (!await CanLeaveEdits()) return;
         _detailCancellation?.Cancel();
         _syncCancellation?.Dispose(); _syncCancellation = new();
         _syncActive = true; TextView.IsEnabled = false; UpdateEditState();
-        _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ActivityLabel.Text = "生成同步预览…";
+        _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_sync_preview");
         try
         {
             var result = _folderResult;
-            var progress = new Progress<SyncProgress>(p => StatusLabel.Text = $"校验 {p.Completed}/{p.Total} · {p.RelativePath}");
+            var progress = new Progress<SyncProgress>(p => StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_validate", p.Completed, p.Total, p.RelativePath));
             var plan = await Task.Run(() => planner.PlanAsync(result.LeftPath, result.RightPath, paths, mode, progress, _syncCancellation.Token));
             _syncCancellation.Token.ThrowIfCancellationRequested();
-            string scope = batch ? "批量范围：当前筛选匹配的全部文件（包括折叠目录中的文件）" : "选中范围：所选文件及目录内全部文件（目录内不受筛选限制）";
+            string scope = ModularDiff.Gui.Controls.Lang.Get(batch ? "sync_scope_batch" : "sync_scope_selected");
             var dialog = new SyncPreviewWindow(plan, preview, executor, scope, SafetyContext) { Owner = this };
-            CancelButton.IsEnabled = false; ActivityLabel.Text = "预览中"; dialog.ShowDialog();
+            CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_previewing"); dialog.ShowDialog();
             if (dialog.Result is not null)
             {
                 await RefreshAfterSync();
-                StatusLabel.Text = $"同步完成：{dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Copied)} 已复制，{dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Failed)} 失败，{dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Cancelled)} 取消。";
+                StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_done", dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Copied), dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Failed), dialog.Result.Entries.Count(r => r.Outcome == SyncOutcome.Cancelled));
             }
         }
-        catch (OperationCanceledException) { StatusLabel.Text = "已取消生成同步计划。"; }
-        catch (Exception ex) { StatusLabel.Text = "同步失败：" + ex.Message; }
-        finally { _syncActive = false; TextView.IsEnabled = true; UpdateEditState(); _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = "就绪"; }
+        catch (OperationCanceledException) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_plan_cancelled"); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_failed", ex.Message); }
+        finally { _syncActive = false; TextView.IsEnabled = true; UpdateEditState(); _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready"); }
     }
     private async Task RefreshAfterSync()
     {
