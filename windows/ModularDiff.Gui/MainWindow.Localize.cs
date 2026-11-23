@@ -26,7 +26,7 @@ public partial class MainWindow
         SaveRightButton.ToolTip = Lang.Get("save_right");
         LeftPath.ToolTip = Lang.Get("path_tip");
         RightPath.ToolTip = Lang.Get("path_tip");
-        LangToggle.ToolTip = Lang.Get("tip_lang");
+        LangBox.ToolTip = Lang.Get("tip_lang");
         ThemeToggle.ToolTip = Lang.Get("tip_theme");
         SettingsToggle.ToolTip = Lang.Get("settings");
 
@@ -100,7 +100,8 @@ public partial class MainWindow
         LocalizeDataGridHeaders(RightFolders);
 
         ActivityLabel.Text = Lang.Get("activity_ready");
-        LangToggle.Content = Lang.CurrentCode.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "EN" : "中文";
+        if (!string.Equals(LangBox.SelectedItem as string, Lang.CurrentName, StringComparison.Ordinal))
+            LangBox.SelectedItem = Lang.CurrentName;   // 语言经其它入口变化时回同步下拉框显示
         UpdateEditState();
         // Refresh folder row bindings so StatusText/Description pick up the new language.
         if (LeftFolders.ItemsSource is not null)

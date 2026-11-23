@@ -489,6 +489,9 @@
     "win11_menu_style": "Windows 11 功能表樣式",
     "wrap": "長行摺行顯示（Alt+Z）",
     "zoom_in": "放大程式碼文字",
-    "zoom_out": "縮小程式碼文字"
+    "zoom_out": "縮小程式碼文字",
+    "tab_close_this": "關閉此標籤頁",
+    "tab_close_others": "關閉其他標籤頁",
+    "tab_close_all": "關閉所有標籤頁"
   }
 }

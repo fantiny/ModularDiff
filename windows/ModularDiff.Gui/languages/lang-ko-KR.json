@@ -489,6 +489,9 @@
     "win11_menu_style": "Windows 11 메뉴 스타일",
     "wrap": "긴 줄 바꿈 (Alt+Z)",
     "zoom_in": "글꼴 확대",
-    "zoom_out": "글꼴 축소"
+    "zoom_out": "글꼴 축소",
+    "tab_close_this": "이 탭 닫기",
+    "tab_close_others": "다른 탭 닫기",
+    "tab_close_all": "모든 탭 닫기"
   }
 }

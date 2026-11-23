@@ -489,6 +489,9 @@
     "win11_menu_style": "Windows 11 菜单样式",
     "wrap": "长行折行显示（Alt+Z）；两侧同行取最大高度保持对齐",
     "zoom_in": "放大代码文字",
-    "zoom_out": "缩小代码文字"
+    "zoom_out": "缩小代码文字",
+    "tab_close_this": "关闭此标签页",
+    "tab_close_others": "关闭其他标签页",
+    "tab_close_all": "关闭所有标签页"
   }
 }

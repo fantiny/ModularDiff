@@ -489,6 +489,9 @@
     "win11_menu_style": "Windows 11 メニュー様式",
     "wrap": "長い行を折り返す（Alt+Z）",
     "zoom_in": "フォント拡大",
-    "zoom_out": "フォント縮小"
+    "zoom_out": "フォント縮小",
+    "tab_close_this": "このタブを閉じる",
+    "tab_close_others": "他のタブを閉じる",
+    "tab_close_all": "すべてのタブを閉じる"
   }
 }

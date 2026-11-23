@@ -69,6 +69,8 @@ public partial class MainWindow : Window
         ReportDeclarativeFileIssues();
         _engine = new(_plugins);
         _session = new(_plugins);
+        LangBox.ItemsSource = ModularDiff.Gui.Controls.Lang.Available;
+        LangBox.SelectedItem = ModularDiff.Gui.Controls.Lang.CurrentName;
         AlgorithmBox.ItemsSource = _plugins.GetAll<IDiffAlgorithm>();
         AlgorithmBox.SelectedItem = _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault(p => p.Id == "myers");
         ModuleBox.ItemsSource = new[] { new ModuleChoice(null, ModularDiff.Gui.Controls.Lang.Get("module_auto")) }.Concat(_plugins.GetAll<IComparisonModule>().Select(p => new ModuleChoice(p.Id, p.DisplayName))).ToArray();
@@ -917,13 +919,14 @@ public partial class MainWindow : Window
         await OpenNode(node);
     }
 
-    private void LangToggleClick(object sender, RoutedEventArgs e)
+    private void LangBoxSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var available = ModularDiff.Gui.Controls.Lang.Available;
-        if (available.Count == 0) return;
-        int current = System.Linq.Enumerable.ToList(available).IndexOf(ModularDiff.Gui.Controls.Lang.CurrentName); int next = (current + 1) % available.Count;
-        ModularDiff.Gui.Controls.Lang.Apply(available[next]);
-        LocalizeUI();
+        // 下拉框显式选择语言;不再"点击循环切换下一个"——用户可能看不懂切出来的语言。
+        if (LangBox.SelectedItem is string name && !string.Equals(name, ModularDiff.Gui.Controls.Lang.CurrentName))
+        {
+            ModularDiff.Gui.Controls.Lang.Apply(name);
+            LocalizeUI();
+        }
     }
 
     /// <summary>Surfaces grammar/theme/language file load errors to the user instead of silently
@@ -1237,6 +1240,17 @@ public partial class MainWindow : Window
             await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
             if (screenshot is not null) SaveScreenshot(screenshot);
             File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "smoke-result.json"), System.Text.Json.JsonSerializer.Serialize(new { success = true, folderRows = _folderRows.Count, alignedRows = _presentation?.Rows.Count, hunks = _presentation?.Hunks.Count }));
+            // 标签页批量关闭回归:关闭其他只剩当前 → 关闭全部必须落在一个两侧空白的比较页上。
+            if (_textSessions.Count >= 2)
+            {
+                var keep = _textSessions[0];
+                await CloseOtherTabs(keep);
+                if (_textSessions.Count != 1 || !ReferenceEquals(_textSessions[0], keep))
+                    throw new InvalidOperationException("CloseOtherTabs must leave exactly the kept tab.");
+                await CloseAllTabs();
+                if (_textSessions.Count != 1 || _textSessions[0].LeftPath.Length > 0 || _textSessions[0].RightPath.Length > 0)
+                    throw new InvalidOperationException("CloseAllTabs must leave exactly one blank tab.");
+            }
         }
         catch (Exception ex) { exit = 2; File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "smoke-error.txt"), ex.ToString()); }
         Application.Current.Shutdown(exit);

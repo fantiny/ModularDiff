@@ -489,6 +489,9 @@
     "win11_menu_style": "Windows 11 menu style",
     "wrap": "Wrap long lines (Alt+Z); both sides share the max height",
     "zoom_in": "Increase font size",
-    "zoom_out": "Decrease font size"
+    "zoom_out": "Decrease font size",
+    "tab_close_this": "Close this tab",
+    "tab_close_others": "Close other tabs",
+    "tab_close_all": "Close all tabs"
   }
 }

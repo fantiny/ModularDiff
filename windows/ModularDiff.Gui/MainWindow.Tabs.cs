@@ -86,11 +86,10 @@ public partial class MainWindow
         var label = new TextBlock { Text = session.Title };
         var close = new Button
         {
-            Content = "×", Width = 18, Height = 18, FontSize = 13, Margin = new Thickness(5, 0, 0, 0),
+            Content = "×", Width = 22, Height = 22, FontSize = 14, Margin = new Thickness(6, 0, 0, 0),
             Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent,
-            VerticalContentAlignment = VerticalAlignment.Center, ToolTip = ModularDiff.Gui.Controls.Lang.Get("tab_close_tip"),
+            VerticalContentAlignment = VerticalAlignment.Center, ToolTip = ModularDiff.Gui.Controls.Lang.Get("tab_close_this"),
         };
-        close.Click += (_, _) => _ = CloseTextTab(session);
         panel.Children.Add(label);
         panel.Children.Add(close);
         session.TabButton = new ToggleButton
@@ -98,10 +97,19 @@ public partial class MainWindow
             Content = panel, Style = (Style)FindResource("SessionTab"), Padding = new Thickness(10, 5, 10, 5),
             ToolTip = session.LeftPath + "\n" + session.RightPath,
         };
-        // Tabs are not checkboxes: re-clicking an active tab must not uncheck it (which would
-        // leave no tab selected and hide nothing useful). Keep it checked and re-activate.
+        // 一个预览处理器按命中目标分流:
+        // · 点在 × 上 → 预览阶段立即关闭并吞掉事件(× 在激活标签页上曾被"防取消选中"逻辑吞掉,
+        //   这正是"有时点 × 关不掉"的根因 —— 用户最常关的就是当前页);
+        // · 点在激活标签其余区域 → 不允许 ToggleButton 取消选中,重新激活;
+        // 隧道路由(外→内)保证本处理器先于内部按钮运行,顺序天然正确。
         session.TabButton.PreviewMouseLeftButtonDown += (_, e) =>
         {
+            if (e.OriginalSource is DependencyObject source && FindParent<Button>(source) == close)
+            {
+                e.Handled = true;
+                _ = CloseTextTab(session);
+                return;
+            }
             if (session.TabButton.IsChecked == true)
             {
                 e.Handled = true;
@@ -109,32 +117,70 @@ public partial class MainWindow
             }
         };
         session.TabButton.Checked += (_, _) => _ = SwitchToSession(session);
+        // 标签页右键:关闭此页 / 关闭其他 / 关闭全部(关闭全部后保留一个空白比较页)
+        var menu = new ContextMenu();
+        void TabItem(string key, Func<Task> action)
+        {
+            var item = new MenuItem { Header = ModularDiff.Gui.Controls.Lang.Get(key) };
+            item.Click += (_, _) => _ = action();
+            menu.Items.Add(item);
+        }
+        TabItem("tab_close_this", () => CloseTextTab(session));
+        TabItem("tab_close_others", () => CloseOtherTabs(session));
+        TabItem("tab_close_all", CloseAllTabs);
+        session.TabButton.ContextMenu = menu;
         TabStripPanel.Children.Remove(NewTabButton);
         TabStripPanel.Children.Add(session.TabButton);
         TabStripPanel.Children.Add(NewTabButton);
     }
 
-    private async Task CloseTextTab(TextSession session)
+    private bool _tabCloseBusy;
+
+    /// <summary>关闭一个文本标签页;返回是否真的关闭(取消/保存失败返回 false,批量关闭据此中止)。</summary>
+    private async Task<bool> CloseTextTab(TextSession session)
     {
-        if (ReferenceEquals(session, _activeSession)) SaveSessionState(session);
-        if (session.IsDirty)
+        if (_tabCloseBusy) return false;   // 连点 × 或与批量关闭并发时的重入保护
+        _tabCloseBusy = true;
+        try
         {
-            var choice = MessageBox.Show(this, ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_tab", session.Title), ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_title"),
-                MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
-            if (choice == MessageBoxResult.Cancel) return;
-            if (choice == MessageBoxResult.Yes)
+            if (ReferenceEquals(session, _activeSession)) SaveSessionState(session);
+            if (session.IsDirty)
             {
-                _activeSession = session;
-                RestoreSessionState(session);
-                // 保存失败必须中止关闭:SaveBuffers 返回 false 时弹窗已承诺"编辑仍保留",
-                // 此前无条件移除 session 会把唯一的缓冲区引用丢掉(审查发现的数据丢失路径)。
-                if (!await SaveBuffers([session.LeftBuffer, session.RightBuffer])) return;
+                var choice = MessageBox.Show(this, ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_tab", session.Title), ModularDiff.Gui.Controls.Lang.Get("dlg_unsaved_title"),
+                    MessageBoxButton.YesNoCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel);
+                if (choice == MessageBoxResult.Cancel) return false;
+                if (choice == MessageBoxResult.Yes)
+                {
+                    _activeSession = session;
+                    RestoreSessionState(session);
+                    // 保存失败必须中止关闭:SaveBuffers 返回 false 时弹窗已承诺"编辑仍保留",
+                    // 无条件移除 session 会把唯一的缓冲区引用丢掉(数据丢失路径)。
+                    if (!await SaveBuffers([session.LeftBuffer, session.RightBuffer])) return false;
+                }
             }
+            _textSessions.Remove(session);
+            TabStripPanel.Children.Remove(session.TabButton);
+            if (_textSessions.Count > 0) await SwitchToSession(_textSessions[^1]);
+            else SwitchToFolderView();
+            return true;
         }
-        _textSessions.Remove(session);
-        TabStripPanel.Children.Remove(session.TabButton);
-        if (_textSessions.Count > 0) await SwitchToSession(_textSessions[^1]);
-        else SwitchToFolderView();
+        finally { _tabCloseBusy = false; }
+    }
+
+    /// <summary>关闭除指定标签外的全部文本标签;任一保存提示被取消则中止后续。</summary>
+    private async Task CloseOtherTabs(TextSession keep)
+    {
+        foreach (var session in _textSessions.Where(s => !ReferenceEquals(s, keep)).ToArray())
+            if (!await CloseTextTab(session)) return;
+        if (_textSessions.Contains(keep) && !ReferenceEquals(_activeSession, keep)) await SwitchToSession(keep);
+    }
+
+    /// <summary>关闭全部文本标签,然后保留一个两侧空白的比较页(浏览器习惯)。</summary>
+    private async Task CloseAllTabs()
+    {
+        foreach (var session in _textSessions.ToArray())
+            if (!await CloseTextTab(session)) return;
+        await CreateTextTab("", "");
     }
 
     private void SwitchToFolderView() => SetView(false);
