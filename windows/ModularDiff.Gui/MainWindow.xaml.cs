@@ -29,7 +29,7 @@ public partial class MainWindow : Window
     private FolderNode? _currentNode;
     /// <summary>Sticky left/right file picks for BC-style cross-name compare. Survives the
     /// non-Ctrl first click of a double-click so Open still uses the independent pair.</summary>
-    private FolderNode? _crossLeft, _crossRight;
+    // 目录视图选择:两侧 DataGrid 各自独立;跨文件配对在打开时解析(见 OpenSelectedFiles)。
     private FileComparison? _textFile;
     private CancellationTokenSource? _comparisonCancellation, _detailCancellation;
     private bool _ready, _busy, _syncText, _syncFolderScroll, _syncFolderSelection;
@@ -185,7 +185,7 @@ public partial class MainWindow : Window
         _comparisonCancellation?.Dispose(); _comparisonCancellation = new();
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
-        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _crossLeft = _crossRight = null; _textFile = null; _presentation = null; _folderRows = [];
+        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows = [];
         _folderSnapshotVersion++;
         while (_folderAdds.TryDequeue(out _)) { }
         while (_folderUpdates.TryDequeue(out _)) { }
@@ -444,8 +444,13 @@ public partial class MainWindow : Window
         _folderRows = _tree.Visible(FolderFilter.SelectedIndex, nameFilter);
         _syncFolderSelection = true;
         LeftFolders.ItemsSource = RightFolders.ItemsSource = _folderRows;
-        var target = selected is not null && _folderRows.Contains(selected) ? selected : _folderRows.FirstOrDefault();
-        LeftFolders.SelectedItem = RightFolders.SelectedItem = target;
+        // 两侧各自保留自己的选择(仍在可见行内);此前统一到同一行会抹掉跨文件选择的一侧。
+        FolderNode? Pick(FolderNode? current, FolderNode? fallback) =>
+            current is not null && _folderRows.Contains(current) ? current
+            : fallback is not null && _folderRows.Contains(fallback) ? fallback
+            : _folderRows.FirstOrDefault();
+        LeftFolders.SelectedItem = Pick(LeftFolders.SelectedItem as FolderNode, selected);
+        RightFolders.SelectedItem = Pick(RightFolders.SelectedItem as FolderNode, selected);
         _syncFolderSelection = false;
         FolderSummary.Text = ModularDiff.Gui.Controls.Lang.Get("folder_visible_summary",
             _folderRows.Count(n => !n.IsDirectory), _folderResult?.Files.Count ?? 0);
@@ -468,58 +473,27 @@ public partial class MainWindow : Window
     private void FolderSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncFolderSelection) return;
-        var source = (DataGrid)sender;
-        // Plain click mirrors the pair (same relative path). Ctrl/Shift keeps each side
-        // independent so you can pick different left/right files like Beyond Compare.
-        bool independent = Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
-            || Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
-        var selected = source.SelectedItem as FolderNode;
-        if (independent)
-        {
-            if (ReferenceEquals(source, LeftFolders)) _crossLeft = selected;
-            else _crossRight = selected;
-            // Keep both sticky picks in sync with whatever each grid currently holds.
-            _crossLeft = LeftFolders.SelectedItem as FolderNode ?? _crossLeft;
-            _crossRight = RightFolders.SelectedItem as FolderNode ?? _crossRight;
-        }
-        else
-        {
-            // Double-click's first click arrives without Ctrl and would mirror-wipe a cross
-            // pair. If the click lands on one of the sticky picks, keep the other side.
-            bool keepCross = IsCrossPair(_crossLeft, _crossRight)
-                && selected is not null
-                && (ReferenceEquals(selected, _crossLeft) || ReferenceEquals(selected, _crossRight));
-            if (keepCross)
-            {
-                if (ReferenceEquals(source, LeftFolders)) _crossLeft = selected;
-                else _crossRight = selected;
-            }
-            else
-            {
-                var other = ReferenceEquals(source, LeftFolders) ? RightFolders : LeftFolders;
-                _syncFolderSelection = true;
-                other.SelectedItems.Clear();
-                foreach (var item in source.SelectedItems) other.SelectedItems.Add(item);
-                _syncFolderSelection = false;
-                _crossLeft = _crossRight = selected;
-            }
-        }
+        // 两侧各自独立选择:普通点击不再镜像到对侧。镜像使"左右各选不同文件"必须依赖隐藏的
+        // Ctrl/Shift 修饰键,不按修饰键时每次点击都把两侧刷成同一行,双击永远退化为
+        // 最后一个文件与自身比较(用户实测痛点)。配对语义移到打开时解析(OpenSelectedFiles):
+        // 两侧选了不同文件 → 跨文件比较;只选了一侧 → 按相对路径配对打开。
         UpdateFolderSelectionStatus();
     }
 
-    private static bool IsCrossPair(FolderNode? left, FolderNode? right) =>
-        left is { IsDirectory: false } && right is { IsDirectory: false }
-        && !string.Equals(left.RelativePath, right.RelativePath, StringComparison.OrdinalIgnoreCase);
-
     private void UpdateFolderSelectionStatus()
     {
-        var left = _crossLeft ?? LeftFolders.SelectedItem as FolderNode;
-        var right = _crossRight ?? RightFolders.SelectedItem as FolderNode;
+        var left = LeftFolders.SelectedItem as FolderNode;
+        var right = RightFolders.SelectedItem as FolderNode;
         if (IsCrossPair(left, right))
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_will_compare", left!.Name, right!.Name);
         else if (left is FolderNode node || right is FolderNode)
             StatusLabel.Text = (left ?? right)!.Description;
     }
+
+    private static bool IsCrossPair(FolderNode? left, FolderNode? right) =>
+        left is { IsDirectory: false } && right is { IsDirectory: false }
+        && left.LeftExists && right.RightExists
+        && !string.Equals(left.RelativePath, right.RelativePath, StringComparison.OrdinalIgnoreCase);
 
     private void FolderScrolled(object sender, ScrollChangedEventArgs e)
     {
@@ -536,17 +510,9 @@ public partial class MainWindow : Window
         if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is not FolderNode node) return;
         e.Handled = true;
         if (node.IsDirectory) { ToggleFolder(node); return; }
-        // Prefer sticky cross picks; if double-click lands on a third file, open that row paired.
-        if (IsCrossPair(_crossLeft, _crossRight)
-            && (ReferenceEquals(node, _crossLeft) || ReferenceEquals(node, _crossRight)))
-        {
-            if (ReferenceEquals(sender, LeftFolders)) _crossLeft = node;
-            else _crossRight = node;
-            await OpenSelectedFiles();
-            return;
-        }
-        _crossLeft = _crossRight = node;
-        await OpenNode(node);
+        // 双击的行已在其所在格的选区内;打开语义统一交给 OpenSelectedFiles 按两侧各自选择解析
+        // (两侧不同文件 → 跨文件比较;仅一侧 → 相对路径配对)。
+        await OpenSelectedFiles();
     }
     private void FolderDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -564,23 +530,18 @@ public partial class MainWindow : Window
     }
     private async void OpenSelectedClick(object sender, RoutedEventArgs e) => await OpenSelectedFiles();
 
-    /// <summary>Opens the left/right folder selections. Same relative path → paired open;
-    /// different files (Ctrl-selected on each side) → cross-name compare.</summary>
+    /// <summary>Opens the left/right folder selections. Different files picked on the two
+    /// sides (plain clicks — no modifier needed) → cross-name compare; same or single-side
+    /// selection → paired open by relative path.</summary>
     private async Task OpenSelectedFiles()
     {
-        // Sticky cross picks win over SelectedItem: double-click's first click may have
-        // changed only one grid while the other side's visual selection lagged.
-        var leftNode = (IsCrossPair(_crossLeft, _crossRight) ? _crossLeft : null)
-            ?? LeftFolders.SelectedItem as FolderNode;
-        var rightNode = (IsCrossPair(_crossLeft, _crossRight) ? _crossRight : null)
-            ?? RightFolders.SelectedItem as FolderNode;
+        var leftNode = LeftFolders.SelectedItem as FolderNode;
+        var rightNode = RightFolders.SelectedItem as FolderNode;
         if (leftNode is { IsDirectory: true } && (rightNode is null || ReferenceEquals(leftNode, rightNode)))
         { ToggleFolder(leftNode); return; }
-        if (leftNode is { IsDirectory: false } && rightNode is { IsDirectory: false }
-            && leftNode.LeftExists && rightNode.RightExists
-            && !string.Equals(leftNode.RelativePath, rightNode.RelativePath, StringComparison.OrdinalIgnoreCase))
+        if (IsCrossPair(leftNode, rightNode))
         {
-            await OpenFilePair(leftNode, rightNode);
+            await OpenFilePair(leftNode!, rightNode!);
             return;
         }
         var node = leftNode is { IsDirectory: false } ? leftNode
@@ -1218,19 +1179,15 @@ public partial class MainWindow : Window
                     await SwitchToSession(_textSessions[0]);
                     if (!string.Equals(LeftPath.Text, firstLeft, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("Switching back to the first tab did not restore its paths.");
-                    // Cross-name pair via sticky picks + OpenSelectedFiles (same path as Enter/双击).
+                    // 用户场景回归:普通点击(无修饰键)左右各选一个不同文件 → 打开必须是跨文件比较,
+                    // 绝不允许退化成"最后一个文件 vs 它自己"(旧镜像选择的行为)。
                     if (node.LeftExists && node2.RightExists
                         && !string.Equals(node.RelativePath, node2.RelativePath, StringComparison.OrdinalIgnoreCase))
                     {
                         SetView(false);
-                        _crossLeft = node; _crossRight = node2;
-                        _syncFolderSelection = true;
-                        LeftFolders.SelectedItem = node; RightFolders.SelectedItem = node2;
-                        _syncFolderSelection = false;
-                        // Non-Ctrl click on one sticky pick must keep the cross pair (double-click's 1st click).
-                        if (!IsCrossPair(_crossLeft, _crossRight)
-                            || !(ReferenceEquals(LeftFolders.SelectedItem, _crossLeft) || ReferenceEquals(LeftFolders.SelectedItem, _crossRight)))
-                            throw new InvalidOperationException("Cross sticky picks were not retained for open.");
+                        // 走生产通路:两侧各自设 SelectedItem 触发 FolderSelectionChanged(与普通点击同一事件),再解析打开。
+                        LeftFolders.SelectedItem = node;
+                        RightFolders.SelectedItem = node2;
                         await OpenSelectedFiles();
                         string crossLeft = Path.Combine(_folderResult.LeftPath, node.RelativePath);
                         string crossRight = Path.Combine(_folderResult.RightPath, node2.RelativePath);

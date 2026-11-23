@@ -28,7 +28,9 @@ public partial class MainWindow
                 && (filter switch { 1 => f.Status != FileStatus.Equal, 2 => f.Status == FileStatus.Equal, 3 => f.Status == FileStatus.LeftOnly, 4 => f.Status == FileStatus.RightOnly, _ => true })
                 && (nameFilter.IsEmpty || nameFilter.Matches(f.RelativePath, Path.GetFileName(f.RelativePath)))).Select(f => f.RelativePath).ToArray();
         }
-        var nodes = LeftFolders.SelectedItems.OfType<FolderNode>().ToArray();
+        // 两侧选择各自独立(不再镜像):同步范围取两格选区的并集 —— 只点某一侧同样有效。
+        var nodes = LeftFolders.SelectedItems.OfType<FolderNode>()
+            .Concat(RightFolders.SelectedItems.OfType<FolderNode>()).Distinct().ToArray();
         return _folderResult.Files.Where(f => !f.IsDirectory && nodes.Any(n => n.IsDirectory
             ? f.RelativePath.StartsWith(n.RelativePath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
             : string.Equals(f.RelativePath, n.RelativePath, StringComparison.OrdinalIgnoreCase))).Select(f => f.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

@@ -26,10 +26,14 @@ public partial class MainWindow
             await File.WriteAllTextAsync(Path.Combine(RightPath.Text, "right-only.txt"), "right only\n");
             await CompareAsync(); Require(_folderResult is not null && _tree is not null, "Folder compare failed");
             ExpandAll(this, new RoutedEventArgs()); // nested files must be in ItemsSource to select
-            LeftFolders.SelectedItems.Clear();
+            LeftFolders.SelectedItems.Clear(); RightFolders.SelectedItems.Clear();
             LeftFolders.SelectedItems.Add(_tree!.All.First(n => n.Name == "changed.cs"));
             LeftFolders.SelectedItems.Add(_tree.All.First(n => n.Name == "right-only.txt"));
-            Require(SyncPaths(false).Count == 2 && RightFolders.SelectedItems.Count == 2, "Paired multiselection");
+            // 独立选择:右侧不再被镜像;同步范围 = 两侧选区并集(只点某一侧同样有效)
+            Require(SyncPaths(false).Count == 2 && RightFolders.SelectedItems.Count == 0, "Per-side selection (no mirror)");
+            RightFolders.SelectedItems.Add(_tree.All.First(n => n.Name == "added.cs"));
+            Require(SyncPaths(false).Count == 3, "Right-side picks join the sync union");
+            RightFolders.SelectedItems.Clear();
             // Batch sync scopes from comparison result + name filter, not tree expansion.
             CollapseAll(this, new RoutedEventArgs()); Require(SyncPaths(true).Count == 3, "Batch includes all compared files");
             FolderSearch.Text = "src"; Require(SyncPaths(true).Count == 2, "Filter scope substring");
