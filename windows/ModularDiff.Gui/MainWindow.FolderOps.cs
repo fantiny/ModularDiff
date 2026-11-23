@@ -112,6 +112,6 @@ public partial class MainWindow
             if (restored is not null) LeftFolders.SelectedItem = RightFolders.SelectedItem = restored;
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copied_to", target);
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 }

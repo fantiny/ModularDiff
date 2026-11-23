@@ -44,29 +44,8 @@ public partial class SyncHistoryWindow : Window
         Closing += (_, e) => { if (_running) { e.Cancel = true; _cancellation?.Cancel(); } };
         Closed += (_, _) => { _version++; _cancellation?.Cancel(); };
     }
-    private void LocalizeChrome()
-    {
-        Title = Lang.Get("sync_history_title");
-        RestoreButton.ToolTip = Lang.Get("sync_hist_restore_tip");
-        RefreshButton.ToolTip = Lang.Get("sync_hist_refresh_tip");
-        StopButton.ToolTip = Lang.Get("sync_hist_stop_tip");
-        CloseHistoryButton.ToolTip = Lang.Get("sync_hist_close_tip");
-        if (OperationsGrid.Columns.Count >= 5)
-        {
-            OperationsGrid.Columns[0].Header = Lang.Get("sync_col_time");
-            OperationsGrid.Columns[1].Header = Lang.Get("col_status");
-            OperationsGrid.Columns[2].Header = Lang.Get("sync_col_files");
-            OperationsGrid.Columns[3].Header = Lang.Get("sync_col_left_root");
-            OperationsGrid.Columns[4].Header = Lang.Get("sync_col_right_root");
-        }
-        if (EntriesGrid.Columns.Count >= 4)
-        {
-            EntriesGrid.Columns[0].Header = Lang.Get("sync_col_restore");
-            EntriesGrid.Columns[1].Header = Lang.Get("sync_col_relpath");
-            EntriesGrid.Columns[2].Header = Lang.Get("sync_col_restore_action");
-            EntriesGrid.Columns[3].Header = Lang.Get("sync_col_conflict_reason");
-        }
-    }
+    // Window title, button tips and column headers: the keys live in the XAML.
+    private void LocalizeChrome() => Loc.Apply(this);
     public async Task ReloadAsync(string? selectedId = null)
     {
         try
@@ -77,10 +56,10 @@ public partial class SyncHistoryWindow : Window
             Status.Text = listing.Errors.Count == 0
                 ? Lang.Get("sync_hist_count", rows.Length)
                 : Lang.Get("sync_hist_count_errors", rows.Length, listing.Errors.Count);
-            Status.ToolTip = string.Join("\n", listing.Errors);
+            Status.ToolTip = string.Join("\n", listing.Errors.Select(Lang.Text));
             OperationsGrid.SelectedItem = rows.FirstOrDefault(r => r.Operation.Id == selectedId) ?? rows.FirstOrDefault();
         }
-        catch (Exception ex) { Status.Text = Lang.Get("sync_hist_read_failed", ex.Message); }
+        catch (Exception ex) { Status.Text = Lang.Get("sync_hist_read_failed", Lang.Text(ex.Message)); }
     }
     private async void OperationSelected(object sender, SelectionChangedEventArgs e) => await PreviewSelectedAsync();
     public async Task PreviewSelectedAsync()
@@ -96,7 +75,7 @@ public partial class SyncHistoryWindow : Window
             Summary.Text = Lang.Get("sync_hist_preview_summary", Rows.Count, Rows.Count(r => r.CanRestore), Rows.Count(r => !r.CanRestore));
             RestoreButton.IsEnabled = Rows.Any(r => r.CanRestore) && !_running;
         }
-        catch (Exception ex) { if (version == _version) Summary.Text = Lang.Get("sync_hist_preview_failed", ex.Message); }
+        catch (Exception ex) { if (version == _version) Summary.Text = Lang.Get("sync_hist_preview_failed", Lang.Text(ex.Message)); }
     }
     private async void RestoreClick(object sender, RoutedEventArgs e) => await RestoreSelectedAsync();
     public async Task RestoreSelectedAsync()
@@ -111,7 +90,7 @@ public partial class SyncHistoryWindow : Window
             Status.Text = Lang.Get("sync_hist_restored", result.Restored, result.Conflicts, result.Failed)
                 + (result.Cancelled ? Lang.Get("sync_hist_cancelled_suffix") : "");
         }
-        catch (Exception ex) { Status.Text = Lang.Get("sync_hist_restore_incomplete", ex.Message); }
+        catch (Exception ex) { Status.Text = Lang.Get("sync_hist_restore_incomplete", Lang.Text(ex.Message)); }
         finally
         {
             _running = false; OperationsGrid.IsEnabled = EntriesGrid.IsEnabled = RefreshButton.IsEnabled = true; StopButton.IsEnabled = false;

@@ -59,7 +59,7 @@ public partial class MainWindow
             _activePane = dest;
             AfterProgrammaticEdit(dest, ModularDiff.Gui.Controls.Lang.Get("status_copied_sel_rows", selected.Count, ModularDiff.Gui.Controls.Lang.Get(toRight ? "side_right" : "side_left")));
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_sel_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_sel_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 
     // ─── 1b: single-line copy to other side ───
@@ -95,7 +95,7 @@ public partial class MainWindow
             _activePane = dest;
             AfterProgrammaticEdit(dest, ModularDiff.Gui.Controls.Lang.Get("status_copied_one_row"));
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_line_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_line_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 
     // ─── 1e: Go To line number ───

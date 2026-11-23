@@ -1,7 +1,8 @@
 <Window x:Class="ModularDiff.Gui.MergeWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="三路合并 — ModularDiff" Width="1100" Height="760" MinWidth="760" MinHeight="480"
+        xmlns:ui="clr-namespace:ModularDiff.Gui.Controls"
+        Title="ModularDiff" ui:Loc.Key="merge_window_title" Width="1100" Height="760" MinWidth="760" MinHeight="480"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="10">
         <Grid.RowDefinitions>
@@ -10,29 +11,29 @@
         <Grid Grid.Row="0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <TextBlock x:Name="BaseLabel" Text="公共祖先 (base)" Margin="0,4,8,4" VerticalAlignment="Center"/>
-            <TextBox x:Name="BasePath" Grid.Column="1" Margin="0,4" ToolTip="三方共同的原始版本"/>
-            <Button x:Name="BrowseBaseButton" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseBase"/>
-            <TextBlock x:Name="LeftLabel" Text="左侧 (我的修改)" Grid.Row="1" Margin="0,4,8,4" VerticalAlignment="Center"/>
-            <TextBox x:Name="LeftPath" Grid.Row="1" Grid.Column="1" Margin="0,4" ToolTip="这一侧的修改，冲突时标记为 LEFT"/>
-            <Button x:Name="BrowseLeftButton" Grid.Row="1" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseLeft"/>
-            <TextBlock x:Name="RightLabel" Text="右侧 (对方的修改)" Grid.Row="2" Margin="0,4,8,4" VerticalAlignment="Center"/>
-            <TextBox x:Name="RightPath" Grid.Row="2" Grid.Column="1" Margin="0,4" ToolTip="另一侧的修改，冲突时标记为 RIGHT"/>
-            <Button x:Name="BrowseRightButton" Grid.Row="2" Grid.Column="2" Margin="4" Content="浏览…" Click="BrowseRight"/>
+            <TextBlock x:Name="BaseLabel" ui:Loc.Key="merge_base" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="BasePath" Grid.Column="1" Margin="0,4" ui:Loc.TipKey="merge_base_tip"/>
+            <Button x:Name="BrowseBaseButton" Grid.Column="2" Margin="4" ui:Loc.Key="merge_browse" Click="BrowseBase"/>
+            <TextBlock x:Name="LeftLabel" ui:Loc.Key="merge_left" Grid.Row="1" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="LeftPath" Grid.Row="1" Grid.Column="1" Margin="0,4" ui:Loc.TipKey="merge_left_path_tip"/>
+            <Button x:Name="BrowseLeftButton" Grid.Row="1" Grid.Column="2" Margin="4" ui:Loc.Key="merge_browse" Click="BrowseLeft"/>
+            <TextBlock x:Name="RightLabel" ui:Loc.Key="merge_right" Grid.Row="2" Margin="0,4,8,4" VerticalAlignment="Center"/>
+            <TextBox x:Name="RightPath" Grid.Row="2" Grid.Column="1" Margin="0,4" ui:Loc.TipKey="merge_right_path_tip"/>
+            <Button x:Name="BrowseRightButton" Grid.Row="2" Grid.Column="2" Margin="4" ui:Loc.Key="merge_browse" Click="BrowseRight"/>
         </Grid>
         <WrapPanel Grid.Row="1" Margin="0,2,0,6">
-            <Button x:Name="MergeButton" Content="合并" Background="#3569AE" Foreground="White" Padding="14,4" Click="MergeClick" ToolTip="执行三路合并：不同位置的修改自动合入，同一位置的分歧标为冲突"/>
-            <Button x:Name="PreviousConflict" Content="◀ 上一冲突" Margin="16,0,4,0" Click="PreviousConflictClick" IsEnabled="False"/>
-            <Button x:Name="NextConflict" Content="下一冲突 ▶" Margin="4,0,12,0" Click="NextConflictClick" IsEnabled="False"/>
-            <TextBlock x:Name="ConflictLabel" VerticalAlignment="Center" Foreground="#A35D39" Margin="0,0,16,0" Text="未合并"/>
-            <Button x:Name="TakeLeft" Content="取左侧" Margin="4,0" Click="TakeLeftClick" IsEnabled="False" ToolTip="当前冲突采用左侧版本"/>
-            <Button x:Name="TakeRight" Content="取右侧" Margin="4,0" Click="TakeRightClick" IsEnabled="False" ToolTip="当前冲突采用右侧版本"/>
-            <Button x:Name="Save" Content="保存结果…" Margin="16,0,4,0" Click="SaveClick" IsEnabled="False"/>
+            <Button x:Name="MergeButton" ui:Loc.Key="merge_button_text" ui:Loc.TipKey="merge_run_tip" Background="#3569AE" Foreground="White" Padding="14,4" Click="MergeClick"/>
+            <Button x:Name="PreviousConflict" ui:Loc.Key="merge_prev" Margin="16,0,4,0" Click="PreviousConflictClick" IsEnabled="False"/>
+            <Button x:Name="NextConflict" ui:Loc.Key="merge_next" Margin="4,0,12,0" Click="NextConflictClick" IsEnabled="False"/>
+            <TextBlock x:Name="ConflictLabel" VerticalAlignment="Center" Foreground="#A35D39" Margin="0,0,16,0" ui:Loc.Key="merge_not_merged"/>
+            <Button x:Name="TakeLeft" ui:Loc.Key="merge_take_left" ui:Loc.TipKey="merge_take_left_tip" Margin="4,0" Click="TakeLeftClick" IsEnabled="False"/>
+            <Button x:Name="TakeRight" ui:Loc.Key="merge_take_right" ui:Loc.TipKey="merge_take_right_tip" Margin="4,0" Click="TakeRightClick" IsEnabled="False"/>
+            <Button x:Name="Save" ui:Loc.Key="merge_save" Margin="16,0,4,0" Click="SaveClick" IsEnabled="False"/>
         </WrapPanel>
         <Border Grid.Row="2" BorderBrush="#DDE3EC" BorderThickness="1">
             <RichTextBox x:Name="Result" FontFamily="Consolas" FontSize="13" AcceptsTab="True" VerticalScrollBarVisibility="Auto"
-                         HorizontalScrollBarVisibility="Auto" TextChanged="ResultChanged" ToolTip="合并结果，可直接编辑；冲突块以标记行分隔"/>
+                         HorizontalScrollBarVisibility="Auto" TextChanged="ResultChanged" ui:Loc.TipKey="merge_result_tip"/>
         </Border>
-        <TextBlock x:Name="StatusLabel" Grid.Row="3" Margin="0,8,0,0" Foreground="#667085" Text="填写三个路径后点击“合并”。"/>
+        <TextBlock x:Name="StatusLabel" Grid.Row="3" Margin="0,8,0,0" Foreground="#667085" ui:Loc.Key="merge_hint"/>
     </Grid>
 </Window>

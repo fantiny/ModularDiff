@@ -58,6 +58,7 @@ try
 
     MergeTests.Catalog = catalog;
     await MergeTests.Run(Test);
+    await LocalizationGuardTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
     await Test("Presentation highlights word-level differences as separate spans", () =>

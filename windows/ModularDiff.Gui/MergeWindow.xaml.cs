@@ -78,26 +78,11 @@ public partial class MergeWindow : Window
         if (dialog.ShowDialog() is true) box.Text = dialog.FileName;
     }
 
+    /// <summary>Every caption is declared in XAML with a Loc key, so one pass re-applies the whole
+    /// window on construction and on each language switch.</summary>
     private void LocalizeUI()
     {
-        Title = Controls.Lang.Get("merge_window_title");
-        BaseLabel.Text = Controls.Lang.Get("merge_base");
-        LeftLabel.Text = Controls.Lang.Get("merge_left");
-        RightLabel.Text = Controls.Lang.Get("merge_right");
-        BasePath.ToolTip = Controls.Lang.Get("merge_base_tip");
-        LeftPath.ToolTip = Controls.Lang.Get("merge_left_path_tip");
-        RightPath.ToolTip = Controls.Lang.Get("merge_right_path_tip");
-        BrowseBaseButton.Content = BrowseLeftButton.Content = BrowseRightButton.Content = Controls.Lang.Get("merge_browse");
-        MergeButton.Content = Controls.Lang.Get("merge_button_text");
-        MergeButton.ToolTip = Controls.Lang.Get("merge_run_tip");
-        PreviousConflict.Content = Controls.Lang.Get("merge_prev");
-        NextConflict.Content = Controls.Lang.Get("merge_next");
-        TakeLeft.Content = Controls.Lang.Get("merge_take_left");
-        TakeRight.Content = Controls.Lang.Get("merge_take_right");
-        TakeLeft.ToolTip = Controls.Lang.Get("merge_take_left_tip");
-        TakeRight.ToolTip = Controls.Lang.Get("merge_take_right_tip");
-        Save.Content = Controls.Lang.Get("merge_save");
-        Result.ToolTip = Controls.Lang.Get("merge_result_tip");
+        Controls.Loc.Apply(this);
         if (!_everMerged) StatusLabel.Text = Controls.Lang.Get("merge_hint");
         UpdateNavigation();
     }
@@ -130,7 +115,7 @@ public partial class MergeWindow : Window
             _everMerged = true;
             StatusLabel.Text = merged.Clean ? ModularDiff.Gui.Controls.Lang.Get("merge_clean_status") : ModularDiff.Gui.Controls.Lang.Get("merge_conflicts_status", merged.Conflicts);
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_failed", Controls.Lang.Text(ex.Message)); }
     }
 
     /// <summary>Re-parses conflict markers, colors the blocks and refreshes navigation state.</summary>
@@ -183,7 +168,7 @@ public partial class MergeWindow : Window
         Save.IsEnabled = Result.Document.Blocks.Count > 0;
         ConflictLabel.Text = any
             ? Controls.Lang.Get("merge_conflict_index", _currentConflict + 1, _conflicts.Count)
-            : _painting ? "" : Controls.Lang.Get("merge_no_conflicts");
+            : _painting ? "" : Controls.Lang.Get(_everMerged ? "merge_no_conflicts" : "merge_not_merged");
     }
 
     private void ResultChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -243,6 +228,6 @@ public partial class MergeWindow : Window
             await File.WriteAllTextAsync(dialog.FileName, text.Replace("\r\n", "\n").Replace("\n", Environment.NewLine));
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_saved", dialog.FileName);
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_save_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("merge_save_failed", Controls.Lang.Text(ex.Message)); }
     }
 }

@@ -26,7 +26,7 @@ public partial class MainWindow
             var window = new SyncHistoryWindow(SafetyContext, recovery) { Owner = this }; window.ShowDialog();
             if (window.RecoveryAttempted && _folderResult is not null) await RefreshAfterSync();
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recovery_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recovery_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         finally { _syncActive = _busy = false; TextView.IsEnabled = true; UpdateEditState(); }
     }
 }

@@ -54,7 +54,7 @@ public sealed class FolderNode
     };
     public string KindIcon => IsDirectory ? "▰" : "▤";
     public Thickness Indent => new(Depth * 17, 0, 0, 0);
-    public string Description => RelativePath + " · " + StatusText + (File?.Note is null ? "" : " · " + File.Note);
+    public string Description => RelativePath + " · " + StatusText + (File?.Note is null ? "" : " · " + Controls.Lang.Text(File.Note));
 }
 
 public sealed class FolderTree

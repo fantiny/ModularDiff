@@ -95,6 +95,18 @@ public sealed class HexView : FrameworkElement, IScrollInfo
         catch { return false; }
     }
 
+    /// <summary>Drops unsaved byte edits: the pane returns to the bytes last loaded or saved.
+    /// Used when the tab that owns these edits is closed with "discard".</summary>
+    public void DiscardEdits()
+    {
+        if (!_isDirty) return;
+        _left = [.. _originalLeft];
+        _isDirty = false;
+        _cursorOffset = -1;
+        DirtyStateChanged?.Invoke();
+        InvalidateVisual();
+    }
+
     /// <summary>测试/程序化入口:模拟在当前光标处连续键入十六进制字符(驱动 OverwriteNibble→AdvanceCursor)。</summary>
     public void TypeHex(string digits)
     {

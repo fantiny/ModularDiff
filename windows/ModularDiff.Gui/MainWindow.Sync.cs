@@ -69,7 +69,7 @@ public partial class MainWindow
             }
         }
         catch (OperationCanceledException) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_plan_cancelled"); }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_sync_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         finally { _syncActive = false; TextView.IsEnabled = true; UpdateEditState(); _busy = false; CompareButton.IsEnabled = _plugins.Diagnostics.Count == 0; CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready"); }
     }
     private async Task RefreshAfterSync()

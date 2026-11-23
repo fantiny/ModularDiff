@@ -64,8 +64,8 @@ public partial class MainWindow : Window
         int cascade = Interlocked.Increment(ref _windowCount) - 1;   // 新窗口级联偏移，避免完全叠加难发现
         Left = 70 + (cascade % 12) * 36; Top = 46 + (cascade % 12) * 30;
         _plugins = App.Plugins;
-        ModularDiff.Gui.Controls.Lang.Changed += LocalizeUI;
-        LocalizeUI();   // shared catalog — loaded once at App startup, disposed on exit
+        Controls.Lang.Changed += LocalizeUI;   // shared catalog; every later switch re-applies the whole window
+        Closed += (_, _) => { Controls.Lang.Changed -= LocalizeUI; _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
         ReportDeclarativeFileIssues();
         _engine = new(_plugins);
         _session = new(_plugins);
@@ -92,9 +92,11 @@ public partial class MainWindow : Window
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_plugins_failed", string.Join(" | ", _plugins.Diagnostics));
             CompareButton.IsEnabled = false;
         }
-        Closed += (_, _) => { _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); };
+        LeftPath.TextChanged += (_, _) => UpdatePathBoxTips();
+        RightPath.TextChanged += (_, _) => UpdatePathBoxTips();
         InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions(); InitializeFolderOps(); InitializeTabs();
         _ready = true;
+        LocalizeUI();   // plugin lists and state-derived labels exist only after initialization
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
         if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
         else if (arguments.Contains("--edit-smoke-test")) Loaded += EditSmokeTest;
@@ -102,7 +104,7 @@ public partial class MainWindow : Window
         else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) =>
         {
             try { await CompareAndTrackSession(); }
-            catch (Exception ex) { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "md-crash.log"), ex.ToString()); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_auto_compare_failed", ex.Message); }
+            catch (Exception ex) { System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "md-crash.log"), ex.ToString()); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_auto_compare_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         };
         if (arguments.Contains("--wrap")) WrapToggle.IsChecked = true;
     }
@@ -118,7 +120,7 @@ public partial class MainWindow : Window
         foreach (string pattern in patterns)
         {
             try { _ = new System.Text.RegularExpressions.Regex(pattern); }
-            catch (ArgumentException ex) { throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_unimportant_rule", pattern, ex.Message)); }
+            catch (ArgumentException ex) { throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("err_unimportant_rule", pattern, ModularDiff.Gui.Controls.Lang.Text(ex.Message))); }
         }
         return patterns.Length > 0 ? patterns : null;
     }
@@ -133,7 +135,8 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true) Target(sender).Text = dialog.FolderName;
     }
     private TextBox Target(object sender) => (string)((Button)sender).Tag == "left" ? LeftPath : RightPath;
-    private async void CompareClick(object sender, RoutedEventArgs e) => await CompareAndTrackSession();
+    // The Compare button and Enter share one entry: validate, then re-compare (CommitPathBarAsync).
+    private async void CompareClick(object sender, RoutedEventArgs e) => await CommitPathBarAsync();
 
     private async void PathBarKeyDown(object sender, KeyEventArgs e)
     {
@@ -142,16 +145,28 @@ public partial class MainWindow : Window
         await CommitPathBarAsync();
     }
 
-    /// <summary>Enter in the path bar: re-compare when both paths exist and are the same kind;
-    /// otherwise restore the last successful paths and keep the current result.</summary>
+    /// <summary>Enter in the path bar or the Compare button: validates both paths, then re-compares.
+    /// Two files entered while a folder comparison is loaded open as a text tab, so the Folder tab
+    /// keeps its comparison; anything else replaces the root comparison. An invalid path restores the
+    /// last committed pair — the boxes always describe what is on screen, which sync and session
+    /// bookkeeping rely on — and reports the reason at the box itself; with nothing committed yet
+    /// (fresh window) the typed text is kept so it can be corrected.</summary>
     private async Task CommitPathBarAsync()
     {
         if (_busy) return;
         if (!PathBarCommit.TryResolve(LeftPath.Text, RightPath.Text, out string left, out string right, out string? error))
         {
-            LeftPath.Text = _committedLeft;
-            RightPath.Text = _committedRight;
-            StatusLabel.Text = error ?? ModularDiff.Gui.Controls.Lang.Get("status_path_restored");
+            string reason = error is null ? ModularDiff.Gui.Controls.Lang.Get("status_path_restored") : ModularDiff.Gui.Controls.Lang.Text(error);
+            TextBox atFault = PathBoxAtFault(LeftPath.Text, RightPath.Text);
+            if (_committedLeft.Length > 0 || _committedRight.Length > 0) { LeftPath.Text = _committedLeft; RightPath.Text = _committedRight; }
+            ShowPathError(atFault, reason);
+            return;
+        }
+        if (_folderResult is not null && _rootRequest is not null && File.Exists(left) && File.Exists(right))
+        {
+            LeftPath.Text = left; RightPath.Text = right;
+            if (await OpenPathBarPair(left, right)) RememberCommittedPaths(left, right);
+            else { LeftPath.Text = _committedLeft; RightPath.Text = _committedRight; }
             return;
         }
         if (!await CanLeaveEdits())
@@ -174,6 +189,61 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Which path box to flag after a rejected commit: the first side that does not resolve
+    /// to an existing file or folder, or the right box when both exist (mixed kinds).</summary>
+    private TextBox PathBoxAtFault(string leftText, string rightText)
+    {
+        static bool Exists(string? text)
+        {
+            try { string full = Path.GetFullPath((text ?? "").Trim()); return File.Exists(full) || Directory.Exists(full); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+        }
+        return Exists(leftText) ? RightPath : LeftPath;
+    }
+
+    /// <summary>Reports a rejected path where it happened: status bar plus a tooltip that opens at
+    /// once on the offending box (a status line at the bottom of the window is easy to miss).</summary>
+    private void ShowPathError(TextBox box, string reason)
+    {
+        StatusLabel.Text = reason;
+        var hint = new ToolTip { Content = reason, PlacementTarget = box, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom, StaysOpen = true };
+        box.ToolTip = hint;
+        box.Focus(); box.SelectAll();
+        hint.IsOpen = true;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(6) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            hint.IsOpen = false;
+            if (ReferenceEquals(box.ToolTip, hint)) UpdatePathBoxTips();   // back to the regular full-path hint
+        };
+        timer.Start();
+    }
+
+    /// <summary>Path box tooltips lead with the full path (the boxes clip long paths), then the hint.</summary>
+    private void UpdatePathBoxTips()
+    {
+        if (LeftPath is null || RightPath is null) return;
+        foreach (var box in new[] { LeftPath, RightPath })
+        {
+            if (box.ToolTip is ToolTip { IsOpen: true }) continue;   // an error hint is showing
+            string hint = ModularDiff.Gui.Controls.Lang.Get("path_tip");
+            box.ToolTip = string.IsNullOrWhiteSpace(box.Text) ? hint : box.Text.Trim() + "\n" + hint;
+        }
+    }
+
+    /// <summary>Opens two files typed into the path bar as a text tab while the folder comparison
+    /// stays loaded. Returns false when the user cancelled or the load failed.</summary>
+    private async Task<bool> OpenPathBarPair(string left, string right)
+    {
+        string name = Path.GetFileName(left), other = Path.GetFileName(right);
+        string caption = string.Equals(Path.GetDirectoryName(left), Path.GetDirectoryName(right), StringComparison.OrdinalIgnoreCase)
+            ? name : name + " ↔ " + other;
+        if (!await LoadFilePairAsync(left, right, caption, knownError: null, sourceNode: null)) return false;
+        if (_rootRequest is { } request) RecordRecentComparison(request with { LeftPath = left, RightPath = right });
+        return true;
+    }
+
     private void RememberCommittedPaths(string left, string right)
     {
         _committedLeft = left;
@@ -187,6 +257,7 @@ public partial class MainWindow : Window
         _comparisonCancellation?.Dispose(); _comparisonCancellation = new();
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
+        _binarySession = null;   // the panes are about to show a new root comparison, not a tab's bytes
         _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows = [];
         _folderSnapshotVersion++;
         while (_folderAdds.TryDequeue(out _)) { }
@@ -231,7 +302,7 @@ public partial class MainWindow : Window
             RightPath.Text = request.RightPath;
         }
         catch (OperationCanceledException) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_cancelled"); }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_compare_failed_msg", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_compare_failed_msg", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         finally
         {
             StopFolderUiTimer();
@@ -393,10 +464,13 @@ public partial class MainWindow : Window
     private void CancelClick(object sender, RoutedEventArgs e) { _syncCancellation?.Cancel(); _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); }
     private async void SwapClick(object sender, RoutedEventArgs e)
     {
-        if (_busy || !await CanLeaveEdits()) return;
-        ClearEditors();
+        if (_busy) return;
         (LeftPath.Text, RightPath.Text) = (RightPath.Text, LeftPath.Text);
-        if (!string.IsNullOrWhiteSpace(LeftPath.Text) && !string.IsNullOrWhiteSpace(RightPath.Text)) await CompareAsync();
+        // Swapped sides go through the same validated commit as Enter: two files become a text tab
+        // (the folder comparison survives), anything else re-compares as the root comparison.
+        if (!string.IsNullOrWhiteSpace(LeftPath.Text) && !string.IsNullOrWhiteSpace(RightPath.Text)
+            && !string.Equals(LeftPath.Text, RightPath.Text, StringComparison.OrdinalIgnoreCase))
+            await CommitPathBarAsync();
     }
     private void SetView(bool text)
     {
@@ -437,6 +511,7 @@ public partial class MainWindow : Window
         UpdateSummary();
         UpdateFileStats();
         UpdateEditState();
+        if (!text) UpdateFolderSelectionStatus();   // back on the Folder tab: describe the selection again
     }
     private void RefreshFolderRows(FolderNode? selected = null)
     {
@@ -454,8 +529,7 @@ public partial class MainWindow : Window
         LeftFolders.SelectedItem = Pick(LeftFolders.SelectedItem as FolderNode, selected);
         RightFolders.SelectedItem = Pick(RightFolders.SelectedItem as FolderNode, selected);
         _syncFolderSelection = false;
-        FolderSummary.Text = ModularDiff.Gui.Controls.Lang.Get("folder_visible_summary",
-            _folderRows.Count(n => !n.IsDirectory), _folderResult?.Files.Count ?? 0);
+        UpdateFolderSummary();
         if (nameFilter.Error is not null)
             StatusLabel.Text = nameFilter.Error;
     }
@@ -475,11 +549,10 @@ public partial class MainWindow : Window
     private void FolderSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncFolderSelection) return;
-        // 两侧各自独立选择:普通点击不再镜像到对侧。镜像使"左右各选不同文件"必须依赖隐藏的
-        // Ctrl/Shift 修饰键,不按修饰键时每次点击都把两侧刷成同一行,双击永远退化为
-        // 最后一个文件与自身比较(用户实测痛点)。配对语义移到打开时解析(OpenSelectedFiles):
-        // 两侧选了不同文件 → 跨文件比较;只选了一侧 → 按相对路径配对打开。
-        UpdateFolderSelectionStatus();
+        // The status line belongs to the view on screen. Folder selection also changes while a text
+        // tab is active (grids re-bound on a language switch, refreshes); that must not replace the
+        // text tab's status with a folder row description.
+        if (FolderView.Visibility == Visibility.Visible) UpdateFolderSelectionStatus();
     }
 
     private void UpdateFolderSelectionStatus()
@@ -569,29 +642,47 @@ public partial class MainWindow : Window
 
     private async Task OpenFilePair(FolderNode leftNode, FolderNode rightNode, string left, string right, bool pairedSamePath)
     {
-        if (_busy || _folderResult is null || _rootRequest is null) return;
-        if (leftNode.IsDirectory || rightNode.IsDirectory) return;
-        if (!await CanLeaveEdits()) return;
-        if (_activeSession is { } previous) SaveSessionState(previous);
+        if (_folderResult is null || leftNode.IsDirectory || rightNode.IsDirectory) return;
+        bool loaded = await LoadFilePairAsync(left, right,
+            relativePath: pairedSamePath ? leftNode.RelativePath : leftNode.Name + " ↔ " + rightNode.Name,
+            knownError: pairedSamePath ? leftNode.File : null, sourceNode: leftNode);
+        if (!loaded || !pairedSamePath) return;
+        _syncFolderSelection = true;
+        LeftFolders.SelectedItem = RightFolders.SelectedItem = leftNode;
+        _syncFolderSelection = false;
+    }
+
+    /// <summary>Compares one file pair and shows it as a text tab — reusing the tab already open
+    /// for that pair, or the active blank tab. The folder comparison is left untouched, so a pair
+    /// typed into the path bar never wipes the Folder tab. Returns false when the user cancelled the
+    /// unsaved-edits prompt or the load failed; the tab shown before is then put back on screen.</summary>
+    private async Task<bool> LoadFilePairAsync(string left, string right, string relativePath, FileComparison? knownError, FolderNode? sourceNode)
+    {
+        if (_busy || _folderResult is null || _rootRequest is null) return false;
+        if (!await CanLeaveEdits()) return false;
+        var previous = _activeSession;
+        // The tab being left keeps its own identity: the boxes may already hold the incoming pair.
+        if (previous is not null) SaveSessionState(previous, adoptBoxes: false);
         ClearEditors();
         _detailCancellation?.Cancel();
         var cancellation = new CancellationTokenSource(); _detailCancellation = cancellation;
         var token = cancellation.Token;
-        var root = _folderResult; var request = _rootRequest;
-        _currentNode = leftNode; _textFile = null; _fileResult = null; _presentation = null;
+        var request = _rootRequest;
+        _currentNode = sourceNode; _textFile = null; _fileResult = null; _presentation = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("text_loading"); TextEmptyState.Visibility = Visibility.Visible;
         CancelButton.IsEnabled = true; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_loading_file");
         string? empty = null;
+        bool loaded = false, superseded = false;
         try
         {
             bool leftMissing = !File.Exists(left);
             bool rightMissing = !File.Exists(right);
             if (leftMissing && rightMissing) throw new InvalidOperationException(ModularDiff.Gui.Controls.Lang.Get("status_both_missing"));
             ComparisonResult result;
-            if (pairedSamePath && leftNode.File?.Status == FileStatus.Error)
-                result = new(left, right, "files", request.AlgorithmId, [leftNode.File], []);
+            if (knownError is { Status: FileStatus.Error })
+                result = new(left, right, "files", request.AlgorithmId, [knownError], []);
             else
             {
                 if (leftMissing || rightMissing) empty = Path.GetTempFileName();
@@ -601,11 +692,7 @@ public partial class MainWindow : Window
                     RightPath = rightMissing ? empty! : right,
                 };
                 result = await Task.Run(() => _engine.CompareAsync(fileRequest, "files", cancellationToken: token), token);
-                var file = result.Files.Single() with
-                {
-                    RelativePath = pairedSamePath ? leftNode.RelativePath
-                        : leftNode.Name + " ↔ " + rightNode.Name,
-                };
+                var file = result.Files.Single() with { RelativePath = relativePath };
                 if (leftMissing) file = file with { Status = FileStatus.RightOnly };
                 else if (rightMissing) file = file with { Status = FileStatus.LeftOnly };
                 result = result with { LeftPath = left, RightPath = right, Files = [file] };
@@ -617,27 +704,13 @@ public partial class MainWindow : Window
             await AttachEditors(leftMissing ? empty! : left, rightMissing ? empty! : right, token);
             LeftPath.Text = left; RightPath.Text = right;
             RememberCommittedPaths(left, right);
-            var session = _textSessions.FirstOrDefault(s =>
-                string.Equals(s.LeftPath, left, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(s.RightPath, right, StringComparison.OrdinalIgnoreCase));
-            if (session is null)
-            {
-                session = CreateSession(left, right);
-                session.Title = Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
-                BuildTabButton(session);
-            }
-            session.SourceNode = leftNode;
-            session.LeftPath = left;
-            session.RightPath = right;
+            var session = FindOrAdoptSession(left, right);
+            session.SourceNode = sourceNode;
             SaveSessionState(session);
             ActivateTextSession(session);
-            if (pairedSamePath)
-            {
-                _syncFolderSelection = true;
-                LeftFolders.SelectedItem = RightFolders.SelectedItem = leftNode;
-                _syncFolderSelection = false;
-            }
+            if (_textFile is { IsBinary: true }) BindBinaryView(session);
             ExportButton.IsEnabled = true; UpdateSummary(); LeftCode.Focus();
+            loaded = true;
         }
         catch (OperationCanceledException)
         {
@@ -645,22 +718,61 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (!token.IsCancellationRequested) { TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("status_load_file_failed", ex.Message); StatusLabel.Text = TextEmptyMessage.Text; }
+            if (!token.IsCancellationRequested) { TextEmptyMessage.Text = ModularDiff.Gui.Controls.Lang.Get("status_load_file_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); StatusLabel.Text = TextEmptyMessage.Text; }
         }
         finally
         {
+            superseded = !ReferenceEquals(_detailCancellation, cancellation) && token.IsCancellationRequested;
             if (empty is not null) try { File.Delete(empty); } catch (IOException) { }
             if (ReferenceEquals(_detailCancellation, cancellation)) { _detailCancellation = null; CancelButton.IsEnabled = false; ActivityLabel.Text = ModularDiff.Gui.Controls.Lang.Get("activity_ready"); }
             cancellation.Dispose();
         }
+        // A failed load must not leave the tab that was on screen blank: put its content back; the
+        // reason stays in the status bar. (Not when a newer load superseded this one — that load
+        // owns the panes now.)
+        if (!loaded && !superseded && previous is not null && ReferenceEquals(previous, _activeSession))
+        {
+            string reason = StatusLabel.Text;
+            await RestoreSessionStateAsync(previous);
+            StatusLabel.Text = reason;
+        }
+        return loaded;
     }
     private void SetTextHeaders(string left, string right, FileComparison file)
     {
         LeftFileTitle.Text = left; LeftFileTitle.ToolTip = left; RightFileTitle.Text = right; RightFileTitle.ToolTip = right;
-        LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_left", file.Lines.Count(l => l.LeftLine is not null));
-        RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_right", file.Lines.Count(l => l.RightLine is not null));
+        UpdateTextHeaders(file);
         // Tab titles are owned by session create/activate — do not rewrite the previous
         // tab's title while a new file is still loading.
+    }
+    /// <summary>Line counts under the file titles; recomputed when the language changes.</summary>
+    private void UpdateTextHeaders(FileComparison? file)
+    {
+        if (file is null) { LeftFileInfo.Text = ""; RightFileInfo.Text = ""; return; }
+        LeftFileInfo.Text = file.Status == FileStatus.RightOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_left", file.Lines.Count(l => l.LeftLine is not null));
+        RightFileInfo.Text = file.Status == FileStatus.LeftOnly ? ModularDiff.Gui.Controls.Lang.Get("status_file_right_only") : ModularDiff.Gui.Controls.Lang.Get("status_lines_right", file.Lines.Count(l => l.RightLine is not null));
+    }
+    /// <summary>Empty-state text and the hint line under the panes, both derived from the current
+    /// file; plugin notes are routed through Lang.Text so they follow the UI language.</summary>
+    private void RefreshFileMessages()
+    {
+        if (_textFile is not { } file) { DetailLabel.Text = ""; TextEmptyMessage.Text = ""; return; }
+        TextEmptyMessage.Text = file.Status == FileStatus.Error ? (file.Note is { } error ? ModularDiff.Gui.Controls.Lang.Text(error) : ModularDiff.Gui.Controls.Lang.Get("file_read_error"))
+            : file.IsBinary ? ModularDiff.Gui.Controls.Lang.Get("binary_no_text", file.Note is { } note ? ModularDiff.Gui.Controls.Lang.Text(note) : "")
+            : ModularDiff.Gui.Controls.Lang.Get("empty_file");
+        DetailLabel.Text = (file.IsApproximate ? ModularDiff.Gui.Controls.Lang.Get("approx_align_prefix") : "")
+            + (file.Note is { } detail ? ModularDiff.Gui.Controls.Lang.Text(detail) : ModularDiff.Gui.Controls.Lang.Get("detail_nav_hint"));
+    }
+    /// <summary>The difference counter left of the status message, for text, hex and picture views alike.</summary>
+    private void RefreshHunkLabel()
+    {
+        if (_presentation is { } presentation)
+            HunkLabel.Text = _currentHunk >= 0 && _currentHunk < presentation.Hunks.Count
+                ? ModularDiff.Gui.Controls.Lang.Get("hunks_index", _currentHunk + 1, presentation.Hunks.Count)
+                : ModularDiff.Gui.Controls.Lang.Get("hunks_count", presentation.Hunks.Count);
+        else if (PictureHost.Visibility == Visibility.Visible && _textFile?.Note is { } pictureNote) HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Text(pictureNote);
+        else if (HexHost.Visibility == Visibility.Visible && _textFile?.BinaryDiffs is { } diffs) HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("byte_diffs", diffs.Count);
+        else HunkLabel.Text = "";
     }
     private static readonly HashSet<string> PictureExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".bmp", ".gif" };
 
@@ -699,6 +811,7 @@ public partial class MainWindow : Window
         {
             if (PictureExtensions.Contains(Path.GetExtension(_fileResult?.LeftPath ?? ""))) await ShowPictureAsync(file);
             else await ShowHexAsync(token);
+            RefreshFileMessages(); RefreshHunkLabel();
             return;
         }
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
@@ -710,14 +823,10 @@ public partial class MainWindow : Window
         if (version != _presentationVersion || !ReferenceEquals(file, _textFile)) return;
         _presentation = presentation; _currentHunk = -1;
         _syncText = true; LeftCode.SetRows(presentation.Rows, !preservePosition); RightCode.SetRows(presentation.Rows, !preservePosition); _syncText = false;
-        Overview.SetPresentation(presentation); UpdateOverview();
-        HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_count", presentation.Hunks.Count);
-        UpdateEditState(); UpdateFileStats();
-        TextEmptyState.Visibility = presentation.Rows.Count == 0 && _leftBuffer is null ? Visibility.Visible : Visibility.Collapsed;
-        TextEmptyMessage.Text = file.Status == FileStatus.Error ? file.Note ?? ModularDiff.Gui.Controls.Lang.Get("file_read_error")
-            : file.IsBinary ? ModularDiff.Gui.Controls.Lang.Get("binary_no_text", file.Note ?? "")
-            : ModularDiff.Gui.Controls.Lang.Get("empty_file");
-        DetailLabel.Text = (file.IsApproximate ? ModularDiff.Gui.Controls.Lang.Get("approx_align_prefix") : "") + (file.Note ?? ModularDiff.Gui.Controls.Lang.Get("detail_nav_hint"));
+            Overview.SetPresentation(presentation); UpdateOverview();
+            RefreshFileMessages(); RefreshHunkLabel();
+            UpdateEditState(); UpdateFileStats();
+            TextEmptyState.Visibility = presentation.Rows.Count == 0 && _leftBuffer is null ? Visibility.Visible : Visibility.Collapsed;
     }
     /// <summary>Binary files render as a virtualized side-by-side hex dump with the differing
     /// bytes colored; the view loads at most 16&nbsp;MB per side.</summary>
@@ -738,10 +847,10 @@ public partial class MainWindow : Window
             byte[] left = await Read(result.LeftPath), right = await Read(result.RightPath);
             token.ThrowIfCancellationRequested();
             Hex.SetContent(left, right, file.BinaryDiffs!, editablePath: result.LeftPath);
+            PictureHost.Visibility = Visibility.Collapsed;   // one binary pane at a time, whichever tab is active
             HexHost.Visibility = Visibility.Visible;
             if (file.BinaryDiffs!.Count > 0)
                 Hex.SetVerticalOffset(Math.Max(0, file.BinaryDiffs[0].Offset / 16 * Hex.RowHeight - 120));
-            HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("byte_diffs", file.BinaryDiffs!.Count);
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_mode");
             // Patch export and offset navigation via the hex view.
             Hex.MouseRightButtonUp -= HexContextMenu;
@@ -751,7 +860,7 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             HexHost.Visibility = Visibility.Collapsed;
-            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_load_failed", ex.Message);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_hex_load_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message));
         }
     }
 
@@ -764,7 +873,7 @@ public partial class MainWindow : Window
             var dialog = new Microsoft.Win32.SaveFileDialog { Filter = "Text report|*.txt", FileName = "binary-patch.txt" };
             if (dialog.ShowDialog(this) == true)
                 try { System.IO.File.WriteAllText(dialog.FileName, Hex.ExportPatch()); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_report_saved", dialog.FileName); }
-                catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ex.Message); }
+                catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         };
         menu.Items.Add(export);
         var goTo = new MenuItem { Header = ModularDiff.Gui.Controls.Lang.Get("hex_goto_offset") };
@@ -806,13 +915,12 @@ public partial class MainWindow : Window
             }
             HexHost.Visibility = Visibility.Collapsed;
             PictureHost.Visibility = Visibility.Visible;
-            HunkLabel.Text = file.Note ?? "";
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_picture_mode");
         }
         catch (Exception ex)
         {
             PictureHost.Visibility = Visibility.Collapsed;
-            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_picture_failed", ex.Message);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_picture_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message));
         }
     }
 
@@ -853,7 +961,7 @@ public partial class MainWindow : Window
     private async void TextFilterChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!_ready || _textFile is null) return;
-        try { await RebuildPresentation(); } catch (Exception ex) { StatusLabel.Text = ex.Message; }
+        try { await RebuildPresentation(); } catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Text(ex.Message); }
     }
     private void CodeScrolled(DiffPane source)
     {
@@ -921,12 +1029,10 @@ public partial class MainWindow : Window
 
     private void LangBoxSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // 下拉框显式选择语言;不再"点击循环切换下一个"——用户可能看不懂切出来的语言。
-        if (LangBox.SelectedItem is string name && !string.Equals(name, ModularDiff.Gui.Controls.Lang.CurrentName))
-        {
-            ModularDiff.Gui.Controls.Lang.Apply(name);
-            LocalizeUI();
-        }
+        // The dropdown selects a language explicitly. Select applies it and remembers the choice
+        // for the next launch; LocalizeUI is invoked by Lang.Changed.
+        if (LangBox.SelectedItem is string name && !string.Equals(name, Controls.Lang.CurrentName, StringComparison.Ordinal))
+            Controls.Lang.Select(name);
     }
 
     /// <summary>Surfaces grammar/theme/language file load errors to the user instead of silently
@@ -1088,7 +1194,7 @@ public partial class MainWindow : Window
     {
         var result = TextView.Visibility == Visibility.Visible ? _fileResult : _folderResult;
         if (result is null || FormatBox.SelectedItem is not IResultFormatter formatter) return;
-        var dialog = new SaveFileDialog { Filter = $"{formatter.DisplayName}|*{formatter.FileExtension}", DefaultExt = formatter.FileExtension, FileName = "comparison" + formatter.FileExtension };
+        var dialog = new SaveFileDialog { Filter = $"{ModularDiff.Gui.Controls.Lang.Text(formatter.DisplayName)}|*{formatter.FileExtension}", DefaultExt = formatter.FileExtension, FileName = "comparison" + formatter.FileExtension };
         if (dialog.ShowDialog(this) != true) return;
         try
         {
@@ -1100,7 +1206,7 @@ public partial class MainWindow : Window
             await using var writer = new StreamWriter(output, false, new UTF8Encoding(false));
             await formatter.WriteAsync(result, writer); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_saved", output);
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_export_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
     private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
     {
@@ -1251,6 +1357,9 @@ public partial class MainWindow : Window
                 if (_textSessions.Count != 1 || _textSessions[0].LeftPath.Length > 0 || _textSessions[0].RightPath.Length > 0)
                     throw new InvalidOperationException("CloseAllTabs must leave exactly one blank tab.");
             }
+            // 文本视图下 chrome 最全(含文字工具栏),先在这里跑语言切换;随后验证路径框与标签页宽度。
+            await LocalizationSmokeAsync(screenshot);
+            await PathBarAndTabChromeSmokeAsync();
         }
         catch (Exception ex) { exit = 2; File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "smoke-error.txt"), ex.ToString()); }
         Application.Current.Shutdown(exit);

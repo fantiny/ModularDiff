@@ -83,12 +83,13 @@ public partial class MainWindow
                 {
                     var action = transform;
                     var capturedPane = pane;
-                    Add(label + (shortcut is not null ? $" ({shortcut})" : ""), true, () =>
+                    string caption = Lang.Text(label) + (shortcut is not null ? $" ({shortcut})" : "");   // plugin labels follow the UI language
+                    Add(caption, true, () =>
                     {
                         string newText = action(new EditContext(capturedPane.Buffer!, capturedPane.SelectedRow, 0));
                         if (newText.Length > 0 && newText != capturedPane.Buffer!.Text)
-                            capturedPane.Buffer.Apply(new Contracts.TextEdit(0, capturedPane.Buffer.Text.Length, newText, label));
-                        AfterProgrammaticEdit(capturedPane, label);
+                            capturedPane.Buffer.Apply(new Contracts.TextEdit(0, capturedPane.Buffer.Text.Length, newText, caption));
+                        AfterProgrammaticEdit(capturedPane, caption);
                     });
                 }
             }
@@ -110,8 +111,8 @@ public partial class MainWindow
                     var item = new MenuItem
                     {
                         Header = targets.Length > 1
-                            ? Lang.Get("menu_split_many", chosen.DisplayName, targets.Length)
-                            : Lang.Get("menu_split_one", chosen.DisplayName),
+                            ? Lang.Get("menu_split_many", Lang.Text(chosen.DisplayName), targets.Length)
+                            : Lang.Get("menu_split_one", Lang.Text(chosen.DisplayName)),
                         ToolTip = Lang.Get("menu_split_tip"),
                     };
                     item.Click += (_, _) => ApplySplit(pane, chosen, targets);
@@ -157,10 +158,10 @@ public partial class MainWindow
                 else block.Append(last.Ending);   // the block's final ending matches the replaced range exactly
             }
             if (applied == 0) return;
-            buffer.Apply(new TextEdit(first.Offset, last.Offset + last.Length - first.Offset, block.ToString(), Lang.Get("edit_desc_split", splitter.DisplayName)));
-            AfterProgrammaticEdit(pane, Lang.Get("status_split_done", splitter.DisplayName, applied));
+            buffer.Apply(new TextEdit(first.Offset, last.Offset + last.Length - first.Offset, block.ToString(), Lang.Get("edit_desc_split", Lang.Text(splitter.DisplayName))));
+            AfterProgrammaticEdit(pane, Lang.Get("status_split_done", Lang.Text(splitter.DisplayName), applied));
         }
-        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_split_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_split_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 
     private void FormatSideClick(object sender, RoutedEventArgs e)
@@ -171,7 +172,7 @@ public partial class MainWindow
         var formatter = _plugins.GetAll<ICodeFormatter>().FirstOrDefault(f => f.CanFormat(buffer.Path));
         if (formatter is null)
         {
-            string available = string.Join("、", _plugins.GetAll<ICodeFormatter>().Select(f => f.DisplayName));
+            string available = string.Join(", ", _plugins.GetAll<ICodeFormatter>().Select(f => Lang.Text(f.DisplayName)));
             StatusLabel.Text = Lang.Get("status_no_formatter", Path.GetFileName(buffer.Path), available.Length > 0 ? Lang.Get("status_formatter_list", available) : "");
             return;
         }
@@ -179,10 +180,10 @@ public partial class MainWindow
         {
             var formatted = formatter.Format([.. DocumentLines.Parse(buffer.Text).Select(l => l.Text)]);
             // 行尾风格/结尾换行沿原文 —— 走 Core 助手;此前手写 join 把 CRLF 拼成 LFCR(审查 K3)。
-            buffer.Apply(new TextEdit(0, buffer.Text.Length, LineText.Rebuild(formatted, buffer.Text), Lang.Get("edit_desc_format", formatter.DisplayName)));
-            AfterProgrammaticEdit(pane, Lang.Get("status_format_done", formatter.DisplayName, Lang.Get(ReferenceEquals(pane, LeftCode) ? "side_left" : "side_right")));
+            buffer.Apply(new TextEdit(0, buffer.Text.Length, LineText.Rebuild(formatted, buffer.Text), Lang.Get("edit_desc_format", Lang.Text(formatter.DisplayName))));
+            AfterProgrammaticEdit(pane, Lang.Get("status_format_done", Lang.Text(formatter.DisplayName), Lang.Get(ReferenceEquals(pane, LeftCode) ? "side_left" : "side_right")));
         }
-        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_format_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = Lang.Get("status_format_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 
     private async void RealignClick(object sender, RoutedEventArgs e)

@@ -89,7 +89,7 @@ public partial class MainWindow
             Overview.SetPresentation(presentation);
             HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_count", presentation.Hunks.Count);
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_align_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
 
     /// <summary>Cancel a pending Align With (Esc key).</summary>

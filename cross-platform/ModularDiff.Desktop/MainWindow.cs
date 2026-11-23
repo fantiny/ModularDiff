@@ -72,6 +72,7 @@ public sealed class MainWindow : Window
     private ComparisonResult? _directory;
     private bool _lastFocusLeft = true;
     private bool _loading, _busy, _allowClose, _closePending;
+    private int _compareRun;   // 进度回调所属的比较轮次:结果已应用(或已开始新一轮)后,迟到的进度更新不再改写状态栏
     public MainWindow(string[] args)
     {
         Title = Lang.Get("md_title"); Width = 1250; Height = 820; MinWidth = 850; MinHeight = 550;
@@ -804,6 +805,11 @@ public sealed class MainWindow : Window
         _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
         _status.Text = "比较中…";
         // Avoid Progress<T>'s UI sync-context marshal: it was flooding the UI thread.
+        // Progress callbacks run on the thread pool and can reach the UI thread after the comparison
+        // has finished: a late "内容比较 1/1 · a.bin" used to overwrite the final status of a
+        // single-file compare (a race — the hex-view check of the test suite caught it). Every run
+        // is numbered, and an update only applies while its own run is still the current one.
+        int run = ++_compareRun;
         long lastUi = 0;
         IProgress<ComparisonProgress> progress = new ThreadPoolProgress<ComparisonProgress>(p =>
         {
@@ -812,6 +818,7 @@ public sealed class MainWindow : Window
             {
                 Dispatcher.UIThread.Post(() =>
                 {
+                    if (run != _compareRun) return;
                     _directory = partial;
                     _files.ItemsSource = partial.Files.Where(f => !f.IsDirectory).ToArray();
                     _tabs.SelectedIndex = 2;
@@ -823,16 +830,18 @@ public sealed class MainWindow : Window
                 string text = p.Path == "scan:root"
                     ? "根目录已列出 · 继续扫描子目录…"
                     : $"扫描子目录… 已发现 {p.Completed:N0} 个文件";
-                Dispatcher.UIThread.Post(() => _status.Text = text);
+                Dispatcher.UIThread.Post(() => { if (run == _compareRun) _status.Text = text; });
             }
             else if (p.Total > 0 && (p.Completed == p.Total || now - lastUi >= 200))
             {
                 lastUi = now;
                 string text = $"内容比较 {p.Completed}/{p.Total} · {p.Path}";
-                Dispatcher.UIThread.Post(() => _status.Text = text);
+                Dispatcher.UIThread.Post(() => { if (run == _compareRun) _status.Text = text; });
             }
         });
-        var result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options), progress: progress));
+        ComparisonResult result;
+        try { result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options), progress: progress)); }
+        finally { _compareRun++; }   // this run is over (or failed): its late progress updates are dropped
         _session.Clear(); RefreshEditors();
         if (Directory.Exists(left) && Directory.Exists(right))
         { _directory = result; _files.ItemsSource = result.Files.Where(f => !f.IsDirectory).ToArray(); _tabs.SelectedIndex = 2; _status.Text = $"{result.Files.Count(f => !f.IsDirectory):N0} 个文件 · {result.Files.Count(f => !f.IsDirectory && f.Status != FileStatus.Equal)} 个差异/错误 · 双击打开"; }

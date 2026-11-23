@@ -43,7 +43,7 @@ public partial class App : Application
             }
             new MainWindow(args).Show();
         }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "ModularDiff startup error"); Shutdown(2); }
+        catch (Exception ex) { MessageBox.Show(ModularDiff.Gui.Controls.Lang.Text(ex.Message), ModularDiff.Gui.Controls.Lang.Get("startup_error_title")); Shutdown(2); }
     }
 
     protected override void OnExit(ExitEventArgs e)

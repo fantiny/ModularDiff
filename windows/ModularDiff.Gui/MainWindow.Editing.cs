@@ -60,7 +60,7 @@ public partial class MainWindow
             UpdateFileStats();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
-        { ClearEditors(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_readonly_keep", ex.Message); }
+        { ClearEditors(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_readonly_keep", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         UpdateEditState();
     }
     private void EditRequested(DiffPane pane, TextEdit edit)
@@ -73,7 +73,7 @@ public partial class MainWindow
             if (_autoRealign) _editTask = RecompareBuffers(true);
             else HunkLabel.Text = ModularDiff.Gui.Controls.Lang.Get("hunks_unaligned");
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_edit_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_edit_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
     private void ShowDraft()
     {
@@ -122,7 +122,7 @@ public partial class MainWindow
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            if (!token.IsCancellationRequested) { _bufferDiff = null; UpdateEditState(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recompare_failed", ex.Message); }
+            if (!token.IsCancellationRequested) { _bufferDiff = null; UpdateEditState(); StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_recompare_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
         }
     }
     private void UpdateEditState()
@@ -146,7 +146,7 @@ public partial class MainWindow
             EditStatusLabel.ToolTip = dirtyTabs ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty_tabs_tip") : ModularDiff.Gui.Controls.Lang.Get("edit_status_folder_tip");
             return;
         }
-        EditStatusLabel.Text = _leftBuffer is null ? ModularDiff.Gui.Controls.Lang.Get("edit_status_readonly") : HasDirtyBuffers ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty") : ModularDiff.Gui.Controls.Lang.Get("edit_status_saved");
+        EditStatusLabel.Text = _activeSession is { IsBlank: true } ? "" : _leftBuffer is null ? ModularDiff.Gui.Controls.Lang.Get("edit_status_readonly") : HasDirtyBuffers ? ModularDiff.Gui.Controls.Lang.Get("edit_status_dirty") : ModularDiff.Gui.Controls.Lang.Get("edit_status_saved");
         EditStatusLabel.ToolTip = _leftBuffer is null ? ModularDiff.Gui.Controls.Lang.Get("readonly_tooltip") : ModularDiff.Gui.Controls.Lang.Get("dirty_tooltip");
         if (_leftBuffer is not null && _rightBuffer is not null)
         {
@@ -188,7 +188,7 @@ public partial class MainWindow
             await _editTask;
             StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copied_hunks", copied, ModularDiff.Gui.Controls.Lang.Get(toRight ? "side_right" : "side_left"));
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_all_failed", copied, ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_all_failed", copied, ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
     private async Task CopyBlock(bool toRight)
     {
@@ -201,7 +201,7 @@ public partial class MainWindow
             await _editTask;
             NavigateHunk(1);   // like Beyond Compare: after a block copy, advance to the next difference
         }
-        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_block_failed", ex.Message); }
+        catch (Exception ex) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_copy_block_failed", ModularDiff.Gui.Controls.Lang.Text(ex.Message)); }
     }
     private void HistoryRequested(DiffPane pane, bool redo)
     {
@@ -236,7 +236,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_saved_partial", count, ex.Message);
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_saved_partial", count, ModularDiff.Gui.Controls.Lang.Text(ex.Message));
             if (!_arguments.Contains("--edit-smoke-test")) MessageBox.Show(this, StatusLabel.Text, ModularDiff.Gui.Controls.Lang.Get("dlg_save_failed_title"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return false;
         }

@@ -23,7 +23,7 @@ public sealed class SyncPreviewRow(SyncPreviewItem item) : INotifyPropertyChange
     public event PropertyChangedEventHandler? PropertyChanged;
     private void Changed(string name) => PropertyChanged?.Invoke(this, new(name));
     private static string LocalizeInfo(string info) =>
-        info is "sync_stamp_missing" or "不存在" ? Lang.Get("sync_stamp_missing") : info;
+        info == "sync_stamp_missing" ? Lang.Get("sync_stamp_missing") : Lang.Text(info);
     private static string LocalizeState(string state) =>
         state.StartsWith("sync_", StringComparison.Ordinal) || state.StartsWith("file_status_", StringComparison.Ordinal)
             ? Lang.Get(state) : state;
@@ -50,21 +50,8 @@ public partial class SyncPreviewWindow : Window
         Closing += (_, e) => { if (_running) { e.Cancel = true; _cancellation.Cancel(); } };
         Closed += (_, _) => _cancellation.Dispose(); UpdateSummary();
     }
-    private void LocalizeChrome()
-    {
-        Title = Lang.Get("sync_preview_title");
-        ExecuteButton.ToolTip = Lang.Get("sync_preview_execute_tip");
-        StopButton.ToolTip = Lang.Get("sync_preview_stop_tip");
-        ClosePreviewButton.ToolTip = Lang.Get("sync_preview_close_tip");
-        if (ItemsGrid.Columns.Count >= 5)
-        {
-            ItemsGrid.Columns[0].Header = Lang.Get("sync_col_action");
-            ItemsGrid.Columns[1].Header = Lang.Get("sync_col_relpath");
-            ItemsGrid.Columns[2].Header = Lang.Get("sync_col_left");
-            ItemsGrid.Columns[3].Header = Lang.Get("sync_col_right");
-            ItemsGrid.Columns[4].Header = Lang.Get("sync_col_state");
-        }
-    }
+    // Window title, button tips and column headers: the keys live in the XAML.
+    private void LocalizeChrome() => Loc.Apply(this);
     private void UpdateSummary()
     {
         int copies = Rows.Count(r => r.Action != SyncAction.Skip);
@@ -86,15 +73,17 @@ public partial class SyncPreviewWindow : Window
             Result = await Task.Run(() => _safety is null ? _executor.ExecuteAsync(_plan, decisions, progress, _cancellation.Token) : _executor.ExecuteAsync(_plan, decisions, _safety, progress, _cancellation.Token));
             Scope.Text = Lang.Get("sync_journal_ready", Result.OperationId ?? "");
             var rowsByPath = Rows.ToDictionary(r => r.RelativePath);
-            foreach (var result in Result.Entries) if (rowsByPath.TryGetValue(result.RelativePath, out var row)) row.State = result.Message;
-            Summary.ToolTip = string.Join("\n", Result.Entries.Where(r => r.Outcome == SyncOutcome.Failed || r.Message.Contains("记录写入失败")).Select(r => r.RelativePath + "：" + r.Message));
+            foreach (var result in Result.Entries) if (rowsByPath.TryGetValue(result.RelativePath, out var row)) row.State = Lang.Text(result.Message);
+            // List every failed or cancelled entry; plugin messages go through Lang.Text. (The filter used
+            // to match a Chinese message fragment: neither language-neutral nor stable.)
+            Summary.ToolTip = string.Join("\n", Result.Entries.Where(r => r.Outcome is SyncOutcome.Failed or SyncOutcome.Cancelled).Select(r => r.RelativePath + ": " + Lang.Text(r.Message)));
             Summary.Text = Lang.Get("sync_result_summary",
                 Result.Entries.Count(r => r.Outcome == SyncOutcome.Copied),
                 Result.Entries.Count(r => r.Outcome == SyncOutcome.Failed),
                 Result.Entries.Count(r => r.Outcome == SyncOutcome.Skipped),
                 Result.Entries.Count(r => r.Outcome == SyncOutcome.Cancelled));
         }
-        catch (Exception ex) { Summary.Text = Lang.Get("sync_incomplete", ex.Message); Result = new([], _cancellation.IsCancellationRequested); }
+        catch (Exception ex) { Summary.Text = Lang.Get("sync_incomplete", Lang.Text(ex.Message)); Result = new([], _cancellation.IsCancellationRequested); }
         finally { _running = false; StopButton.IsEnabled = false; ItemsGrid.IsEnabled = true; ItemsGrid.IsReadOnly = true; }
     }
     private void StopClick(object sender, RoutedEventArgs e) => _cancellation.Cancel();
