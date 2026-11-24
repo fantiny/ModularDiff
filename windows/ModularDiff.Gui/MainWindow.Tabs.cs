@@ -1,8 +1,11 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using ModularDiff.Contracts;
 using ModularDiff.Gui.Controls;
 
@@ -49,10 +52,37 @@ public partial class MainWindow
         _binaryIsPicture = PictureHost.Visibility == Visibility.Visible;
     }
 
+    // Tab chrome: a file tab is never wider than the Folder tab (the user's yardstick for "one tab's
+    // worth of width"), so long names are trimmed in the middle rather than widening the tab.
+    private const double MinTabWidth = 110;   // floor for languages whose Folder tab is very narrow
+    private const double CloseButtonWidth = 22, CloseButtonGap = 5;
+    private static readonly Thickness TabPadding = new(8, 5, 6, 5);
+
+    private double TabWidthLimit => Math.Max(FolderTab.ActualWidth, MinTabWidth);
+    private double CaptionBudget => TabWidthLimit - TabPadding.Left - TabPadding.Right - CloseButtonGap - CloseButtonWidth;
+
     private void InitializeTabs()
     {
         FolderTab.Click += (_, _) => SwitchToFolderView();
         NewTabButton.Click += async (_, _) => { NewTabButton.IsChecked = false; await CreateTextTab("", ""); };
+        // The Folder tab's width follows its (localized) caption: the file tabs follow the Folder tab.
+        FolderTab.SizeChanged += (_, _) => { foreach (var session in _textSessions) UpdateTabCaption(session); };
+    }
+
+    /// <summary>The mouse wheel scrolls the tab strip sideways once the tabs overflow (a ScrollViewer
+    /// maps the wheel to its vertical axis only). Without an overflow the wheel is left alone.</summary>
+    private void TabStripWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (TabStripScroll.ScrollableWidth <= 0) return;
+        TabStripScroll.ScrollToHorizontalOffset(TabStripScroll.HorizontalOffset - e.Delta * (80.0 / Mouse.MouseWheelDeltaForOneLine));
+        e.Handled = true;
+    }
+
+    /// <summary>With more tabs than fit, the strip scrolls sideways: bring the tab that just became
+    /// active into view (after the layout pass that positions it).</summary>
+    private void RevealTab(TextSession session)
+    {
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => session.TabButton?.BringIntoView()));
     }
 
     /// <summary>Orchestrator: runs the pure comparison, then wraps file results in a session
@@ -81,7 +111,7 @@ public partial class MainWindow
         return session;
     }
 
-    private static string PairCaption(string left, string right) => Path.GetFileName(left) + " ↔ " + Path.GetFileName(right);
+    private static string PairCaption(string left, string right) => TabCaption.Of(left, right);
 
     /// <summary>The tab showing this pair — or, when the active tab is a blank "new comparison",
     /// that tab adopted for the pair; otherwise a new tab. A blank tab has no identity of its own
@@ -118,16 +148,17 @@ public partial class MainWindow
     private void BuildTabButton(TextSession session)
     {
         // DockPanel rather than StackPanel: the caption is the fill child, so it is measured with
-        // the width left beside the × and trims with an ellipsis under the tab's MaxWidth. In a
-        // StackPanel it would get infinite width and push the × out of the tab.
+        // the width left beside the × under the tab's width limit. In a StackPanel it would get
+        // infinite width and push the × out of the tab.
         var panel = new DockPanel { LastChildFill = true };
         var close = new Button
         {
-            Content = "×", Width = 22, Height = 22, FontSize = 14, Margin = new Thickness(6, 0, 0, 0),
+            Content = "×", Width = CloseButtonWidth, Height = 22, FontSize = 14, Margin = new Thickness(CloseButtonGap, 0, 0, 0),
             Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent,
             VerticalAlignment = VerticalAlignment.Center,
         };
         Loc.SetTipKey(close, "tab_close_this");
+        // CharacterEllipsis is only the safety net; the caption is fitted by TabCaption.Fit first.
         var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         DockPanel.SetDock(close, Dock.Right);
         panel.Children.Add(close);
@@ -135,7 +166,7 @@ public partial class MainWindow
         session.Caption = label;
         session.TabButton = new ToggleButton
         {
-            Content = panel, Style = (Style)FindResource("SessionTab"), Padding = new Thickness(10, 5, 10, 5),
+            Content = panel, Style = (Style)FindResource("SessionTab"), Padding = TabPadding,
         };
         // 一个预览处理器按命中目标分流:
         // · 点在 × 上 → 预览阶段立即关闭并吞掉事件(× 在激活标签页上曾被"防取消选中"逻辑吞掉,
@@ -178,13 +209,17 @@ public partial class MainWindow
         UpdateTabCaption(session);
     }
 
-    /// <summary>Tab caption = title (with the unsaved marker); tooltip = the full pair of paths,
-    /// which the caption may have trimmed.</summary>
-    private static void UpdateTabCaption(TextSession session)
+    /// <summary>Tab caption = title (with the unsaved marker), fitted to the width a tab may take:
+    /// a long file name is trimmed in the middle so its extension stays visible. Tooltip = the full
+    /// pair of paths. A blank "new comparison" tab is not width-limited (its caption is a short
+    /// phrase from the language pack, not a file name).</summary>
+    private void UpdateTabCaption(TextSession session)
     {
-        if (session.TabButton is null) return;
-        session.Caption!.Text = session.Title;
-        session.TabButton.ToolTip = session.IsBlank ? session.Title : session.LeftPath + "\n" + session.RightPath;
+        if (session.TabButton is not { } tab) return;
+        tab.MaxWidth = session.IsBlank ? double.PositiveInfinity : TabWidthLimit;
+        session.Caption!.Text = session.IsBlank ? session.Title : TabCaption.Fit(session.Caption, session.Title, CaptionBudget);
+        tab.ToolTip = session.IsBlank ? session.Title : session.LeftPath + "\n" + session.RightPath;
+        AutomationProperties.SetName(tab, session.Title);   // the visible caption may be trimmed
     }
 
     /// <summary>Language change: blank-tab titles come from the pack; the context-menu captions are
@@ -290,6 +325,7 @@ public partial class MainWindow
         FolderTab.IsChecked = false;
         foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
         await RestoreSessionStateAsync(session);
+        RevealTab(session);
         // Load content only when the session has no cached results (a freshly created tab whose
         // pair is already known; tabs with content just restore their state).
         if (session.FileResult is null && File.Exists(session.LeftPath) && File.Exists(session.RightPath))
@@ -319,6 +355,7 @@ public partial class MainWindow
         FolderTab.IsChecked = false;
         foreach (var other in _textSessions) other.TabButton!.IsChecked = ReferenceEquals(other, session);
         SetView(true);
+        RevealTab(session);
     }
 
     /// <summary>Captures what is on screen into the tab's record. With <paramref name="adoptBoxes"/>

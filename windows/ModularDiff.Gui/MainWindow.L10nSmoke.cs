@@ -230,8 +230,107 @@ public partial class MainWindow
         }
         finally { try { Directory.Delete(directory, true); } catch { /* locked temp files go away with the process */ } }
         await BinaryTabSwitchSmokeAsync();
+        await TabStripSmokeAsync();
         await CloseAllTabs();
         FolderTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+    }
+
+    /// <summary>Many long-named tabs: no tab grows past the Folder tab, captions stay
+    /// distinguishable (the end of every name is kept), the wheel scrolls the strip once it
+    /// overflows, and the tab that becomes active is scrolled into view.</summary>
+    private async Task TabStripSmokeAsync()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ModularDiff-tabstrip-" + Guid.NewGuid().ToString("N"));
+        string left = Path.Combine(directory, "left"), right = Path.Combine(directory, "right");
+        Directory.CreateDirectory(left); Directory.CreateDirectory(right);
+        double stripLimit = TabStripScroll.MaxWidth;
+        try
+        {
+            // Sibling files of one module: the same long beginning, only the end differs.
+            string[] names =
+            [
+                "ModularDiff.Algorithms.Myers.deps.json", "ModularDiff.Algorithms.Myers.dll",
+                "ModularDiff.Algorithms.Myers.pdb", "ModularDiff.Algorithms.Myers.runtimeconfig.json",
+            ];
+            await CloseAllTabs();
+            foreach (string name in names)
+            {
+                await File.WriteAllTextAsync(Path.Combine(left, name), "one\n" + name + "\n");
+                await File.WriteAllTextAsync(Path.Combine(right, name), "one\nother\n");
+                LeftPath.Text = Path.Combine(left, name); RightPath.Text = Path.Combine(right, name);
+                await CommitPathBarAsync();
+            }
+            var tabs = _textSessions.Select(s => s.TabButton!).ToList();
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            UpdateLayout();
+            if (tabs.Count != names.Length) throw new InvalidOperationException($"Expected {names.Length} tabs, found {tabs.Count}.");
+            if (TabWidthLimit > Math.Max(FolderTab.ActualWidth, MinTabWidth) + 0.5)
+                throw new InvalidOperationException($"No tab may grow past the Folder tab: the width limit is {TabWidthLimit:0}, the Folder tab {FolderTab.ActualWidth:0}.");
+            foreach (var tab in tabs)
+                if (tab.ActualWidth > TabWidthLimit + 0.5)
+                    throw new InvalidOperationException($"A tab with a long caption is wider than the Folder tab ({tab.ActualWidth:0} > {TabWidthLimit:0}).");
+            var captions = _textSessions.Select(s => s.Caption!.Text).ToList();
+            for (int i = 0; i < names.Length; i++)
+                if (!captions[i].Contains('…') || !captions[i].EndsWith(Path.GetExtension(names[i]), StringComparison.Ordinal))
+                    throw new InvalidOperationException($"A long name must be trimmed in the middle with its extension kept: '{captions[i]}' for {names[i]}.");
+            if (captions.Distinct(StringComparer.Ordinal).Count() != captions.Count)
+                throw new InvalidOperationException("Tabs of files that differ only at the end of their names must stay distinguishable: " + string.Join(" | ", captions));
+            foreach (var session in _textSessions)
+                if (!(session.TabButton!.ToolTip as string ?? "").Contains(session.LeftPath, StringComparison.Ordinal))
+                    throw new InvalidOperationException("The tab tooltip must carry the full path behind a trimmed caption.");
+            if (Arg("--screenshot") is { } shot)
+            {
+                string full = Path.GetFullPath(shot);
+                SaveScreenshot(Path.Combine(Path.GetDirectoryName(full)!, Path.GetFileNameWithoutExtension(full) + ".tabs.png"));
+            }
+
+            // A strip three tabs wide cannot show four file tabs: the right-most tab just became active
+            // and must have been scrolled into view; the wheel then moves the strip both ways.
+            TabStripScroll.MaxWidth = FolderTab.ActualWidth * 3 + 10;
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            UpdateLayout();
+            if (TabStripScroll.ScrollableWidth <= 0) throw new InvalidOperationException("Smoke precondition: the tabs must overflow the shrunken strip.");
+            // Activating the right-most tab, which now lies beyond the viewport, must reveal it.
+            TabStripScroll.ScrollToHorizontalOffset(0);
+            await SwitchToSession(_textSessions[0]);
+            await SwitchToSession(_textSessions[^1]);
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            UpdateLayout();
+            double shown = TabStripScroll.HorizontalOffset;
+            var active = _activeSession!.TabButton!;
+            double activeLeft = active.TranslatePoint(new Point(0, 0), TabStripScroll).X;
+            if (shown <= 0 || activeLeft < -0.5 || activeLeft + active.ActualWidth > TabStripScroll.ViewportWidth + 0.5)
+                throw new InvalidOperationException($"The tab that became active must be scrolled into view (x {activeLeft:0}..{activeLeft + active.ActualWidth:0} in a viewport of {TabStripScroll.ViewportWidth:0}, offset {shown:0}).");
+            void Wheel(int delta)
+            {
+                var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, delta) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+                tabs[0].RaiseEvent(wheel);
+                if (!wheel.Handled) throw new InvalidOperationException("The mouse wheel over the tab strip must scroll the tabs once they overflow.");
+            }
+            Wheel(+120);   // wheel up: towards the first tabs
+            UpdateLayout();
+            if (TabStripScroll.HorizontalOffset >= shown)
+                throw new InvalidOperationException($"Wheel up over the tab strip must scroll it towards the first tabs (offset {TabStripScroll.HorizontalOffset:0}, was {shown:0}).");
+            double top = TabStripScroll.HorizontalOffset;
+            Wheel(-120);   // wheel down: towards the last tabs
+            UpdateLayout();
+            if (TabStripScroll.HorizontalOffset <= top)
+                throw new InvalidOperationException($"Wheel down over the tab strip must scroll it towards the last tabs (offset {TabStripScroll.HorizontalOffset:0}, was {top:0}).");
+
+            // Without an overflow there is nothing to scroll and the wheel is left to whatever is below.
+            TabStripScroll.MaxWidth = stripLimit;
+            await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+            UpdateLayout();
+            if (TabStripScroll.ScrollableWidth > 0) throw new InvalidOperationException("Smoke precondition: the tabs must fit the strip again.");
+            var idleWheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent };
+            tabs[0].RaiseEvent(idleWheel);
+            if (idleWheel.Handled) throw new InvalidOperationException("Without an overflow the tab strip must not consume the mouse wheel.");
+        }
+        finally
+        {
+            TabStripScroll.MaxWidth = stripLimit;
+            try { Directory.Delete(directory, true); } catch { /* locked temp files go away with the process */ }
+        }
     }
 
     /// <summary>A hex tab and a text tab side by side: whichever is active shows its own view. The

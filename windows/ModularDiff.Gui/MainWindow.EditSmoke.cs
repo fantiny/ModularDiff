@@ -69,7 +69,7 @@ public partial class MainWindow
             Require(_rightBuffer.Text == cssRight, "Split undo must restore in one step");
             AutoRealignToggle.IsChecked = false;
             ApplySplit(RightCode, splitter, [1]);
-            Require(HunkLabel.Text.Contains("未对齐"), "Manual realign pending hint");
+            Require(HunkLabel.Text.Contains(ModularDiff.Gui.Controls.Lang.Get("hunks_unaligned")), "Manual realign pending hint");   // 与语言包比较:界面语言随用户选择持久化,不一定是中文
             string splitDraft = _rightBuffer.Text;
             RealignClick(this, new RoutedEventArgs()); await _editTask;
             Require(_presentation is not null && _presentation.Rows.Count > 3, "Manual realign recomputes");
