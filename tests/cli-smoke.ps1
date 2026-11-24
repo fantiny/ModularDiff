@@ -112,5 +112,11 @@ if ($Gui) {
     if ($process.ExitCode -ne 0) { throw 'Sync UI smoke failed; see artifacts/gui/sync-smoke-error.txt' }
     Write-Output 'PASS directory multiselection / batch / preview / backup / journal / history / recovery / refresh'
     $checks++
+    $filterArguments = @('"' + $guiDll + '"', '--filter-smoke-test')
+    $process = Start-Process -FilePath $dotnetExe -ArgumentList $filterArguments -WindowStyle Hidden -PassThru -Wait
+    $filterReceipt = Join-Path $repoRoot 'artifacts/gui/filter-smoke-result.json'
+    if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $filterReceipt)) { throw 'Filter-as-you-type smoke failed; see artifacts/gui/filter-smoke-error.txt' }
+    Write-Output 'PASS filter-as-you-type: pooled folder rows, scroll, keyboard, selection, header, keystroke budget'
+    $checks++
 }
 Write-Output "$checks end-to-end checks passed."

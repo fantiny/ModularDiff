@@ -16,6 +16,30 @@
   <Style TargetType="DataGrid"><Setter Property="Background" Value="White"/><Setter Property="Foreground" Value="#435164"/><Setter Property="BorderThickness" Value="0"/><Setter Property="GridLinesVisibility" Value="None"/><Setter Property="HeadersVisibility" Value="Column"/><Setter Property="RowHeaderWidth" Value="0"/><Setter Property="IsReadOnly" Value="True"/><Setter Property="AutoGenerateColumns" Value="False"/><Setter Property="CanUserAddRows" Value="False"/><Setter Property="CanUserSortColumns" Value="False"/><Setter Property="CanUserReorderColumns" Value="False"/><Setter Property="RowHeight" Value="27"/><Setter Property="EnableRowVirtualization" Value="True"/><Setter Property="SelectionMode" Value="Extended"/><Setter Property="SelectionUnit" Value="FullRow"/><Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/></Style>
   <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#F2F4F7"/><Setter Property="Foreground" Value="#748195"/><Setter Property="FontSize" Value="11"/><Setter Property="Padding" Value="8,8"/><Setter Property="BorderBrush" Value="#DFE4EC"/><Setter Property="BorderThickness" Value="0,0,0,1"/></Style>
   <Style TargetType="DataGridCell"><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="5,2"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="DataGridCell"><Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}"><ContentPresenter VerticalAlignment="Center"/></Border></ControlTemplate></Setter.Value></Setter><Style.Triggers><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#DCE9FB"/><Setter Property="Foreground" Value="#233B5C"/></Trigger></Style.Triggers></Style>
-  <Style x:Key="FolderRow" TargetType="DataGridRow"><Setter Property="Foreground" Value="{Binding Color}"/><Setter Property="Background" Value="White"/><Setter Property="ToolTip" Value="{Binding Description}"/><Style.Triggers><DataTrigger Binding="{Binding IsDirectory}" Value="True"><Setter Property="Background" Value="#F8F9FC"/><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#DCE9FB"/></Trigger></Style.Triggers></Style>
+  <!-- Folder view. FolderList keeps one row visual per visible row for the life of the list; a filter keystroke or a scroll only re-points rows. -->
+  <Style TargetType="{x:Type ui:FolderList}">
+   <Setter Property="Focusable" Value="True"/><Setter Property="Background" Value="White"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="{x:Type ui:FolderList}">
+    <Border Background="{TemplateBinding Background}">
+     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Grid Grid.Row="0" Background="#F2F4F7" ClipToBounds="True"><ContentPresenter ContentSource="Header"><ContentPresenter.RenderTransform><TranslateTransform x:Name="PART_HeaderShift"/></ContentPresenter.RenderTransform></ContentPresenter></Grid>
+      <ScrollViewer x:Name="PART_Scroll" Grid.Row="1" Focusable="False" CanContentScroll="True" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"><ui:FolderRowHost x:Name="PART_Rows"/></ScrollViewer>
+     </Grid>
+    </Border>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="FolderRow" TargetType="Border">
+   <Setter Property="Background" Value="White"/><Setter Property="ToolTip" Value="{Binding Description}"/>
+   <Setter Property="TextElement.Foreground" Value="{Binding Color}"/>
+   <Style.Triggers><DataTrigger Binding="{Binding IsDirectory}" Value="True"><Setter Property="Background" Value="#F8F9FC"/><Setter Property="TextElement.FontWeight" Value="SemiBold"/></DataTrigger><Trigger Property="ui:FolderRowHost.IsSelected" Value="True"><Setter Property="Background" Value="#DCE9FB"/><Setter Property="TextElement.Foreground" Value="#233B5C"/></Trigger><Trigger Property="ui:FolderRowHost.IsCurrent" Value="True"><Setter Property="BorderBrush" Value="#7FA0D2"/><Setter Property="BorderThickness" Value="0,1"/></Trigger></Style.Triggers>
+  </Style>
+  <!-- The folder columns: the header and the row templates share these, so their edges line up. -->
+  <Style x:Key="FolderNameColumn" TargetType="ColumnDefinition"><Setter Property="Width" Value="*"/><Setter Property="MinWidth" Value="160"/></Style>
+  <Style x:Key="FolderSizeColumn" TargetType="ColumnDefinition"><Setter Property="Width" Value="72"/></Style>
+  <Style x:Key="FolderModifiedColumn" TargetType="ColumnDefinition"><Setter Property="Width" Value="130"/></Style>
+  <Style x:Key="FolderStatusColumn" TargetType="ColumnDefinition"><Setter Property="Width" Value="64"/></Style>
+  <Style x:Key="FolderHeader" TargetType="Border"><Setter Property="Background" Value="#F2F4F7"/><Setter Property="BorderBrush" Value="#DFE4EC"/><Setter Property="BorderThickness" Value="0,0,0,1"/><Setter Property="Padding" Value="0,8"/><Setter Property="SnapsToDevicePixels" Value="True"/></Style>
+  <Style x:Key="FolderHeaderText" TargetType="TextBlock"><Setter Property="Foreground" Value="#748195"/><Setter Property="FontSize" Value="11"/><Setter Property="Margin" Value="8,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
+  <Style x:Key="FolderCellText" TargetType="TextBlock"><Setter Property="Margin" Value="5,0"/><Setter Property="VerticalAlignment" Value="Center"/></Style>
  </Application.Resources>
 </Application>

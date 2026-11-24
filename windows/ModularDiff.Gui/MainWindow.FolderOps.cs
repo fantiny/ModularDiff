@@ -19,7 +19,7 @@ public partial class MainWindow
     private void FolderMenuOpening(object sender, ContextMenuEventArgs e)
     {
         if (_folderResult is null) return;
-        var grid = (DataGrid)sender;
+        var grid = (Controls.FolderList)sender;
         if (grid.SelectedItem is not FolderNode node) return;
         e.Handled = true;
         bool fromLeft = ReferenceEquals(sender, LeftFolders);

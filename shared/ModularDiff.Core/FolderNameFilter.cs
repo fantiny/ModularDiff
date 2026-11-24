@@ -6,6 +6,7 @@ namespace ModularDiff.Core;
 /// <summary>VS Code–style path/name filter: substring, glob (* ? **), or .NET regex.</summary>
 public sealed class FolderNameFilter
 {
+    // Takes the relative path already in filter form ('/' separators) and the bare name.
     private readonly Func<string, string, bool> _match;
 
     private FolderNameFilter(Func<string, string, bool> match, bool isEmpty, string? error)
@@ -29,7 +30,7 @@ public sealed class FolderNameFilter
             try
             {
                 var re = new Regex(trimmed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-                return new((path, name) => re.IsMatch(Normalize(path)) || re.IsMatch(name), isEmpty: false, error: null);
+                return new((path, name) => re.IsMatch(path) || re.IsMatch(name), isEmpty: false, error: null);
             }
             catch (ArgumentException ex)
             {
@@ -39,16 +40,22 @@ public sealed class FolderNameFilter
 
         if (trimmed.IndexOfAny(['*', '?']) < 0)
         {
+            string needle = Normalize(trimmed);
             return new((path, name) =>
-                Normalize(path).Contains(Normalize(trimmed), StringComparison.OrdinalIgnoreCase)
+                path.Contains(needle, StringComparison.OrdinalIgnoreCase)
                 || name.Contains(trimmed, StringComparison.OrdinalIgnoreCase), isEmpty: false, error: null);
         }
 
         var glob = GlobToRegex(Normalize(trimmed));
-        return new((path, name) => glob.IsMatch(Normalize(path)) || glob.IsMatch(name), isEmpty: false, error: null);
+        return new((path, name) => glob.IsMatch(path) || glob.IsMatch(name), isEmpty: false, error: null);
     }
 
-    public bool Matches(string relativePath, string name) => _match(relativePath, name);
+    public bool Matches(string relativePath, string name) => _match(Normalize(relativePath), name);
+
+    /// <summary><see cref="Matches"/> for a path already in filter form ('/' separators). A filter
+    /// box re-evaluates every node on each keystroke; callers that cache the form avoid rebuilding
+    /// it for each node.</summary>
+    public bool MatchesNormalized(string normalizedPath, string name) => _match(normalizedPath, name);
 
     private static string Normalize(string path) => path.Replace('\\', '/');
 

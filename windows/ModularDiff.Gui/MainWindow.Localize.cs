@@ -21,13 +21,8 @@ public partial class MainWindow
             RefreshDynamicTexts();
         }
         UpdateEditState();
-        // Folder row tooltips read the language at binding time; re-bind so they follow a switch.
-        if (LeftFolders.ItemsSource is not null)
-        {
-            var source = LeftFolders.ItemsSource;
-            LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
-            LeftFolders.ItemsSource = RightFolders.ItemsSource = source;
-        }
+        // Folder row tooltips read the language at binding time; re-point the rows so they follow a switch.
+        LeftFolders.Refresh(); RightFolders.Refresh();
     }
 
     /// <summary>Plugin-backed combo boxes show plugin display names through Lang.Text (see

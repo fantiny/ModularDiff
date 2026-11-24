@@ -189,7 +189,7 @@ public partial class MainWindow
         if (_textSessions.Count != tabs || _activeSession is not { IsBlank: false } || _textFile is null || TextView.Visibility != Visibility.Visible)
             throw new InvalidOperationException($"A file pair typed into the path bar must load into the active blank tab (tabs {_textSessions.Count} → expected {tabs}, "
                 + $"blank={_activeSession?.IsBlank}, file={_textFile is not null}, textView={TextView.Visibility}, status='{StatusLabel.Text}').");
-        if (_folderResult is null || _tree is null || LeftFolders.ItemsSource is null)
+        if (_folderResult is null || _tree is null || LeftFolders.Rows.Count == 0)
             throw new InvalidOperationException("Comparing a file pair from the path bar must not wipe the folder comparison.");
 
         // A wrong path: the reason is shown at the offending box and the committed pair is restored.
@@ -203,7 +203,7 @@ public partial class MainWindow
 
         // The Folder tab still lists its rows and restores the directory roots.
         FolderTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-        if (LeftFolders.Items.Count == 0 || !string.Equals(LeftPath.Text, _folderResult.LeftPath, StringComparison.OrdinalIgnoreCase))
+        if (LeftFolders.Rows.Count == 0 || !string.Equals(LeftPath.Text, _folderResult.LeftPath, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The Folder tab lost its comparison after a path-bar file compare.");
 
         // Long file names: every tab has the same maximum width; the caption trims, the × stays inside.

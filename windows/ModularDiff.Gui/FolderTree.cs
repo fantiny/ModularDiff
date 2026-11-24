@@ -19,6 +19,10 @@ public sealed class FolderNode
     public FileStatus Status { get; set; }
     public List<FolderNode> Children { get; } = [];
     public FolderNode? Parent { get; set; }
+    private string? _normalizedPath;
+    /// <summary>RelativePath with '/' separators — the form the name filter matches. Every
+    /// keystroke in the filter box evaluates the whole tree, so it is built once per node.</summary>
+    public string NormalizedPath => _normalizedPath ??= RelativePath.Replace('\\', '/');
     public string LeftSize { get; set; } = "";
     public string RightSize { get; set; } = "";
     public string LeftModified { get; set; } = "";
@@ -195,55 +199,50 @@ public sealed class FolderTree
         return FileStatus.Equal;
     }
 
+    private readonly List<FolderNode> _rows = [];
+
+    /// <summary>The nodes to show under a status filter and a name filter, in tree order. A
+    /// folder with content is shown when a descendant is; a collapsed one hides its children
+    /// unless a name filter is on, which opens every folder. Runs once per keystroke in the
+    /// filter box, so it visits each node at most once and allocates nothing; the returned
+    /// list is reused by the next call.</summary>
     public IReadOnlyList<FolderNode> Visible(int filter, FolderNameFilter nameFilter)
     {
-        var rows = new List<FolderNode>();
-        var matches = new Dictionary<FolderNode, bool>();
+        _rows.Clear();
         bool searching = !nameFilter.IsEmpty;
-        bool Matches(FolderNode node)
+        bool Passes(FolderNode node) => filter switch
         {
-            if (matches.TryGetValue(node, out bool value)) return value;
-            bool match;
-            if (node.IsDirectory)
+            1 => node.Status is not FileStatus.Equal,
+            2 => node.Status == FileStatus.Equal,
+            3 => node.Status == FileStatus.LeftOnly,
+            4 => node.Status == FileStatus.RightOnly,
+            _ => true,
+        };
+        bool Belongs(FolderNode node) =>
+            Passes(node) && (!searching || nameFilter.MatchesNormalized(node.NormalizedPath, node.Name));
+        // Returns whether the node belongs; the rows it contributes are in place when it does.
+        bool Visit(FolderNode node)
+        {
+            if (!node.IsDirectory || node.Children.Count == 0)
             {
                 // Unscanned / empty dirs still appear so the root wave is visible immediately.
-                bool childMatch = node.Children.Any(Matches);
-                match = node.Children.Count == 0
-                    ? filter switch
-                    {
-                        1 => node.Status is not FileStatus.Equal,
-                        2 => node.Status == FileStatus.Equal,
-                        3 => node.Status == FileStatus.LeftOnly,
-                        4 => node.Status == FileStatus.RightOnly,
-                        _ => true,
-                    }
-                    : childMatch;
-                if (match && searching)
-                    match = nameFilter.Matches(node.RelativePath, node.Name) || childMatch;
+                if (!Belongs(node)) return false;
+                _rows.Add(node);
+                return true;
             }
-            else
-            {
-                match = (filter switch
-                {
-                    1 => node.Status is not FileStatus.Equal,
-                    2 => node.Status == FileStatus.Equal,
-                    3 => node.Status == FileStatus.LeftOnly,
-                    4 => node.Status == FileStatus.RightOnly,
-                    _ => true,
-                }) && (!searching || nameFilter.Matches(node.RelativePath, node.Name));
-            }
-            matches[node] = match; return match;
+            // The folder's row goes first and is taken back if no descendant belongs; the
+            // descendants stay in the list only while the folder shows its children.
+            int start = _rows.Count;
+            _rows.Add(node);
+            bool open = node.IsExpanded || searching, descendant = false;
+            foreach (var child in node.Children)
+                if (Visit(child)) { descendant = true; if (!open) break; }
+            if (!descendant) { _rows.RemoveAt(start); return false; }
+            if (!open) _rows.RemoveRange(start + 1, _rows.Count - start - 1);
+            return true;
         }
-        void Add(IEnumerable<FolderNode> list)
-        {
-            foreach (var node in list)
-            {
-                if (!Matches(node)) continue;
-                rows.Add(node);
-                if (node.IsDirectory && (node.IsExpanded || searching)) Add(node.Children);
-            }
-        }
-        Add(Roots); return rows;
+        foreach (var root in Roots) Visit(root);
+        return _rows;
     }
     private static (string Size, string Modified) Metadata(string path)
     {

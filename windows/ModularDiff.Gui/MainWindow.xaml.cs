@@ -25,11 +25,11 @@ public partial class MainWindow : Window
     private ComparisonResult? _folderResult, _fileResult;
     private ComparisonRequest? _rootRequest;
     private FolderTree? _tree;
-    private IReadOnlyList<FolderNode> _folderRows = [];
+    private readonly List<FolderNode> _folderRows = [];
     private FolderNode? _currentNode;
     /// <summary>Sticky left/right file picks for BC-style cross-name compare. Survives the
     /// non-Ctrl first click of a double-click so Open still uses the independent pair.</summary>
-    // 目录视图选择:两侧 DataGrid 各自独立;跨文件配对在打开时解析(见 OpenSelectedFiles)。
+    // 目录视图选择:两侧 FolderList 各自独立;跨文件配对在打开时解析(见 OpenSelectedFiles)。
     private FileComparison? _textFile;
     private CancellationTokenSource? _comparisonCancellation, _detailCancellation;
     private bool _ready, _busy, _syncText, _syncFolderScroll, _syncFolderSelection;
@@ -95,10 +95,12 @@ public partial class MainWindow : Window
         LeftPath.TextChanged += (_, _) => UpdatePathBoxTips();
         RightPath.TextChanged += (_, _) => UpdatePathBoxTips();
         InitializeEditing(); InitializeSync(); InitializeLineTools(); InitializeSessions(); InitializeFolderOps(); InitializeTabs();
+        LeftFolders.SelectionChanged += FolderSelectionChanged; RightFolders.SelectionChanged += FolderSelectionChanged;
         _ready = true;
         LocalizeUI();   // plugin lists and state-derived labels exist only after initialization
         if (double.TryParse(Arg("--smoke-width"), out double width)) Width = Math.Max(MinWidth, width);
-        if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
+        if (arguments.Contains("--filter-smoke-test")) Loaded += FilterSmokeTest;
+        else if (arguments.Contains("--sync-smoke-test")) Loaded += SyncSmokeTest;
         else if (arguments.Contains("--edit-smoke-test")) Loaded += EditSmokeTest;
         else if (arguments.Contains("--smoke-test")) Loaded += SmokeTest;
         else if (arguments.Contains("--auto-compare")) Loaded += async (_, _) =>
@@ -258,12 +260,12 @@ public partial class MainWindow : Window
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
         _binarySession = null;   // the panes are about to show a new root comparison, not a tab's bytes
-        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows = [];
+        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows.Clear();
         _folderSnapshotVersion++;
         while (_folderAdds.TryDequeue(out _)) { }
         while (_folderUpdates.TryDequeue(out _)) { }
         _folderProgressStatus = ""; _folderProgressActivity = ModularDiff.Gui.Controls.Lang.Get("activity_comparing"); _folderUiDirty = false;
-        LeftFolders.ItemsSource = RightFolders.ItemsSource = null;
+        LeftFolders.SetRows([]); RightFolders.SetRows([]);
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);
         HexHost.Visibility = Visibility.Collapsed; PictureHost.Visibility = Visibility.Collapsed;
         FolderView.Visibility = Visibility.Visible; TextView.Visibility = Visibility.Collapsed;
@@ -513,30 +515,41 @@ public partial class MainWindow : Window
         UpdateEditState();
         if (!text) UpdateFolderSelectionStatus();   // back on the Folder tab: describe the selection again
     }
+    /// <summary>Recomputes the rows of the folder grids from the status filter, the name filter
+    /// and the expand state, keeping each side's own selection. The lists keep their row visuals
+    /// and only point them at the nodes now at each position.</summary>
     private void RefreshFolderRows(FolderNode? selected = null)
     {
         if (!_ready || _tree is null) return;
         selected ??= LeftFolders.SelectedItem as FolderNode;
         var nameFilter = CurrentFolderNameFilter();
-        _folderRows = _tree.Visible(FolderFilter.SelectedIndex, nameFilter);
+        _folderRows.Clear();
+        _folderRows.AddRange(_tree.Visible(FolderFilter.SelectedIndex, nameFilter));
         _syncFolderSelection = true;
-        LeftFolders.ItemsSource = RightFolders.ItemsSource = _folderRows;
+        LeftFolders.SetRows(_folderRows); RightFolders.SetRows(_folderRows);
         // 两侧各自保留自己的选择(仍在可见行内);此前统一到同一行会抹掉跨文件选择的一侧。
         FolderNode? Pick(FolderNode? current, FolderNode? fallback) =>
             current is not null && _folderRows.Contains(current) ? current
             : fallback is not null && _folderRows.Contains(fallback) ? fallback
-            : _folderRows.FirstOrDefault();
+            : _folderRows.Count > 0 ? _folderRows[0] : null;
         LeftFolders.SelectedItem = Pick(LeftFolders.SelectedItem as FolderNode, selected);
         RightFolders.SelectedItem = Pick(RightFolders.SelectedItem as FolderNode, selected);
         _syncFolderSelection = false;
         UpdateFolderSummary();
         if (nameFilter.Error is not null)
-            StatusLabel.Text = nameFilter.Error;
+            StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Text(nameFilter.Error);
     }
     private FolderNameFilter CurrentFolderNameFilter() =>
         FolderNameFilter.Create(FolderSearch.Text, FolderSearchRegex.IsChecked == true);
-    private void FolderFilterChanged(object sender, SelectionChangedEventArgs e) => RefreshFolderRows();
-    private void FolderSearchChanged(object sender, TextChangedEventArgs e) => RefreshFolderRows();
+    private void FolderFilterChanged(object sender, SelectionChangedEventArgs e) { RefreshFolderRows(); ScrollFoldersToTop(); }
+    private void FolderSearchChanged(object sender, TextChangedEventArgs e) { RefreshFolderRows(); ScrollFoldersToTop(); }
+    /// <summary>A changed filter starts a new result at the top; refreshing for other reasons
+    /// (progressive scan, expand/collapse) must not pull the user back up.</summary>
+    private void ScrollFoldersToTop()
+    {
+        if (!_ready || _tree is null) return;   // the XAML raises the filter events while the window is still being built
+        LeftFolders.ScrollToTop(); RightFolders.ScrollToTop();
+    }
     private void FolderSearchRegexChanged(object sender, RoutedEventArgs e) => RefreshFolderRows();
     private void ClearFolderSearch(object sender, RoutedEventArgs e) => FolderSearch.Clear();
     private void ExpandAll(object sender, RoutedEventArgs e) { if (_tree is null) return; foreach (var node in _tree.All) node.IsExpanded = true; RefreshFolderRows(); }
@@ -546,7 +559,7 @@ public partial class MainWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is FolderNode { IsDirectory: true } node) { ToggleFolder(node); e.Handled = true; }
     }
-    private void FolderSelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void FolderSelectionChanged(object? sender, EventArgs e)
     {
         if (_syncFolderSelection) return;
         // The status line belongs to the view on screen. Folder selection also changes while a text
@@ -577,12 +590,12 @@ public partial class MainWindow : Window
         if (target is null) return;
         _syncFolderScroll = true; target.ScrollToVerticalOffset(source.VerticalOffset); _syncFolderScroll = false;
     }
-    /// <summary>Second click of a double-click: open before DataGrid toggles selection
-    /// (Ctrl+click on an already-selected row would otherwise deselect it).</summary>
+    /// <summary>Second click of a double-click: open with the clicked row selected (the list
+    /// does not toggle the selection away under a double-click's second click).</summary>
     private async void FolderPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ClickCount != 2 || e.ChangedButton != MouseButton.Left) return;
-        if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is not FolderNode node) return;
+        if (sender is not Controls.FolderList { } list || list.RowAt(e) is not FolderNode node) return;
         e.Handled = true;
         if (node.IsDirectory) { ToggleFolder(node); return; }
         // 双击的行已在其所在格的选区内;打开语义统一交给 OpenSelectedFiles 按两侧各自选择解析
@@ -593,12 +606,12 @@ public partial class MainWindow : Window
     {
         // Opening is handled in PreviewMouseLeftButtonDown (ClickCount==2) so selection
         // is not wiped; keep this handler to mark the event handled on the bubble route.
-        if (FindParent<DataGridRow>(e.OriginalSource as DependencyObject)?.Item is FolderNode)
+        if (sender is Controls.FolderList { } list && list.RowAt(e) is not null)
             e.Handled = true;
     }
     private async void FolderKeyDown(object sender, KeyEventArgs e)
     {
-        if (((DataGrid)sender).SelectedItem is not FolderNode node) return;
+        if (sender is not Controls.FolderList { SelectedItem: FolderNode node }) return;
         if (e.Key == Key.Enter) { e.Handled = true; if (node.IsDirectory) ToggleFolder(node); else await OpenSelectedFiles(); }
         else if (node.IsDirectory && e.Key is Key.Left or Key.Right)
         { node.IsExpanded = e.Key == Key.Right; RefreshFolderRows(node); e.Handled = true; }
@@ -1230,7 +1243,7 @@ public partial class MainWindow : Window
             string? screenshot = Arg("--screenshot");
             if (_folderResult is not null)
             {
-                if (_folderResult.HasErrors || !ReferenceEquals(LeftFolders.ItemsSource, RightFolders.ItemsSource)) throw new InvalidOperationException("Folder panes are not aligned.");
+                if (_folderResult.HasErrors || !ReferenceEquals(LeftFolders.Rows, RightFolders.Rows)) throw new InvalidOperationException("Folder panes are not aligned.");
                 // Path bar Enter: invalid / mixed kinds restore committed paths and keep the result.
                 string okLeft = LeftPath.Text, okRight = RightPath.Text;
                 LeftPath.Text = Path.Combine(okLeft, "__no_such_path__");
