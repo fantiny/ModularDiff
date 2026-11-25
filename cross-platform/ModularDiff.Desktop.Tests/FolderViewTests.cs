@@ -1,0 +1,274 @@
+using System.Text.RegularExpressions;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Threading;
+using ModularDiff.Contracts;
+using ModularDiff.Core;
+using ModularDiff.Desktop;
+
+/// <summary>macOS 目录视图与同步的契约测试。
+/// 背景:目录模块改为渐进式扫描、结果里出现目录条目与 Pending 之后,Desktop 既没有应用增量,
+/// 同步预览又开始显示插件发出的原始语言键,不选文件时还把目录也纳入同步计划 —— 全都没有测试覆盖。</summary>
+internal static class FolderViewTests
+{
+    private static void Pump(Window window, int milliseconds = 250)
+    {
+        var end = DateTime.UtcNow.AddMilliseconds(milliseconds);
+        while (DateTime.UtcNow < end) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Thread.Sleep(10); }
+    }
+
+    private static MainWindow OpenFolder(string pluginsPath, string left, string right, Action<bool, string> check, string what)
+    {
+        var window = new MainWindow(["--plugins", pluginsPath, "--left", left, "--right", right, "--auto-compare"]);
+        window.Show();
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!window.FolderCompareComplete && DateTime.UtcNow < deadline) Pump(window, 20);
+        check(window.FolderCompareComplete, $"{what}: the folder compare did not finish (status: {window.StatusText})");
+        return window;
+    }
+
+    /// <summary>取回一个任务的结果而不脱离 UI 线程:这里不能 await —— 无头环境里 await 真实异步 IO 之后,
+    /// 后续体会落在线程池线程上,再碰控件就是 "Call from invalid thread"。</summary>
+    private static T OnUi<T>(Window window, Task<T> task)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline) Pump(window, 10);
+        Pump(window, 30);
+        return task.GetAwaiter().GetResult();   // 未完成或已失败:在这里抛出
+    }
+
+    private static void OnUi(Window window, Task task) => OnUi(window, ContinueWith(task));
+
+    private static async Task<bool> ContinueWith(Task task) { await task.ConfigureAwait(false); return true; }
+
+    private static FileComparison Entry(string path, FileStatus status, bool directory = false, string? note = null) =>
+        new(path, status, [], IsDirectory: directory, Note: note);
+
+    private static bool LooksRaw(string text) =>
+        Regex.IsMatch(text, @"\b(sync|file_status)_[a-z_]+") || Regex.IsMatch(text, @"(^|\s)(LeftToRight|RightToLeft|Skip|Modified|LeftOnly|RightOnly|Equal|Pending|Error|Copied|Failed|Skipped|Cancelled|Completed)(\s|$)");
+
+    public static void Run(string pluginsPath, PluginCatalog plugins, Action<bool, string> check)
+    {
+        check(Dispatcher.UIThread.CheckAccess(), "folder tests create windows, so they must be started on the UI thread");
+        check(SynchronizationContext.Current is not null, "folder tests need the Avalonia synchronization context: with it cleared, a window's awaited work resumes on a thread-pool thread and UI access throws. Insert the call before the test program clears the context.");
+        string originalDirectory = Environment.CurrentDirectory;
+        string root = Path.Combine(Path.GetTempPath(), "ModularDiff-folderview-" + Guid.NewGuid().ToString("N"));
+        string left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+        void Put(string side, string relative, string text)
+        {
+            string path = Path.Combine(side, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        Put(left, "same.txt", "s"); Put(right, "same.txt", "s");
+        Put(left, "diff.txt", "1"); Put(right, "diff.txt", "2");
+        Put(left, Path.Combine("sub", "nested.txt"), "n"); Put(right, Path.Combine("sub", "nested.txt"), "m");
+        Put(left, Path.Combine("onlyL", "z.txt"), "z");
+        Put(right, Path.Combine("onlyR", "w.txt"), "w");
+        Directory.CreateDirectory(Path.Combine(left, "emptyBoth")); Directory.CreateDirectory(Path.Combine(right, "emptyBoth"));
+
+        try
+        {
+            // ───────── 同步 ─────────
+            var sync = OpenFolder(pluginsPath, left, right, check, "sync");
+            sync.SelectFolderFiles();   // 清空选择:"不选 = 同步全部差异"
+            string[] targets = sync.SyncTargetPaths();
+            check(targets.Length == 4 && targets.Contains("diff.txt") && targets.Contains(Path.Combine("sub", "nested.txt"))
+                    && targets.Contains(Path.Combine("onlyL", "z.txt")) && targets.Contains(Path.Combine("onlyR", "w.txt")),
+                $"sync scope should be exactly the four differing files, got: {string.Join(", ", targets)}");
+            check(!targets.Any(t => t is "sub" or "onlyL" or "onlyR" or "emptyBoth"), $"folders must never be sync targets: {string.Join(", ", targets)}");
+
+            foreach (string pack in new[] { "中文", "English" })
+            {
+                Lang.Apply(pack);
+                var lines = OnUi(sync, sync.DescribeSync(SyncMode.LeftToRight));   // 计划在后台算:泵调度器直到取回
+                string all = string.Join("\n", lines);
+                check(lines.Count == 4, $"{pack}: preview should list 4 items, got {lines.Count}:\n{all}");
+                check(!Regex.IsMatch(all, @"\b(sync|file_status)_[a-z_]+") && (pack != "中文" || !LooksRaw(all)),
+                    $"{pack}: sync preview shows raw keys or enum names:\n{all}");
+                string diff = lines.First(l => l.Contains("diff.txt"));
+                check(diff.Contains(Lang.Get("file_status_modified")) && diff.Contains(Lang.Get("sync_choice_overwrite_right")), $"{pack}: preview should name the state and action in the UI language:\n{diff}");
+                string added = lines.First(l => l.Contains("z.txt"));
+                check(added.Contains(Lang.Get("file_status_left_only")) && added.Contains(Lang.Get("sync_choice_add_right")) && added.Contains(Lang.Get("sync_stamp_missing")),
+                    $"{pack}: one-side file should read as left-only / add to right / missing:\n{added}");
+            }
+
+            // 真实执行一次同步(临时目录内),结果与历史的文本同样不能是枚举名。
+            Lang.Apply("中文");
+            var plan = OnUi(sync, plugins.Get<ISyncPlanner>("sync-plan").PlanAsync(left, right, ["diff.txt"], SyncMode.LeftToRight));
+            var preview = plugins.Get<ISyncPreview>("sync-preview");
+            var safety = new SyncSafetyContext(Path.Combine(AppPaths.DataDirectory, "SyncHistory"), plugins.Get<ISyncBackup>("sync-backup"), plugins.Get<ISyncJournal>("sync-journal"));
+            var executed = OnUi(sync, plugins.Get<ISyncExecutor>("sync-execute").ExecuteAsync(plan, preview.Describe(plan).Select(p => new SyncDecision(p.RelativePath, p.SuggestedAction)).ToArray(), safety));
+            foreach (string pack in new[] { "中文", "English" })
+            {
+                Lang.Apply(pack);
+                string resultText = sync.SyncResultSummary(executed) + "\n" + string.Join("\n", sync.DescribeSyncResult(executed));
+                check(pack != "中文" || !LooksRaw(resultText), $"sync result shows raw enum names:\n{resultText}");
+                check(sync.SyncResultSummary(executed) == Lang.Get("sync_result_summary", 1, 0, 0, 0),
+                    $"{pack}: result summary should come from the pack: {sync.SyncResultSummary(executed)} vs {Lang.Get("sync_result_summary", 1, 0, 0, 0)}");
+                check(sync.DescribeSyncResult(executed).Count == 1 && sync.DescribeSyncResult(executed)[0].Contains("diff.txt"), "one result line per file");
+                check(sync.SyncOperationStateText("Completed") == Lang.Get("sync_op_completed") && sync.SyncOperationStateText("SomethingNew") == "SomethingNew",
+                    $"{pack}: history state should resolve through the pack and pass unknown states through");
+            }
+            Lang.Apply("中文");
+            sync.Close();
+
+            // ───────── 目录视图:增量 ─────────
+            var delta = new MainWindow(["--plugins", pluginsPath, "--left", left, "--right", right]);   // 不自动比较:手工喂进度
+            delta.Show(); Pump(delta);
+            var rootWave = new ComparisonResult(left, right, "directories", "myers",
+                [Entry("sub", FileStatus.Pending, directory: true, note: "子目录扫描中…"), Entry("same.txt", FileStatus.Pending, note: "内容比较中…"), Entry("diff.txt", FileStatus.Pending, note: "内容比较中…")], []);
+            delta.ApplyFolderProgress(new(0, 0, "scan:root", PartialResult: rootWave));
+            // 清单按相对路径有序(与发现顺序无关):增量插入时已显示的行不会跳位。
+            check(delta.FolderRows.Select(f => f.RelativePath).SequenceEqual(["diff.txt", "same.txt"]), $"root wave should list the two root files in path order (folders present on both sides are structure): {string.Join(", ", delta.FolderRows.Select(f => f.RelativePath))}");
+            check(delta.FolderRows.All(f => f.Status == FileStatus.Pending) && delta.StatusText.Contains(Lang.Get("folder_scan_root")), "root wave: rows pending and status bar announces the scan");
+            delta.ApplyFolderProgress(new(3, 0, "scan:wave:3", Added: [Entry(Path.Combine("sub", "nested.txt"), FileStatus.Pending, note: "内容比较中…"), Entry("onlyL", FileStatus.LeftOnly, directory: true)]));
+            check(delta.FolderRows.Count == 4 && delta.FolderRows.Any(f => f.RelativePath == Path.Combine("sub", "nested.txt")) && delta.FolderRows.Any(f => f.RelativePath == "onlyL"),
+                "an Added delta should grow the list, including a folder that exists on one side only");
+            delta.ApplyFolderProgress(new(1, 3, "diff.txt", FileUpdate: Entry("diff.txt", FileStatus.Modified)));
+            check(delta.FolderRows.Count == 4 && delta.FolderRows.Single(f => f.RelativePath == "diff.txt").Status == FileStatus.Modified, "a FileUpdate should resolve its row in place");
+            check(delta.StatusText.Contains(Lang.Get("folder_compare_progress", 1, 3, "diff.txt")), $"status bar should show compare progress: {delta.StatusText}");
+            delta.ApplyFolderProgress(new(2, 3, "ghost.txt", FileUpdate: Entry("ghost.txt", FileStatus.Equal)));
+            check(delta.FolderRows.Count == 5 && delta.FolderRows.Any(f => f.RelativePath == "ghost.txt"), "an update for an entry that was never announced still shows up");
+            delta.ApplyFolderProgress(new(0, 0, "scan:wave", Added: [Entry("diff.txt", FileStatus.Pending, note: "内容比较中…")]));
+            check(delta.FolderRows.Single(f => f.RelativePath == "diff.txt").Status == FileStatus.Modified, "a late placeholder must never overwrite an already-resolved row");
+            delta.ApplyFolderProgress(new(1, 3, "diff.txt", FileUpdate: Entry("diff.txt", FileStatus.Error, note: "left: boom")));
+            check(Lang.Text("left: boom") == "left: boom" && delta.FolderRows.Single(f => f.RelativePath == "diff.txt").Note == "left: boom", "error notes are kept on the entry and translated at display time");
+            delta.Close();
+
+            // ───────── 目录视图:名称筛选 / 状态筛选 ─────────
+            string filterRoot = Path.Combine(root, "filter");
+            foreach (var name in new[] { "src/a.cs", "src/b.txt", "readme.md", Path.Combine("docs", "deep", "c.cs"), Path.Combine("x", "y", "z.md") })
+            {   Put(Path.Combine(filterRoot, "L"), name, "L\n"); Put(Path.Combine(filterRoot, "R"), name, name.EndsWith(".md") ? "R\n" : "L\n"); }
+            var filtered = OpenFolder(pluginsPath, Path.Combine(filterRoot, "L"), Path.Combine(filterRoot, "R"), check, "filter");
+            int total = filtered.FolderRows.Count;
+            check(total == 5 && filtered.FolderTotalFiles == 5, $"5 files expected, got rows={total} total={filtered.FolderTotalFiles}");
+
+            filtered.SetFolderFilter("*.cs", regexMode: false, statusFilter: 0);
+            check(filtered.FolderRows.Select(f => f.RelativePath).Order().SequenceEqual(["docs/deep/c.cs".Replace('/', Path.DirectorySeparatorChar), "src/a.cs".Replace('/', Path.DirectorySeparatorChar)]),
+                $"glob '*.cs' should match both .cs files at any depth: {string.Join(", ", filtered.FolderRows.Select(f => f.RelativePath))}");
+            check(filtered.FolderFilterError is null && filtered.FolderVisibleCount == 2 && filtered.FolderVisibleCount <= filtered.FolderTotalFiles, "filter counts");
+            filtered.SetFolderFilter("src", regexMode: false, statusFilter: 0);
+            check(filtered.FolderRows.Count == 2, $"substring should match the relative path: {string.Join(", ", filtered.FolderRows.Select(f => f.RelativePath))}");
+            filtered.SetFolderFilter("A.CS", regexMode: false, statusFilter: 0);
+            check(filtered.FolderRows.Count == 1, "name filter is case-insensitive");
+            filtered.SetFolderFilter(@"\.txt$|^docs", regexMode: true, statusFilter: 0);
+            check(filtered.FolderRows.Count == 2, $"regex mode: {string.Join(", ", filtered.FolderRows.Select(f => f.RelativePath))}");
+            filtered.SetFolderFilter("[", regexMode: true, statusFilter: 0);
+            check(filtered.FolderRows.Count == 0 && !string.IsNullOrEmpty(filtered.FolderFilterError), "an invalid regex must show an error instead of throwing or matching everything");
+            filtered.SetFolderFilter("", regexMode: false, statusFilter: 0);
+            check(filtered.FolderRows.Count == 5 && filtered.FolderFilterError is null, "clearing the filter restores every row and the error");
+            filtered.SetFolderFilter("", regexMode: false, statusFilter: 1);   // 有差异:readme.md 与 x/y/z.md
+            check(filtered.FolderRows.Count == 2 && filtered.FolderRows.All(f => f.Status != FileStatus.Equal), "status filter 'differences' should keep only non-identical files");
+            filtered.SetFolderFilter("", regexMode: false, statusFilter: 2);   // 相同:两个 .cs 与 src/b.txt
+            check(filtered.FolderRows.Count == 3 && filtered.FolderRows.All(f => f.Status == FileStatus.Equal), "status filter 'identical' should keep only identical files");
+            filtered.SetFolderFilter("*.cs", regexMode: false, statusFilter: 2);   // 名称与状态筛选叠加
+            check(filtered.FolderRows.Count == 2, "name and status filters should combine");
+            filtered.SetFolderFilter("", regexMode: false, statusFilter: 1);
+            filtered.SetFolderFilter("", regexMode: false, statusFilter: 0);
+
+            // 行文本:状态用界面语言,不再输出枚举名;带上大小与修改时间。
+            var row = filtered.FolderRows.First(f => f.RelativePath.EndsWith("a.cs", StringComparison.Ordinal));
+            string zh = filtered.FolderRowText(row, left: true);
+            check(zh.Contains(Lang.Get("file_status_equal")) && !LooksRaw(zh) && zh.Contains("a.cs") && zh.Contains("B"), $"row text should be localized and carry size: {zh}");
+            Lang.Apply("English");
+            string en = filtered.FolderRowText(row, left: true);
+            check(en.Contains(Lang.Get("file_status_equal")) && !en.Contains("相同"), $"row text should follow the UI language: {en}");
+            Lang.Apply("中文");
+            var oneSide = filtered.FolderRows.First(f => f.RelativePath == Path.Combine("src", "b.txt") || f.Status == FileStatus.Modified);
+            check(filtered.FolderRowText(oneSide, left: false).Length > 0, "right column text");
+
+            // ───────── 跨文件打开:左 A ↔ 右 B ─────────
+            string crossRoot = Path.Combine(root, "cross");
+            Put(Path.Combine(crossRoot, "L"), "old-name.txt", "same content\n"); Put(Path.Combine(crossRoot, "R"), "new-name.txt", "same content\n");
+            var cross = OpenFolder(pluginsPath, Path.Combine(crossRoot, "L"), Path.Combine(crossRoot, "R"), check, "cross");
+            var oldRow = cross.FolderRows.Single(f => f.RelativePath == "old-name.txt");
+            var newRow = cross.FolderRows.Single(f => f.RelativePath == "new-name.txt");
+            OnUi(cross, cross.OpenPickedPair());
+            check(cross.SessionLeft is null && cross.StatusText.Length > 0, "opening a pair before both sides are picked must explain instead of opening");
+            cross.PickFolderSide(left: true, oldRow);
+            OnUi(cross, cross.OpenPickedPair());
+            check(cross.SessionLeft is null, "a half-picked pair must not open");
+            cross.PickFolderSide(left: false, newRow);
+            OnUi(cross, cross.OpenPickedPair()); Pump(cross);
+            check(cross.SessionLeft == Path.Combine(crossRoot, "L", "old-name.txt") && cross.SessionRight == Path.Combine(crossRoot, "R", "new-name.txt"),
+                $"cross-file open should load left A against right B: {cross.SessionLeft} ↔ {cross.SessionRight}");
+            check(cross.FolderRows.Count == 2, "the folder list must survive opening a file pair from it");
+            cross.Close();
+
+            var deadline = DateTime.MinValue;   // 路径栏用例的等待截止时间(在下面赋值)
+            // ───────── 路径栏:回车即比较 ─────────
+            var bars = new MainWindow(["--plugins", pluginsPath]);
+            bars.Show(); Pump(bars);
+            string LeftOnlyMessage(string path) => Lang.Text("左侧路径不存在：" + path);
+            bars.SetPathBars("   ", root);
+            check(!bars.CommitPathBars() && bars.StatusText == Lang.Text("请填写左右两侧路径。"), $"blank paths should be refused with a message: {bars.StatusText}");
+            bars.SetPathBars(Path.Combine(root, "nope"), root);
+            string missing = Path.GetFullPath(Path.Combine(root, "nope"));
+            check(!bars.CommitPathBars() && bars.StatusText == LeftOnlyMessage(missing), $"a missing left path should be refused: {bars.StatusText}");
+            bars.SetPathBars(root, Path.Combine(root, "nope"));
+            check(!bars.CommitPathBars() && bars.StatusText == Lang.Text("右侧路径不存在：" + missing), $"a missing right path should be refused: {bars.StatusText}");
+            bars.SetFolderFilter("", regexMode: false, statusFilter: 0);
+            bars.SetPathBars(Path.Combine(left, "diff.txt"), root);
+            check(!bars.CommitPathBars() && bars.StatusText == Lang.Text("左右须同为文件或同为目录。"), $"a file against a folder should be refused: {bars.StatusText}");
+            bars.SetPathBars("bad\0path", root);
+            check(!bars.CommitPathBars() && bars.StatusText.StartsWith("路径不合法", StringComparison.Ordinal), $"an unparseable path should be refused: {bars.StatusText}");
+            check(!bars.FolderCompareComplete && bars.FolderRows.Count == 0 && bars.PathBarBoxes[0].Text == "bad\0path", "a refused commit must not start a compare or rewrite the boxes");
+
+            // 成功:两侧都是目录 → 规范成绝对路径(去空白)并开始比较。
+            bars.SetPathBars("   " + left + "   ", "  " + right + "  ");
+            check(bars.CommitPathBars(), $"a valid folder pair should commit: {bars.StatusText}");
+            deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!bars.FolderCompareComplete && DateTime.UtcNow < deadline) Pump(bars, 20);
+            check(bars.FolderCompareComplete, $"committing the path bars should run the compare (status: {bars.StatusText})");
+            check(bars.PathBarTexts.Left == left && bars.PathBarTexts.Right == right, $"paths should be normalised to absolute paths: {bars.PathBarTexts.Left} | {bars.PathBarTexts.Right}");
+            check(bars.FolderTotalFiles == 5 && bars.FolderRows.Count == 7, $"L vs R: 5 files plus the two one-side folders as rows (files={bars.FolderTotalFiles}, rows={bars.FolderRows.Count})");
+            check(bars.FolderRows.Count(f => f.IsDirectory) == 2 && bars.FolderRows.Where(f => f.IsDirectory).All(f => f.RelativePath is "onlyL" or "onlyR"),
+                "folders that exist on one side only are listed; folders present on both sides are structure");
+
+            // 真实的 Enter 按键事件走同一条路;比较进行中再次回车不应重入。
+            // 真实的 Enter 按键走同一条路。判据不依赖时序:换一对"结果形态不同"的目录
+            // (L vs R 是 7 行:5 个文件 + 2 个单侧目录;筛选树是 5 行),看列表有没有变成新结果。
+            string filterLeft = Path.Combine(filterRoot, "L"), filterRight = Path.Combine(filterRoot, "R");
+            bars.SetPathBars(filterLeft, filterRight);
+            bars.PathBarBoxes[1].Focus();
+            bars.KeyPressQwerty(Avalonia.Input.PhysicalKey.A, Avalonia.Input.RawInputModifiers.None);   // 普通按键
+            Pump(bars);
+            check(bars.FolderRows.Count == 7, "a non-Enter key must not start a compare");
+            bars.KeyPressQwerty(Avalonia.Input.PhysicalKey.Enter, Avalonia.Input.RawInputModifiers.None);
+            check(bars.PathBarTexts.Left == filterLeft && bars.PathBarTexts.Right == filterRight, "Enter should leave the resolved paths in the boxes");
+            var enterDeadline = DateTime.UtcNow.AddSeconds(15);
+            while (bars.FolderRows.Count != 5 && DateTime.UtcNow < enterDeadline) Pump(bars, 20);
+            check(bars.FolderCompareComplete && bars.FolderRows.Count == 5 && bars.FolderTotalFiles == 5,
+                $"Enter on a path box should run the compare for the typed pair (rows={bars.FolderRows.Count}, complete={bars.FolderCompareComplete}, status={bars.StatusText})");
+            // 路径框里是相对写法(以当前工作目录为基准):提交后被规范成绝对路径 —— 之后"同路径重对齐"等判断才有稳定依据。
+            Environment.CurrentDirectory = root;
+            try
+            {
+                // macOS 的临时目录在符号链接之后(/var → /private/var):以当前工作目录为基准解析相对路径得到的
+                // 是真实路径,所以期望值必须用同一种方式算,不能拿测试手里的 /var/… 字符串硬比。
+                string expectedLeft = Path.GetFullPath("L"), expectedRight = Path.GetFullPath("R");
+                check(!expectedLeft.EndsWith(Path.DirectorySeparatorChar) && Directory.Exists(expectedLeft), "test precondition: relative base resolves to the tree");
+                bars.SetPathBars("  " + Path.GetRelativePath(root, left) + Path.DirectorySeparatorChar + "  ", Path.GetRelativePath(root, right));
+                check(bars.CommitPathBars(), $"a relative folder pair should commit: {bars.StatusText}");
+                // 左侧故意带尾部分隔符:提交后不得残留(否则 "L/" 与 "L" 会被当成两个路径)。
+                check(bars.PathBarTexts.Left == expectedLeft && bars.PathBarTexts.Right == expectedRight,
+                    $"relative input should resolve to absolute paths without a trailing separator: {bars.PathBarTexts.Left} | {bars.PathBarTexts.Right}");
+            }
+            finally { Environment.CurrentDirectory = originalDirectory; }
+            enterDeadline = DateTime.UtcNow.AddSeconds(15);
+            while (bars.FolderRows.Count != 7 && DateTime.UtcNow < enterDeadline) Pump(bars, 20);
+            check(bars.FolderRows.Count == 7 && bars.FolderCompareComplete, "compare after a relative-path commit");
+            deadline = DateTime.UtcNow.AddSeconds(15);
+            while (bars.FolderCompareComplete is false && DateTime.UtcNow < deadline) Pump(bars, 20);
+            Pump(bars);
+            bars.Close();
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            Lang.Apply("中文");
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+}

@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
 using Avalonia.Headless;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using ModularDiff.Contracts;
 using ModularDiff.Core;
@@ -26,6 +27,10 @@ AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions { Us
 string pluginsPath = Path.GetFullPath(args[0]);
 using var plugins = PluginCatalog.Load(pluginsPath);
 void Check(bool ok, string message) { if (!ok) throw new Exception(message); Console.WriteLine("PASS " + message); }
+// 按自动化标识(= 语言键)查找控件。不要用提示文字找控件:它会随界面语言变化,
+// 机器上保存的语言偏好一旦不同,用例就会以 "Sequence contains no matching element" 的面目随机失败。
+T ById<T>(Visual root, string id) where T : Control =>
+    root.GetVisualDescendants().OfType<T>().Single(control => AutomationProperties.GetAutomationId(control) == id);
 Check(plugins.Diagnostics.Count == 0, "plugin load");
 Check(string.Equals(AppPaths.DataDirectory, privateData, StringComparison.Ordinal)
       && SessionStore.DefaultPath.StartsWith(privateData, StringComparison.Ordinal)
@@ -83,14 +88,13 @@ Check(((string?)splitItem.Header)?.Contains("2 行") == true, "split menu report
 splitItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
 int before = rowsView.RowCount;
-var realignButton = window.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true);
-if (realignButton is null) { Console.WriteLine("LANGDBG packs=" + ModularDiff.Desktop.Lang.Available.Count + " cur=" + ModularDiff.Desktop.Lang.CurrentName + " want=" + ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0] + " tips=" + string.Join("§", window.GetVisualDescendants().OfType<Button>().Select(b => ToolTip.GetTip(b) as string).Where(t => t is not null).Take(8))); throw new Exception("realign button not found"); }
+var realignButton = ById<Button>(window, "md_tip_realign");
 realignButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var batchDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < batchDone) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
-Check(rowsView.RowCount - before == 2, $"batch split realigns to {rowsView.RowCount - before} extra rows (expected 2)");
+Check(rowsView.RowCount - before == 2, $"batch split realigns to {rowsView.RowCount - before} extra rows (expected 2); status: {window.StatusText}");
 // ⚡ 自动重对齐:开启后右键换行立即重算,无需点 ⟳。
-var autoToggle = window.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>().First(b => (b.Content as string) == "⚡");
+var autoToggle = ById<Avalonia.Controls.Primitives.ToggleButton>(window, "md_tip_auto");
 autoToggle.IsChecked = true;
 var gapRow = rowsView.Rows.First(r => r.Left?.Text.StartsWith("--gap:") == true);
 rowsView.SelectRows([gapRow]);
@@ -99,7 +103,7 @@ int autoBefore = rowsView.RowCount;
 gapItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
 Check(rowsView.RowCount - autoBefore == 1, $"auto-realign split adds 1 row immediately (got {rowsView.RowCount - autoBefore})");
-foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+foreach (var save in window.GetVisualDescendants().OfType<Button>().Where(b => AutomationProperties.GetAutomationId(b) == "md_tip_save_side"))
     save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var saveDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < saveDone) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
@@ -153,7 +157,7 @@ try
     Check(File.ReadAllText(Path.Combine(folderRight, "diff.txt")) == "left\n", "folder batch copy overwrites target");
     Check(File.Exists(Path.Combine(folderRight, "only.txt")), "folder batch copy creates missing target");
     var folderStatus = string.Join(" ", ((Grid)folderWindow.Content!).Children.OfType<TextBlock>().Select(t => t.Text));
-    Check(folderStatus.Contains("/") || folderStatus.Length > 0, $"folder batch copy reports outcome (status: {folderStatus[..Math.Min(60, folderStatus.Length)]})");
+    Check(folderStatus.Contains(Lang.Get("status_batch_copy_done", 2)), $"folder batch copy reports outcome (status: {folderStatus[..Math.Min(60, folderStatus.Length)]})");
     folderWindow.Close();
 }
 finally { Directory.Delete(folderRoot, recursive: true); }
@@ -170,7 +174,7 @@ try
     while (DateTime.UtcNow < opsReady) { Dispatcher.UIThread.RunJobs(); opsWindow.UpdateLayout(); Thread.Sleep(10);
         if (opsWindow.GetVisualDescendants().OfType<AlignedRowsView>().Any(v => v.RowCount > 0)) break; }
     var opsView = opsWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
-    var opsRealign = opsWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true);
+    var opsRealign = ById<Button>(opsWindow, "md_tip_realign");
     void OpsRealign() { opsRealign.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent)); var until = DateTime.UtcNow.AddSeconds(5); while (DateTime.UtcNow < until) { Dispatcher.UIThread.RunJobs(); opsWindow.UpdateLayout(); Thread.Sleep(10); } }
     // 文本转换走插件发现(.txt → 通配 GenericFileTools):Tab → 空格、修剪行尾空白
     var opsLabels = opsWindow.FileTypeActionLabels(true);
@@ -196,7 +200,7 @@ try
     OpsRealign();
     Check(opsView.Rows.Any(r => r.Right?.Text == "    indented"), "copy line to other side lands after realign");
     // 保存两侧后关闭(dirty 会话避免关闭弹窗)
-    foreach (var save in opsWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+    foreach (var save in opsWindow.GetVisualDescendants().OfType<Button>().Where(b => AutomationProperties.GetAutomationId(b) == "md_tip_save_side"))
         save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var opsSave = DateTime.UtcNow.AddSeconds(5);
     while (DateTime.UtcNow < opsSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
@@ -222,7 +226,7 @@ try
     var alignView2 = alignWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
     var after = alignView2.Rows.First(r => r.Left?.Text == "p").Right?.Text;
     Check(after == "Q", $"alignment hint re-pairs p with Q (before={pairedBefore}, after={after})");
-    foreach (var save in alignWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+    foreach (var save in alignWindow.GetVisualDescendants().OfType<Button>().Where(b => AutomationProperties.GetAutomationId(b) == "md_tip_save_side"))
         save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var alignSave = DateTime.UtcNow.AddSeconds(3);
     while (DateTime.UtcNow < alignSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
@@ -240,13 +244,13 @@ try
     Check(labels.Any(l => l.Contains("JSON") && l.Contains("压缩")), $"json filetype actions offered ({string.Join(",", labels)})");
     int compactIndex = labels.Select((l, i) => (l, i)).First(t => t.l.Contains("压缩")).i;
     jsonWindow.RunFileTypeAction(true, compactIndex);
-    jsonWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true)
+    ById<Button>(jsonWindow, "md_tip_realign")
         .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var jsonRealign = DateTime.UtcNow.AddSeconds(3);
     while (DateTime.UtcNow < jsonRealign) { Dispatcher.UIThread.RunJobs(); jsonWindow.UpdateLayout(); Thread.Sleep(10); }
     var jsonView = jsonWindow.GetVisualDescendants().OfType<AlignedRowsView>().Single();
     Check(jsonView.Rows.Any(r => r.Left?.Text.Trim() == "{\"b\":1,\"a\":2}"), "compact-json transform ran on left side");
-    foreach (var save in jsonWindow.GetVisualDescendants().OfType<Button>().Where(b => (ToolTip.GetTip(b) as string)?.StartsWith("保存此侧") == true))
+    foreach (var save in jsonWindow.GetVisualDescendants().OfType<Button>().Where(b => AutomationProperties.GetAutomationId(b) == "md_tip_save_side"))
         save.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var jsonSave = DateTime.UtcNow.AddSeconds(3);
     while (DateTime.UtcNow < jsonSave) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
@@ -336,6 +340,7 @@ try
 }
 finally { Directory.Delete(mergeRoot, recursive: true); }
 // 多语言 + 通配符文件工具。
+LangParityTests.Run(Check);   // 与 WPF 同约定的完整检查:键解析/带参格式化/插件文本翻译/诊断/切换通知
 Check(ModularDiff.Desktop.Lang.Available.Count >= 4, $"language packs loaded ({string.Join(",", ModularDiff.Desktop.Lang.Available)})");
 string chineseTitle = ModularDiff.Desktop.Lang.Get("md_title");
 try
@@ -397,7 +402,7 @@ var adversarial = window.GetVisualDescendants().OfType<AlignedRowsView>().Single
 window.BeginEditRow(0, true);
 Dispatcher.UIThread.RunJobs();
 var overlayWhileEditing = window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Name == "CellEditor" && t.IsVisible);
-window.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true)
+ById<Button>(window, "md_tip_realign")
     .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var advPump = DateTime.UtcNow.AddSeconds(3);
 while (DateTime.UtcNow < advPump) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
@@ -431,7 +436,7 @@ try
     crlfWindow.CreateSplitMenu(crlfRow, true)!.Items.OfType<MenuItem>().First()
         .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
     Dispatcher.UIThread.RunJobs();
-    crlfWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true)
+    ById<Button>(crlfWindow, "md_tip_realign")
         .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var crlfDone = DateTime.UtcNow.AddSeconds(3);
     while (DateTime.UtcNow < crlfDone) { Dispatcher.UIThread.RunJobs(); crlfWindow.UpdateLayout(); Thread.Sleep(10); }
@@ -458,7 +463,7 @@ try
     mixView.SelectRows([mixRow]);
     mixWindow.CopyToSide(mixRow, fromLeft: true);
     Dispatcher.UIThread.RunJobs();
-    mixWindow.GetVisualDescendants().OfType<Button>().First(b => (ToolTip.GetTip(b) as string)?.Contains(ModularDiff.Desktop.Lang.Get("md_tip_realign").Split(':')[0]) == true)
+    ById<Button>(mixWindow, "md_tip_realign")
         .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var mixDone = DateTime.UtcNow.AddSeconds(3);
     while (DateTime.UtcNow < mixDone) { Dispatcher.UIThread.RunJobs(); mixWindow.UpdateLayout(); Thread.Sleep(10); }
@@ -588,6 +593,10 @@ Task.Run(async () =>
     }
     finally { Directory.Delete(eolRoot, recursive: true); }
 }).GetAwaiter().GetResult();
+// ─── 目录视图与同步(渐进式扫描增量、筛选、跨文件打开、路径栏、同步文本)───
+// 必须放在下面这次 SetSynchronizationContext(null) 之前:上下文清空后,窗口里 Run() 的 await 后续体会落到
+// 线程池线程,再碰控件就是 "Call from invalid thread"。
+FolderViewTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

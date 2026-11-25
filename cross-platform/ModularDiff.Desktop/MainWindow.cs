@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
@@ -11,17 +12,8 @@ using ModularDiff.Contracts;
 using ModularDiff.Core;
 
 namespace ModularDiff.Desktop;
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
-    /// <summary>IProgress that never captures the UI SynchronizationContext.</summary>
-    private sealed class ThreadPoolProgress<T>(Action<T> handler) : IProgress<T>
-    {
-        public void Report(T value) => ThreadPool.UnsafeQueueUserWorkItem(static state =>
-        {
-            var (action, item) = ((Action<T>, T))state!;
-            try { action(item); } catch { /* progress must not tear down compare */ }
-        }, (handler, value));
-    }
 
     private readonly PluginCatalog _plugins;
     private readonly bool _ownsPlugins;
@@ -37,7 +29,13 @@ public sealed class MainWindow : Window
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
     private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
     private readonly List<(Control Target, string Key)> _localized = [];
-    private void Tip(Control target, string key) { _localized.Add((target, key)); ToolTip.SetTip(target, Lang.Get(key)); }
+    // 提示文字会随界面语言变化,不能当控件的标识;自动化标识固定为语言键,测试据此查找控件。
+    private void Tip(Control target, string key)
+    {
+        _localized.Add((target, key));
+        AutomationProperties.SetAutomationId(target, key);
+        ToolTip.SetTip(target, Lang.Get(key));
+    }
     private Button LButton(string icon, string tipKey, Action action)
     {
         var button = Button(icon, "", action);
@@ -51,6 +49,7 @@ public sealed class MainWindow : Window
         _editTab.Header = Lang.Get("md_tab_edit");      // 三个 tab 头全部纳入语言切换(此前编辑/目录页永不更新)
         _folderTab.Header = Lang.Get("md_tab_folder");
         foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
+        LocalizeFolderView();   // 筛选下拉/计数/已显示的行跟着换语言
     }
     private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
     private bool HexMode => _hexLeft is not null;
@@ -129,12 +128,12 @@ public sealed class MainWindow : Window
         _ignoreEol.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreWhitespace.IsCheckedChanged += (_, _) => ApplyOptions(); _ignoreCase.IsCheckedChanged += (_, _) => ApplyOptions();
         _toolbar.Children.Add(LButton("↑", "md_tip_prev", () => Navigate(-1)));
         _toolbar.Children.Add(LButton("↓", "md_tip_next", () => Navigate(1)));
-        _toolbar.Children.Add(Button("→", Lang.Get("md_tip_merge_l2r"), () => Merge(MergeDirection.LeftToRight)));
-        _toolbar.Children.Add(Button("←", Lang.Get("md_tip_merge_r2l"), () => Merge(MergeDirection.RightToLeft)));
-        _toolbar.Children.Add(Button("⇉", Lang.Get("md_tip_copyall_l2r"), () => Run(() => CopyAllBlocks(true))));
-        _toolbar.Children.Add(Button("⇇", Lang.Get("md_tip_copyall_r2l"), () => Run(() => CopyAllBlocks(false))));
-        _toolbar.Children.Add(Button("⇥", Lang.Get("md_tip_sync_l2r"), () => Run(() => Sync(SyncMode.LeftToRight))));
-        _toolbar.Children.Add(Button("⇤", Lang.Get("md_tip_sync_r2l"), () => Run(() => Sync(SyncMode.RightToLeft))));
+        _toolbar.Children.Add(LButton("→", "md_tip_merge_l2r", () => Merge(MergeDirection.LeftToRight)));
+        _toolbar.Children.Add(LButton("←", "md_tip_merge_r2l", () => Merge(MergeDirection.RightToLeft)));
+        _toolbar.Children.Add(LButton("⇉", "md_tip_copyall_l2r", () => Run(() => CopyAllBlocks(true))));
+        _toolbar.Children.Add(LButton("⇇", "md_tip_copyall_r2l", () => Run(() => CopyAllBlocks(false))));
+        _toolbar.Children.Add(LButton("⇥", "md_tip_sync_l2r", () => Run(() => Sync(SyncMode.LeftToRight))));
+        _toolbar.Children.Add(LButton("⇤", "md_tip_sync_r2l", () => Run(() => Sync(SyncMode.RightToLeft))));
         _toolbar.Children.Add(LButton("◷", "md_tip_history", () => Run(History)));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
         _diffTab.Header = Lang.Get("md_tab_diff");
@@ -211,31 +210,9 @@ public sealed class MainWindow : Window
             if (menu.ItemCount > 0) _rows.OpenMenu(menu);
         };
         _editTab.Header = Lang.Get("md_tab_edit"); _editTab.Content = Columns(EditPanel(true), EditPanel(false));
-        _folderTab.Header = Lang.Get("md_tab_folder"); _folderTab.Content = _files;
+        _folderTab.Header = Lang.Get("md_tab_folder");
         _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab };
-        _files.ItemTemplate = new FuncDataTemplate<FileComparison>((file, _) =>
-            file is null ? new TextBlock() : Columns(
-                new TextBlock { Text = file.Status == FileStatus.RightOnly ? "—" : $"{file.Status}  {file.RelativePath}", Margin = new Thickness(4) },
-                new TextBlock { Text = file.Status == FileStatus.LeftOnly ? "—" : $"{file.Status}  {file.RelativePath}  {file.Note}", Margin = new Thickness(4) }, false));
-        _files.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, e) =>
-        {
-            if (e.GetCurrentPoint(_files).Properties.PointerUpdateKind != Avalonia.Input.PointerUpdateKind.RightButtonReleased) return;
-            var selected = _files.SelectedItems?.Cast<FileComparison>().ToArray() ?? [];
-            if (selected.Length == 0) return;
-            var menu = new ContextMenu();
-            var toRight = new MenuItem { Header = $"复制 {selected.Length} 个文件到右侧" };
-            toRight.Click += (_, _) => Run(() => CopySelectedFolderFiles(true));
-            var toLeft = new MenuItem { Header = $"复制 {selected.Length} 个文件到左侧" };
-            toLeft.Click += (_, _) => Run(() => CopySelectedFolderFiles(false));
-            menu.Items.Add(toRight); menu.Items.Add(toLeft);
-            _files.ContextMenu = menu;
-        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        _files.DoubleTapped += (_, _) => Run(async () =>
-        {
-            if (_directory is null || _files.SelectedItem is not FileComparison file || !await Leave()) return;
-            if (file.IsBinary || file.Status == FileStatus.Error) { _status.Text = file.Note ?? "此文件不能作为文本编辑。"; return; }
-            await OpenFile(Path.Combine(_directory.LeftPath, file.RelativePath), Path.Combine(_directory.RightPath, file.RelativePath));
-        });
+        InitializeFolderView();   // 目录页:筛选栏 + 行模板 + 右键菜单 + 双击打开(见 MainWindow.Folder.cs)
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(10), RowSpacing = 8 };
         root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status, 3); root.Children.Add(_status); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
@@ -699,6 +676,8 @@ public sealed class MainWindow : Window
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
         buttons.Children.Add(LButton("▤", "md_tip_pick_file", () => Run(async () => { var items = await StorageProvider.OpenFilePickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
         buttons.Children.Add(LButton("▣", "md_tip_pick_dir", () => Run(async () => { var items = await StorageProvider.OpenFolderPickerAsync(new() { AllowMultiple = false }); if (items.Count > 0) path.Text = items[0].TryGetLocalPath(); })));
+        Tip(path, "path_tip");
+        path.KeyDown += (_, e) => { if (e.Key != Avalonia.Input.Key.Enter) return; e.Handled = true; CommitPathBars(); };
         DockPanel.SetDock(buttons, Dock.Right); panel.Children.Add(buttons); panel.Children.Add(path); return panel;
     }
     private Control EditPanel(bool left)
@@ -803,49 +782,33 @@ public sealed class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");
         string left = Path.GetFullPath(_leftPath.Text.Trim()), right = Path.GetFullPath(_rightPath.Text.Trim());
         _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
-        _status.Text = "比较中…";
-        // Avoid Progress<T>'s UI sync-context marshal: it was flooding the UI thread.
-        // Progress callbacks run on the thread pool and can reach the UI thread after the comparison
-        // has finished: a late "内容比较 1/1 · a.bin" used to overwrite the final status of a
-        // single-file compare (a race — the hex-view check of the test suite caught it). Every run
-        // is numbered, and an update only applies while its own run is still the current one.
+        _status.Text = Lang.Get("status_comparing");
         int run = ++_compareRun;
-        long lastUi = 0;
-        IProgress<ComparisonProgress> progress = new ThreadPoolProgress<ComparisonProgress>(p =>
-        {
-            long now = Environment.TickCount64;
-            if (p.PartialResult is { } partial && Directory.Exists(partial.LeftPath))
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    if (run != _compareRun) return;
-                    _directory = partial;
-                    _files.ItemsSource = partial.Files.Where(f => !f.IsDirectory).ToArray();
-                    _tabs.SelectedIndex = 2;
-                });
-            }
-            if (p.Path.StartsWith("scan:", StringComparison.Ordinal) && (p.Path == "scan:root" || now - lastUi >= 200))
-            {
-                lastUi = now;
-                string text = p.Path == "scan:root"
-                    ? "根目录已列出 · 继续扫描子目录…"
-                    : $"扫描子目录… 已发现 {p.Completed:N0} 个文件";
-                Dispatcher.UIThread.Post(() => { if (run == _compareRun) _status.Text = text; });
-            }
-            else if (p.Total > 0 && (p.Completed == p.Total || now - lastUi >= 200))
-            {
-                lastUi = now;
-                string text = $"内容比较 {p.Completed}/{p.Total} · {p.Path}";
-                Dispatcher.UIThread.Post(() => { if (run == _compareRun) _status.Text = text; });
-            }
-        });
+        bool folderPair = Directory.Exists(left) && Directory.Exists(right);
+        // 目录比较先列出根目录,随后按增量生长(见 MainWindow.Folder.cs)。进度只入队不处理:单线程按报告顺序消费,
+        // 每 120ms 合并应用一批;比较结束后队列作废,迟到的进度不可能覆盖最终状态。
+        // 目录扫描期间目录页保持可用 —— 可以边扫边浏览、筛选(文本会话要等扫描结束才替换)。
+        IProgress<ComparisonProgress> progress = new InlineProgress<ComparisonProgress>(EnqueueFolderProgress);
         ComparisonResult result;
-        try { result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options), progress: progress)); }
+        try
+        {
+            if (folderPair) { _tabs.IsEnabled = true; StartFolderScan(run); }
+            result = await Task.Run(() => new ComparisonEngine(_plugins).CompareAsync(new(left, right, _session.Algorithm, _session.Options), progress: progress));
+        }
+        catch { StopFolderScan(); throw; }
         finally { _compareRun++; }   // this run is over (or failed): its late progress updates are dropped
+        StopFolderScan();
+        if (folderPair)
+        {
+            // 扫描期间用户可能编辑了上一对文本:先问再丢弃。目录结果无论如何都落到列表里。
+            bool keepSession = _session.Dirty && !await Leave();
+            if (!keepSession) { _session.Clear(); RefreshEditors(); }
+            ApplyFolderResult(result, switchToTab: !keepSession);
+            RecordRecent(left, right);
+            if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings.Select(Lang.Text));
+            return;
+        }
         _session.Clear(); RefreshEditors();
-        if (Directory.Exists(left) && Directory.Exists(right))
-        { _directory = result; _files.ItemsSource = result.Files.Where(f => !f.IsDirectory).ToArray(); _tabs.SelectedIndex = 2; _status.Text = $"{result.Files.Count(f => !f.IsDirectory):N0} 个文件 · {result.Files.Count(f => !f.IsDirectory && f.Status != FileStatus.Equal)} 个差异/错误 · 双击打开"; }
-        else
         {
             _directory = null; _files.ItemsSource = null;
             var file = result.Files.Single();
@@ -873,7 +836,7 @@ public sealed class MainWindow : Window
             await OpenFile(left, right);
         }
         RecordRecent(left, right);
-        if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings);
+        if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings.Select(Lang.Text));
     }
     private void RecordRecent(string left, string right)
     {
@@ -1152,11 +1115,10 @@ public sealed class MainWindow : Window
     /// <summary>测试/程序化入口:按相对路径选中目录页文件(等价于用户在列表中多选)。</summary>
     public void SelectFolderFiles(params string[] relativePaths)
     {
-        if (_files.ItemsSource is not IReadOnlyList<FileComparison> files) return;
         _files.SelectedItems?.Clear();
         foreach (var path in relativePaths)
         {
-            var match = files.FirstOrDefault(f => f.RelativePath == path);
+            var match = _folderRows.FirstOrDefault(f => f.RelativePath == path);
             if (match is not null) _files.SelectedItems?.Add(match);
         }
     }
@@ -1164,7 +1126,7 @@ public sealed class MainWindow : Window
     public async Task CopySelectedFolderFiles(bool fromLeft)
     {
         if (_directory is null) { _status.Text = "请先比较两个目录。"; return; }
-        var selected = _files.SelectedItems?.Cast<FileComparison>().ToArray() ?? [];
+        var selected = SelectedFolderFiles();   // 选中目录行 = 其下全部文件
         if (selected.Length == 0) return;
         string reopen = (_files.SelectedItem as FileComparison ?? selected[0]).RelativePath;
         int copied = 0, failed = 0;
@@ -1182,31 +1144,32 @@ public sealed class MainWindow : Window
             catch (Exception) { failed++; }
         }
         await Compare();
-        var restored = (_files.ItemsSource as IReadOnlyList<FileComparison>)?.FirstOrDefault(f => f.RelativePath == reopen);
+        var restored = _folderRows.FirstOrDefault(f => f.RelativePath == reopen);
         if (restored is not null) _files.SelectedItem = restored;
-        _status.Text = $"批量复制完成：{copied} 成功" + (failed > 0 ? $"，{failed} 失败/跳过" : "") + "。";
+        _status.Text = Lang.Get("status_batch_copy_done", copied) + (failed > 0 ? Lang.Get("status_batch_copy_fail_suffix", failed) : "");
     }
     private async Task Sync(SyncMode mode)
     {
-        if (_directory is null) throw new IOException("请先比较两个目录。");
+        if (_directory is null) throw new IOException(Lang.Get("md_folder_need_compare"));
         if (!await Leave()) return;
-        var selected = _files.SelectedItems?.Cast<FileComparison>().ToArray() ?? [];
-        var files = selected.Length > 0 ? selected : _directory.Files.Where(f => f.Status != FileStatus.Equal).ToArray();
-        var plan = await Plugin<ISyncPlanner>().PlanAsync(_directory.LeftPath, _directory.RightPath, files.Select(f => f.RelativePath).ToArray(), mode);
+        var targets = SyncTargetPaths();
+        if (targets.Length == 0) { _status.Text = Lang.Get("status_no_sync_files"); return; }
+        var plan = await Plugin<ISyncPlanner>().PlanAsync(_directory.LeftPath, _directory.RightPath, targets, mode);
         var preview = Plugin<ISyncPreview>().Describe(plan);
-        string text = "覆盖前自动备份并记录操作。只执行下面列出的动作：\n\n" + string.Join("\n", preview.Select(p => $"{p.SuggestedAction}  {p.RelativePath}  {p.State}"));
-        if (await Ask("目录同步预览", text, ["执行同步", "取消"]) != "执行同步") return;
+        string runLabel = Lang.Get("md_folder_sync_run");
+        if (await Ask(Lang.Get("md_folder_sync_preview_title"), Lang.Get("md_folder_sync_intro") + "\n\n" + string.Join("\n", FormatSyncPlan(preview)), [runLabel, Lang.Get("dlg_cancel")]) != runLabel) return;
         var result = await Plugin<ISyncExecutor>().ExecuteAsync(plan, preview.Select(p => new SyncDecision(p.RelativePath, p.SuggestedAction)).ToArray(), Safety());
         _session.Clear(); RefreshEditors();
-        _status.Text = $"同步完成：{result.Entries.Count(e => e.Outcome == SyncOutcome.Copied)} 已复制，{result.Entries.Count(e => e.Outcome == SyncOutcome.Failed)} 失败。请重新比较目录刷新结果。";
-        await Ask("同步结果", string.Join("\n", result.Entries.Select(e => $"{e.Outcome} {e.RelativePath}: {e.Message}")), ["关闭"]);
+        _status.Text = Lang.Get("status_sync_done", result.Entries.Count(e => e.Outcome == SyncOutcome.Copied), result.Entries.Count(e => e.Outcome == SyncOutcome.Failed), result.Entries.Count(e => e.Outcome == SyncOutcome.Cancelled)) + " " + Lang.Get("md_folder_sync_refresh");
+        await Ask(Lang.Get("md_folder_sync_result_title"), string.Join("\n", DescribeSyncResult(result)), [Lang.Get("md_folder_close")]);
+        await Compare();   // 列表已过时:重新比较目录以反映同步结果
     }
     private async Task History()
     {
         var safety = Safety(); var listing = await safety.Journal.ListAsync(safety.StoreRoot);
-        if (listing.Operations.Count == 0) { _status.Text = "没有同步记录。" + string.Join("；", listing.Errors); return; }
-        var window = new Window { Title = "同步历史 · 双击预览恢复", Width = 850, Height = 500, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        var list = new ListBox { ItemsSource = listing.Operations.OrderByDescending(o => o.CreatedUtc).ToArray(), ItemTemplate = new FuncDataTemplate<SyncOperation>((o, _) => new TextBlock { Text = o is null ? "" : $"{o.CreatedUtc.ToLocalTime():g} · {o.State} · {o.LeftRoot} ↔ {o.RightRoot}", Margin = new Thickness(6) }) };
+        if (listing.Operations.Count == 0) { _status.Text = Lang.Get("md_folder_history_empty") + string.Join("；", listing.Errors); return; }
+        var window = new Window { Title = Lang.Get("md_folder_history_title"), Width = 850, Height = 500, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var list = new ListBox { ItemsSource = listing.Operations.OrderByDescending(o => o.CreatedUtc).ToArray(), ItemTemplate = new FuncDataTemplate<SyncOperation>((o, _) => new TextBlock { Text = o is null ? "" : $"{o.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss} · {SyncOperationStateText(o.State)} · {o.LeftRoot} ↔ {o.RightRoot}", Margin = new Thickness(6) }) };
         list.DoubleTapped += (_, _) => { if (list.SelectedItem is SyncOperation operation) window.Close(operation); }; window.Content = list;
         var selected = await window.ShowDialog<SyncOperation?>(this); if (selected is null) return;
         var recovery = Plugin<ISyncRecovery>(); var plan = await recovery.PreviewAsync(safety, selected.Id);
