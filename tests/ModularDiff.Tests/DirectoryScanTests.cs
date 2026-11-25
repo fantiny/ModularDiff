@@ -170,7 +170,9 @@ internal static class DirectoryScanTests
             // 每个内容比较结果(FileUpdate)都必须对应一个已公布的条目,否则消费者无处落笔。
             string[] orphanUpdates = recorder.Updates.Where(u => !recorder.Announced.Contains(u.RelativePath)).Select(u => u.RelativePath).Distinct().ToArray();
             Check(orphanUpdates.Length == 0, $"FileUpdate arrived for entries never announced: {string.Join(", ", orphanUpdates.Take(3))}");
-            Check(recorder.Updates.Count == depth + 1 && recorder.Updates.All(u => u.Status != FileStatus.Pending), "one resolved update per compared file");
+            // Only files are counted: a folder is answered too when nothing under it is pending at the moment its
+            // listing is in (the deepest folder here has one file, and whether its compare has finished by then is a race).
+            Check(recorder.Updates.Count(u => !u.IsDirectory) == depth + 1 && recorder.Updates.All(u => u.Status != FileStatus.Pending), "one resolved update per compared file");
             // 顺序保证:某个条目的 FileUpdate 永远不早于该条目的公布(PartialResult/Added)。
             // 否则"按增量应用"的消费者收到更新时无处落笔,文件要等最终全量结果才不再是"…"。
             string[] outOfOrder = recorder.FirstUpdateIndex
