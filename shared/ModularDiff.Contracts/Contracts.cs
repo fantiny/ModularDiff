@@ -67,7 +67,13 @@ public sealed record ComparisonResult(string LeftPath, string RightPath, string 
 /// <summary>Directory compares: <see cref="PartialResult"/> for the first (root) paint,
 /// <see cref="Added"/> for later inventory deltas (never re-send the full list),
 /// <see cref="FileUpdate"/> for a single resolved content status. UIs must not assume
-/// progress callbacks run on the UI thread.</summary>
+/// progress callbacks run on the UI thread.
+/// <para>An entry announced as <see cref="FileStatus.Pending"/> is answered by a later
+/// <see cref="FileUpdate"/> once nothing under it is pending: a file when its content has been
+/// compared, a folder when its own listing is in and what was found under it is settled
+/// (<see cref="Total"/> is 0 for a folder, as it is for a scan report). A folder whose files are
+/// still being compared stays Pending and is not answered — a view that shows folders rolls them
+/// up from their children.</para></summary>
 public sealed record ComparisonProgress(int Completed, int Total, string Path,
     ComparisonResult? PartialResult = null, FileComparison? FileUpdate = null,
     IReadOnlyList<FileComparison>? Added = null);

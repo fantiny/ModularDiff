@@ -38,6 +38,18 @@ internal static class DirectoryScanTests
                 if (value.FileUpdate is { } update) { Updates.Add(update); FirstUpdateIndex.TryAdd(update.RelativePath, index); }
             }
         }
+
+        /// <summary>Waits until the entry has been announced (root wave or a delta), for a test that must act mid-scan.</summary>
+        public async Task<bool> WaitUntilAnnounced(string relativePath, TimeSpan timeout)
+        {
+            for (DateTime until = DateTime.UtcNow + timeout; ; await Task.Delay(5))
+            {
+                lock (_gate) if (Announced.Contains(relativePath) || DateTime.UtcNow >= until) return Announced.Contains(relativePath);
+            }
+        }
+
+        /// <summary>The updates received so far, read under the recorder's lock.</summary>
+        public FileComparison[] UpdatesSoFar() { lock (_gate) return [.. Updates]; }
     }
 
     /// <summary>抛异常的进度接收者:模拟有缺陷的 UI 回调。</summary>
@@ -98,6 +110,41 @@ internal static class DirectoryScanTests
                     && files.Count(f => f.Status == FileStatus.Error) == 1, "file statuses wrong after the rewrite");
                 Check(result.HasDifferences && result.HasErrors, "result flags");
             }
+        });
+
+        await test("Directory compare: a folder announced as 'scanning' is answered once its own listing is in", async () =>
+        {
+            string root = NewRoot("folder-answer"), left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+            Put(left, "a.txt", "a"); Put(right, "a.txt", "a");
+            Directory.CreateDirectory(Path.Combine(left, "empty")); Directory.CreateDirectory(Path.Combine(right, "empty"));
+            Put(left, Path.Combine("mixed", "z.txt"), "z"); Put(right, Path.Combine("mixed", "w.txt"), "w");
+            Put(left, Path.Combine("clean", "x.txt"), "1"); Put(right, Path.Combine("clean", "x.txt"), "1");
+            Directory.CreateDirectory(Path.Combine(left, "linked")); Directory.CreateDirectory(Path.Combine(right, "linked"));
+            if (!OperatingSystem.IsWindows()) File.CreateSymbolicLink(Path.Combine(left, "linked", "shortcut"), Path.Combine(left, "a.txt"));   // Windows needs a privilege for links
+            var recorder = new RecordingProgress();
+            var result = await engine.CompareAsync(new(left, right, "myers"), progress: recorder);
+            FileComparison? LastWord(string path) =>
+                recorder.Reports.Where(r => r.Added?.Any(a => a.RelativePath == path) == true || r.FileUpdate?.RelativePath == path || r.PartialResult?.Files.Any(a => a.RelativePath == path) == true)
+                    .Select(r => r.FileUpdate ?? r.Added?.FirstOrDefault(a => a.RelativePath == path) ?? r.PartialResult!.Files.First(a => a.RelativePath == path)).LastOrDefault();
+
+            // A folder goes out as "scanning…" when it is found. Nothing under an empty folder ever resolves, so without an
+            // answer the row would say that until the final result (the WPF tree showed exactly that).
+            Check(LastWord("empty") is { IsDirectory: true, Status: FileStatus.Equal }, $"an empty folder must be answered Equal (last word: {LastWord("empty")?.Status})");
+            Check(LastWord("mixed") is { IsDirectory: true, Status: FileStatus.Modified }, $"a folder holding one-sided files on both sides must be answered Modified (last word: {LastWord("mixed")?.Status})");
+            // An error found while listing the folder — a link the scan leaves out — is part of the answer, as it is of the final result.
+            FileStatus linkedAnswer = OperatingSystem.IsWindows() ? FileStatus.Equal : FileStatus.Error;   // no link on Windows: the folder is simply empty
+            Check(LastWord("linked") is { IsDirectory: true } linkedEntry && linkedEntry.Status == linkedAnswer,
+                $"a folder with an error inside must be answered with it, {linkedAnswer} (last word: {LastWord("linked")?.Status})");
+            Check(recorder.AnnounceIndex["empty"] < recorder.Reports.FindIndex(r => r.FileUpdate?.RelativePath == "empty"), "the answer must not overtake the announcement");
+            // An answer for a folder describes the scan, not a content compare: its Total is 0, so a UI does not report
+            // it as "comparing content n/m".
+            Check(recorder.Reports.Where(r => r.FileUpdate?.IsDirectory == true).All(r => r.Total == 0 && r.FileUpdate!.Note is null),
+                "a folder answer carries the scan's numbers (Total 0) and no 'scanning…' note");
+            // Every entry's last word is its final entry — except a folder whose files were still being compared when its
+            // listing came in: it stays Pending, and what is found under it arrives with its files.
+            string[] stale = result.Files.Where(entry => LastWord(entry.RelativePath) is { } last && (last.Status != entry.Status || last.IsDirectory != entry.IsDirectory)
+                    && !(entry.IsDirectory && last.Status == FileStatus.Pending)).Select(entry => $"{entry.RelativePath}: last word {LastWord(entry.RelativePath)!.Status}, finally {entry.Status}").ToArray();
+            Check(stale.Length == 0, "the progress stream ends on a different note than the final result: " + string.Join("; ", stale.Take(6)));
         });
 
         await test("Directory compare: progress deltas survive wave throttling; every nested entry is announced", async () =>
@@ -271,6 +318,53 @@ internal static class DirectoryScanTests
             Check(threw, "cancelling mid-scan must surface as OperationCanceledException");
             Check(watch.Elapsed < TimeSpan.FromSeconds(10), $"cancellation took {watch.Elapsed.TotalSeconds:0.0}s");
         });
+
+        await test("Directory compare: a folder whose files are still being compared is not answered 'still pending'", async () =>
+        {
+            // Content compares finish only when the test opens the gate, so a folder's listing is in while its file is
+            // still pending — the order a fast machine would otherwise decide by racing. Such a folder is not answered
+            // (nothing changed), while a folder with nothing pending under it is: an answer always means "no longer scanning".
+            string root = NewRoot("gated"), left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+            Put(left, "a.txt", "a"); Put(right, "a.txt", "a");
+            Put(left, Path.Combine("clean", "x.txt"), "1"); Put(right, Path.Combine("clean", "x.txt"), "1");
+            Directory.CreateDirectory(Path.Combine(left, "empty")); Directory.CreateDirectory(Path.Combine(right, "empty"));
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            IComparisonModule module = plugins.Get<IComparisonModule>("directories");
+            var recorder = new RecordingProgress();
+            Task<ComparisonResult> compare = module.CompareAsync(new(left, right, "myers"), new Resolver(plugins, new GatedFiles(plugins.Get<IComparisonModule>("files"), gate.Task)), recorder);
+            string cleanFile = Path.Combine("clean", "x.txt");
+            try
+            {
+                Check(await recorder.WaitUntilAnnounced(cleanFile, TimeSpan.FromSeconds(30)), "'clean/x.txt' was never announced: the scan did not reach the folder.");
+                FileComparison[] soFar = recorder.UpdatesSoFar();
+                Check(!compare.IsCompleted, "the compare must still be waiting for the gated file");
+                Check(soFar.Any(u => u.RelativePath == "empty" && u.IsDirectory && u.Status == FileStatus.Equal), "the empty folder must be answered while its neighbour's file is still pending");
+                Check(!soFar.Any(u => u.RelativePath == "clean"), "'clean' still has a pending file: nothing changed, so it must not be answered (got " + string.Join(", ", soFar.Where(u => u.RelativePath == "clean").Select(u => u.Status)) + ")");
+            }
+            finally { gate.TrySetResult(); }
+            await compare;
+            Check(recorder.Updates.Where(u => u.IsDirectory).All(u => u.Status != FileStatus.Pending), "an answer that says 'still pending' is noise a UI cannot tell from a resolution");
+        });
+    }
+
+    /// <summary>The real 'files' module behind a gate the test opens: a content compare finishes only then.</summary>
+    private sealed class GatedFiles(IComparisonModule inner, Task gate) : IComparisonModule
+    {
+        public string Id => inner.Id;
+        public string DisplayName => inner.DisplayName;
+        public bool CanCompare(string leftPath, string rightPath) => inner.CanCompare(leftPath, rightPath);
+        public async Task<ComparisonResult> CompareAsync(ComparisonRequest request, IPluginResolver plugins, IProgress<ComparisonProgress>? progress = null, CancellationToken cancellationToken = default)
+        {
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return await inner.CompareAsync(request, plugins, progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The catalog, with 'files' answered by another module.</summary>
+    private sealed class Resolver(IPluginResolver inner, IComparisonModule files) : IPluginResolver
+    {
+        public T Get<T>(string id) where T : class, IPlugin => id == "files" ? (T)(IPlugin)files : inner.Get<T>(id);
+        public IReadOnlyList<T> GetAll<T>() where T : class, IPlugin => inner.GetAll<T>();
     }
 
     private sealed class CallbackProgress(Action<ComparisonProgress> callback) : IProgress<ComparisonProgress>

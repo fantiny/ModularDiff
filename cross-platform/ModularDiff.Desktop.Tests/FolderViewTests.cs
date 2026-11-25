@@ -177,6 +177,25 @@ internal static class FolderViewTests
             check(delta.FolderRows.Single(f => f.RelativePath == "diff.txt").Status == FileStatus.Modified, "a late placeholder must never overwrite an already-resolved row");
             delta.ApplyFolderProgress(new(1, 3, "diff.txt", FileUpdate: Entry("diff.txt", FileStatus.Error, note: "left: boom")));
             check(Lang.Text("left: boom") == "left: boom" && delta.FolderRows.Single(f => f.RelativePath == "diff.txt").Note == "left: boom", "error notes are kept on the entry and translated at display time");
+
+            // ───────── 目录视图:文件夹的应答 ─────────
+            // 目录模块在一个文件夹自己的列举完成时替它发出一次 FileUpdate(Total 为 0):空文件夹 → 相同,
+            // 只有一侧文件的文件夹 → 不同,文件还在比较 → 不发。两侧都有的文件夹不是行,应答不能凭空造出一行;
+            // 它也不是"内容比较 n/m",不能动状态栏。读不了的文件夹由一条错误条目取代,那条才是行。
+            delta.ApplyFolderProgress(new(9, 0, "scan:wave:9", Added: [Entry("emptyBoth", FileStatus.Pending, directory: true, note: "子目录扫描中…"),
+                Entry("mixed", FileStatus.Pending, directory: true, note: "子目录扫描中…"), Entry("vault", FileStatus.Pending, directory: true, note: "子目录扫描中…")]));
+            check(delta.FolderRows.Count == 5, $"folders present on both sides are announced without becoming rows: {string.Join(", ", delta.FolderRows.Select(f => f.RelativePath))}");
+            string beforeAnswers = delta.StatusText;
+            foreach (var answer in new[] { Entry("emptyBoth", FileStatus.Equal, directory: true), Entry("mixed", FileStatus.Modified, directory: true), Entry("mixed", FileStatus.Pending, directory: true) })
+            {
+                delta.ApplyFolderProgress(new(9, 0, answer.RelativePath, FileUpdate: answer));
+                check(delta.FolderRows.Count == 5, $"a folder answer ({answer.RelativePath}: {answer.Status}) must not become a row: {string.Join(", ", delta.FolderRows.Select(f => f.RelativePath))}");
+            }
+            check(delta.StatusText == beforeAnswers, $"a folder answer is news of the scan, not of a content compare: '{beforeAnswers}' became '{delta.StatusText}'");
+            delta.ApplyFolderProgress(new(9, 0, "vault", FileUpdate: Entry("vault", FileStatus.Error, note: "right: Access to the path is denied.")));
+            check(delta.FolderRows.Count == 6 && delta.FolderRows.Any(f => f.RelativePath == "vault" && f.Status == FileStatus.Error), "the error that replaces an unreadable folder is a row");
+            delta.ApplyFolderProgress(new(9, 0, "vault", FileUpdate: Entry("vault", FileStatus.Equal, directory: true)));
+            check(delta.FolderRows.Count == 5 && !delta.FolderRows.Any(f => f.RelativePath == "vault"), "an entry that goes back to being a folder present on both sides stops being a row");
             delta.Close();
 
             // ───────── 目录视图:名称筛选 / 状态筛选 ─────────

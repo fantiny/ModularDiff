@@ -38,18 +38,23 @@ public sealed class DirectoryComparisonModule : IComparisonModule
         // A path discovered twice (a file and a folder of the same name, a folder that fails to
         // enumerate) ends up replaced. A consumer that only applies deltas was told the first
         // version, so the final one goes out as an update once the entry has been announced.
+        // The numbers describe what an update belongs to: content compares for a file. A folder's answer belongs to the
+        // scan (Total 0, as the scan reports'), so a UI does not read it as "comparing content n/m · folder".
+        ComparisonProgress UpdateReport(FileComparison update) => update.IsDirectory
+            ? new(Volatile.Read(ref filesFound), 0, update.RelativePath, FileUpdate: update)
+            : new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), update.RelativePath, FileUpdate: update);
         void Replace(FileComparison entry)
         {
             inventory[entry.RelativePath] = entry;
             if (!announced.ContainsKey(entry.RelativePath)) { heldUpdates[entry.RelativePath] = entry; return; }   // goes out right after its announcement
-            Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), entry.RelativePath, FileUpdate: entry));
+            Report(UpdateReport(entry));
         }
         void Delivered(IReadOnlyList<FileComparison> entries)
         {
             foreach (var entry in entries) announced.TryAdd(entry.RelativePath, 0);
             foreach (var entry in entries)
                 if (heldUpdates.TryRemove(entry.RelativePath, out var update))
-                    Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), update.RelativePath, FileUpdate: update));
+                    Report(UpdateReport(update));
         }
         FileComparison[] Ordered() => inventory.Values.OrderBy(f => f.RelativePath, comparer).ThenBy(f => f.Status).ToArray();
         ComparisonResult Snapshot() => new(request.LeftPath, request.RightPath, Id, request.AlgorithmId, Ordered(), []);
@@ -76,14 +81,13 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     item = new(pair.Relative, FileStatus.Error, [], Note: ex.GetBaseException().Message);
                 }
                 inventory[pair.Relative] = item;
-                int done = Interlocked.Increment(ref compareDone);
-                int total = Math.Max(Volatile.Read(ref compareTotal), done);
-                if (announced.ContainsKey(pair.Relative)) Report(new(done, total, pair.Relative, FileUpdate: item));
+                Interlocked.Increment(ref compareDone);
+                if (announced.ContainsKey(pair.Relative)) Report(UpdateReport(item));
                 else
                 {
                     heldUpdates[pair.Relative] = item;
                     if (announced.ContainsKey(pair.Relative) && heldUpdates.TryRemove(pair.Relative, out _))
-                        Report(new(done, total, pair.Relative, FileUpdate: item));   // announced while we were holding it
+                        Report(UpdateReport(item));   // announced while we were holding it
                 }
             });
         }, cancellationToken);
@@ -120,6 +124,7 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     await Task.WhenAll(leftTask, rightTask).ConfigureAwait(false);
                     var leftEntries = leftTask.Result;
                     var rightEntries = rightTask.Result;
+                    var childKeys = new List<string>();   // what this listing found directly under the folder
 
                     foreach (string name in leftEntries.Dirs.Keys.Union(rightEntries.Dirs.Keys, comparer))
                     {
@@ -133,6 +138,7 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                             Note: status == FileStatus.Pending ? "子目录扫描中…" : null);
                         if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
                         else Replace(entry);
+                        childKeys.Add(childRel);
                         if (request.EffectiveOptions.Recursive) nextDirs.TryAdd(childRel, 0);
                     }
 
@@ -154,6 +160,7 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                         // afterwards would overwrite a result that is already in.
                         if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
                         else Replace(entry);
+                        childKeys.Add(childRel);
                         if (leftFile is not null && rightFile is not null)
                         {
                             Interlocked.Increment(ref compareTotal);
@@ -166,11 +173,25 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     {
                         if (inventory.TryAdd(err.RelativePath, err)) waveAdded.Add(err);
                         else Replace(err);
+                        if (err.RelativePath != relative) childKeys.Add(err.RelativePath);   // an error of the folder itself is not a child
                     }
 
                     if (relative.Length > 0 && inventory.TryGetValue(relative, out var parent) && parent.IsDirectory
                         && parent.Status == FileStatus.Pending)
-                        inventory[relative] = parent with { Note = null };
+                    {
+                        // The folder's own listing is in: it is no longer "being scanned". Its entry now says what was
+                        // found under it, rolled up as the final result rolls it up (Equal for nothing). An entry
+                        // announced as Pending is answered only when that is news: while files inside are still being
+                        // compared it stays Pending, and what is found under it arrives with those files. Without the
+                        // answer, a folder with nothing pending under it — an empty one above all — would say
+                        // "scanning…" until the final result.
+                        FileStatus rolled = FileStatus.Equal;
+                        foreach (string child in childKeys)
+                            if (inventory.TryGetValue(child, out var childEntry)) rolled = RollUp(rolled, childEntry.Status);
+                        var resolved = parent with { Status = rolled, Note = null };
+                        if (rolled == FileStatus.Pending) inventory[relative] = resolved;
+                        else Replace(resolved);
+                    }
                 });
 
                 foreach (string dir in nextDirs.Keys) pending.Enqueue(dir);
@@ -210,9 +231,17 @@ public sealed class DirectoryComparisonModule : IComparisonModule
 
         bothSides.Writer.TryComplete();
         await compareTask.ConfigureAwait(false);
-        foreach (var update in heldUpdates.Values) Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), update.RelativePath, FileUpdate: update));
+        foreach (var update in heldUpdates.Values) Report(UpdateReport(update));
         return new(request.LeftPath, request.RightPath, Id, request.AlgorithmId, ResolveFolders(Ordered(), comparer), []);
     }
+
+    /// <summary>A folder's status from its children's: an error anywhere, else still pending, else differing, else
+    /// equal — the order <see cref="ResolveFolders"/> rolls up with.</summary>
+    private static FileStatus RollUp(FileStatus soFar, FileStatus child) =>
+        soFar == FileStatus.Error || child == FileStatus.Error ? FileStatus.Error
+        : soFar == FileStatus.Pending || child == FileStatus.Pending ? FileStatus.Pending
+        : soFar != FileStatus.Equal || child != FileStatus.Equal ? FileStatus.Modified
+        : FileStatus.Equal;
 
     /// <summary>The final result never carries <see cref="FileStatus.Pending"/>. A folder present on
     /// both sides summarises its subtree the way a tree view rolls statuses up: a differing or
