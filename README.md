@@ -51,6 +51,21 @@ cd cross-platform
 bash build.sh osx-arm64    # Apple Silicon；可选 osx-x64 / linux-x64 / linux-arm64 / win-x64
 ```
 
+运行测试（`<插件目录>`：`build.ps1` 生成 `artifacts/plugins`，`build.sh` 生成 `cross-platform/artifacts/<rid>/plugins`）：
+
+```bash
+dotnet run --project tests/ModularDiff.Tests -c Release -- <插件目录>                        # 核心、插件与 WPF 界面逻辑
+dotnet run --project cross-platform/ModularDiff.Desktop.Tests -c Release -- <插件目录>       # 跨平台界面（无头渲染）
+```
+
+核心测试套件在 WPF GUI 已构建时会一并检查它的界面逻辑（目录树、语言引擎）。这部分在 macOS / Linux 上也能运行，前提是先构建一次 GUI：
+
+```bash
+dotnet build windows/ModularDiff.Gui/ModularDiff.Gui.csproj -p:EnableWindowsTargeting=true
+```
+
+GUI 未构建时这部分显示 SKIP；GUI 程序集比源码旧时测试会失败，提示先重新构建。WPF 窗口本身的冒烟测试只能在 Windows 上运行（`tests/cli-smoke.ps1 -Gui`）。
+
 CLI 用法：
 
 ```powershell
