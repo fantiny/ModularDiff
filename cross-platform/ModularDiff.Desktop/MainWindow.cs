@@ -21,6 +21,8 @@ public sealed partial class MainWindow : Window
     private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
     private readonly StatusLine _status = new(new TextBlock { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap });
+    // 状态栏若正显示"语言已切换"的通知,记着它的配方:再切一次要换成这一次的语言,而不是把上一次的通知按新语言重新渲染。
+    private Func<string>? _languageNotice;
     private readonly AlignedRowsView _rows = new();
     private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly ScrollViewer _diffScroll = new();
@@ -63,6 +65,8 @@ public sealed partial class MainWindow : Window
         private Func<string>? _recipe;
         public TextBlock Block => block;
         public bool HasRecipe => _recipe is not null;
+        /// <summary>The recipe the text is rendered from, when it has one.</summary>
+        public Func<string>? Recipe => _recipe;
         public string? Text { get => block.Text; set { _recipe = null; block.Text = value; } }
         public void Localized(Func<string> recipe) { _recipe = recipe; block.Text = recipe(); }
         public void Relocalize() { if (_recipe is not null) block.Text = _recipe(); }
@@ -130,7 +134,12 @@ public sealed partial class MainWindow : Window
                 Lang.Apply(name);
                 Palette.SaveLanguage(name);
                 ApplyLanguage();   // 带配方的状态文本(如目录汇总)会按新语言重新生成
-                if (!_status.HasRecipe) _status.Localized(() => Lang.Get("md_lang_switched", name));
+                // 状态栏显示的是别的内容(目录汇总等)时不抢它的位置;显示的是上一次的切换通知时,换成这一次的语言。
+                if (!_status.HasRecipe || ReferenceEquals(_status.Recipe, _languageNotice))
+                {
+                    _languageNotice = () => Lang.Get("md_lang_switched", name);
+                    _status.Localized(_languageNotice);
+                }
             }
         };
         Tip(languageBox, "md_tip_lang");

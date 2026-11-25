@@ -242,6 +242,22 @@ internal static class FolderViewTests
                 picker.Close();
             }
 
+            // ───────── 连续切换语言:状态栏每次都报这一次的语言 ─────────
+            // 回归:状态栏已带着上一次的"界面语言已切换为 X"时,再切一次只会把旧通知按新语言重新渲染 ——
+            // 切到日文时写着 English。(单次切换的验收截图看不出来。)
+            var switching = new MainWindow(["--plugins", pluginsPath, "--left", left, "--right", right]);
+            switching.Show(); Pump(switching);
+            var switchBox = switching.GetVisualDescendants().OfType<ComboBox>().Single(c => Id(c) == "md_tip_lang");
+            try
+            {
+                foreach (string pack in new[] { "English", "日本語", "한국어", "中文" })
+                {
+                    switchBox.SelectedItem = pack; Pump(switching, 400);
+                    check(switching.StatusText == Lang.Get("md_lang_switched", pack), $"after switching to {pack} the status bar must name {pack} (says '{switching.StatusText}')");
+                }
+            }
+            finally { Lang.Apply("中文"); if (!Equals(switchBox.SelectedItem, "中文")) { switchBox.SelectedItem = "中文"; Pump(switching, 300); } switching.Close(); }
+
             // ───────── 目录视图:名称筛选 / 状态筛选 ─────────
             string filterRoot = Path.Combine(root, "filter");
             foreach (var name in new[] { "src/a.cs", "src/b.txt", "readme.md", Path.Combine("docs", "deep", "c.cs"), Path.Combine("x", "y", "z.md") })
