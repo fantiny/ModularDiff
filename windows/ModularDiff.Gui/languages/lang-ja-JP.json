@@ -169,6 +169,8 @@
     "md_menu_isolate": "選択行を分離（ペアリングしない）",
     "md_menu_save_hex": "十六進編集を保存（左側）",
     "md_menu_select_hunk": "現在の差分ブロックを選択",
+    "md_recent_empty": "最近の比較（なし）",
+    "md_session_empty": "セッション（なし）",
     "md_tab_diff": "差分アラインメント",
     "md_tab_edit": "左右編集",
     "md_tab_folder": "フォルダー比較",

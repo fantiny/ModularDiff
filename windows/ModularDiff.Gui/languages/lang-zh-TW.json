@@ -169,6 +169,8 @@
     "md_menu_isolate": "隔離所選行（永不配對）",
     "md_menu_save_hex": "儲存十六進位編輯（左側）",
     "md_menu_select_hunk": "選取目前差異塊",
+    "md_recent_empty": "最近比較（尚無）",
+    "md_session_empty": "比較工作階段（尚無）",
     "md_tab_diff": "差異對齊",
     "md_tab_edit": "左右編輯",
     "md_tab_folder": "目錄比較",

@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
         // 页签标题变了长短,页签条要重新测量:否则切到更长的语言时标题被截成 "Aligned ["。
         int selected = Math.Max(0, _tabs.SelectedIndex);
         _tabs.ItemsSource = null; _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab }; _tabs.SelectedIndex = selected;
+        RefreshSessions();     // 会话 / 最近比较 两个框的标题跟着换语言
         _status.Relocalize();   // 用语言键生成的状态文本跟着换语言
     }
     /// <summary>状态栏。直接赋值的文本是"说过的原话";用 <see cref="Localized"/> 设置的文本带一份配方,
@@ -134,10 +135,11 @@ public sealed partial class MainWindow : Window
         };
         Tip(languageBox, "md_tip_lang");
         _toolbar.Children.Add(languageBox);
-        ToolTip.SetTip(_sessionBox, "命名会话：选择后载入并比较"); ToolTip.SetTip(_recentBox, "最近比较（自动记录，去重，最多 10 条）");
-        _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_sessionBox.SelectedIndex >= 0 && _sessions.Named.Count > _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex]); _sessionBox.SelectedIndex = -1; });
-        _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_recentBox.SelectedIndex >= 0 && _sessions.Recent.Count > _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex]); _recentBox.SelectedIndex = -1; });
+        Tip(_sessionBox, "session_box_tip"); Tip(_recentBox, "recent_box_tip");
         _toolbar.Children.Add(_sessionBox); _toolbar.Children.Add(_recentBox); RefreshSessions();
+        // 第一项是标题(见 RefreshSessions):选中的序号减一才是条目;载入后框回到标题。
+        _sessionBox.SelectionChanged += (_, _) => Run(async () => { if (_syncingSessions) return; if (_sessionBox.SelectedIndex > 0 && _sessions.Named.Count >= _sessionBox.SelectedIndex) await LoadSession(_sessions.Named[_sessionBox.SelectedIndex - 1]); _sessionBox.SelectedIndex = 0; });
+        _recentBox.SelectionChanged += (_, _) => Run(async () => { if (_syncingSessions) return; if (_recentBox.SelectedIndex > 0 && _sessions.Recent.Count >= _recentBox.SelectedIndex) await LoadSession(_sessions.Recent[_recentBox.SelectedIndex - 1]); _recentBox.SelectedIndex = 0; });
         _toolbar.Children.Add(LButton("⇄", "md_tip_swap", () => Run(async () => { if (!await Leave()) return; _session.Clear(); RefreshEditors(); (_leftPath.Text, _rightPath.Text) = (_rightPath.Text, _leftPath.Text); await Compare(); })));
         _toolbar.Children.Add(_algorithm);
         Tip(_ignoreEol, "md_tip_eol"); Tip(_ignoreWhitespace, "md_tip_ws"); Tip(_ignoreCase, "md_tip_case");
@@ -720,11 +722,27 @@ public sealed partial class MainWindow : Window
         _rows.Rows = []; _debounce.Stop(); _debounce.Start();
     }
     private ComparisonOptions BuildOptions() => new((bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, UnimportantPatterns: _unimportant);
+    /// <summary>两个下拉框的第一项是标题:它不对应任何条目 —— 没有会话时它写明"暂无",选过一项后框回到它。
+    /// 此前列表为空(以及每次选完之后)这两个框是空白的,看上去像坏了。</summary>
+    private bool _syncingSessions;
     private void RefreshSessions()
     {
-        _sessionBox.ItemsSource = _sessions.Named.Select(s => $"📌 {s.Name} · {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}").ToArray();
-        _recentBox.ItemsSource = _sessions.Recent.Select(s => $"🕘 {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}").ToArray();
+        _syncingSessions = true;
+        try
+        {
+            _sessionBox.ItemsSource = WithCaption("sessions", "md_session_empty", _sessions.Named.Select(s => $"📌 {s.Name} · {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}"));
+            _recentBox.ItemsSource = WithCaption("recent", "md_recent_empty", _sessions.Recent.Select(s => $"🕘 {Path.GetFileName(s.Left)} ↔ {Path.GetFileName(s.Right)}"));
+            _sessionBox.SelectedIndex = 0; _recentBox.SelectedIndex = 0;
+        }
+        finally { _syncingSessions = false; }
     }
+    private static string[] WithCaption(string captionKey, string emptyKey, IEnumerable<string> entries)
+    {
+        var list = entries.ToArray();
+        return [Lang.Get(list.Length == 0 ? emptyKey : captionKey), .. list];
+    }
+    /// <summary>测试钩子:让窗口显示给定的一组会话与最近比较。</summary>
+    internal void ShowSessions(SessionStore.SessionFile sessions) { _sessions = sessions; RefreshSessions(); }
     private async Task LoadSession(SavedSession session)
     {
         if (!await Leave()) return;

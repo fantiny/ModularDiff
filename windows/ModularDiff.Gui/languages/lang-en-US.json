@@ -169,6 +169,8 @@
     "md_menu_isolate": "Isolate Selected Lines (never paired)",
     "md_menu_save_hex": "Save Hex Edit (left)",
     "md_menu_select_hunk": "Select Current Difference Block",
+    "md_recent_empty": "Recent (none yet)",
+    "md_session_empty": "Sessions (none yet)",
     "md_tab_diff": "Aligned Diff",
     "md_tab_edit": "Edit Both Sides",
     "md_tab_folder": "Folder Compare",

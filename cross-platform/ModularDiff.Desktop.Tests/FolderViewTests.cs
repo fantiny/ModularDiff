@@ -198,6 +198,50 @@ internal static class FolderViewTests
             check(delta.FolderRows.Count == 5 && !delta.FolderRows.Any(f => f.RelativePath == "vault"), "an entry that goes back to being a folder present on both sides stops being a row");
             delta.Close();
 
+            // ───────── 会话 / 最近比较:两个下拉框从不是空白 ─────────
+            // 存量缺陷:没有会话时(以及每次选完之后)两个框整个空白,看上去像坏了;提示文字还是硬编码中文。
+            // 现在第一项是标题 —— 没有条目时它写明"暂无",选过一项后框回到标题;两者都跟随界面语言。
+            var picker = new MainWindow(["--plugins", pluginsPath, "--left", left, "--right", right]);
+            picker.Show(); Pump(picker);
+            string? Id(Control control) => Avalonia.Automation.AutomationProperties.GetAutomationId(control);
+            var sessionBox = picker.GetVisualDescendants().OfType<ComboBox>().Single(c => Id(c) == "session_box_tip");
+            var recentBox = picker.GetVisualDescendants().OfType<ComboBox>().Single(c => Id(c) == "recent_box_tip");
+            var languageBox = picker.GetVisualDescendants().OfType<ComboBox>().Single(c => Id(c) == "md_tip_lang");
+            picker.ShowSessions(new([], []));
+            try
+            {
+                foreach (string pack in new[] { "中文", "English", "日本語" })
+                {
+                    languageBox.SelectedItem = pack; Pump(picker, 300);
+                    check(Lang.CurrentName == pack, $"the language box should switch to {pack} (is {Lang.CurrentName})");
+                    foreach (var (box, emptyKey, tipKey) in new[] { (sessionBox, "md_session_empty", "session_box_tip"), (recentBox, "md_recent_empty", "recent_box_tip") })
+                    {
+                        string expected = Lang.Get(emptyKey);
+                        check(box.Items.Count == 1 && box.SelectedIndex == 0 && Equals(box.SelectedItem?.ToString(), expected) && expected != emptyKey && !LooksRaw(expected),
+                            $"{pack}: an empty list must still name its box, in the UI language (shows '{box.SelectedItem}' of {box.Items.Count}, expected '{expected}')");
+                        check(ToolTip.GetTip(box)?.ToString() == Lang.Get(tipKey), $"{pack}: the box's tip must follow the UI language (shows '{ToolTip.GetTip(box)}')");
+                    }
+                }
+                // 有了条目:标题在前,条目随后;选一项 = 载入并比较,然后框回到标题。
+                var demo = new SavedSession("demo", Path.Combine(left, "same.txt"), Path.Combine(right, "same.txt"), null, false, false, false, true, DateTime.Now, null);
+                picker.ShowSessions(new([demo], [demo]));
+                check(sessionBox.Items.Count == 2 && sessionBox.Items[0]?.ToString() == Lang.Get("sessions") && sessionBox.Items[1]?.ToString() == "📌 demo · same.txt ↔ same.txt" && sessionBox.SelectedIndex == 0,
+                    $"named sessions should follow their caption: {string.Join(" | ", sessionBox.Items)}");
+                check(recentBox.Items.Count == 2 && recentBox.Items[0]?.ToString() == Lang.Get("recent") && recentBox.Items[1]?.ToString() == "🕘 same.txt ↔ same.txt" && recentBox.SelectedIndex == 0,
+                    $"recent comparisons should follow their caption: {string.Join(" | ", recentBox.Items)}");
+                recentBox.SelectedIndex = 1;
+                var loaded = DateTime.UtcNow.AddSeconds(20);
+                while (recentBox.SelectedIndex != 0 && DateTime.UtcNow < loaded) { Dispatcher.UIThread.RunJobs(); Thread.Sleep(10); }
+                check(picker.PathBarTexts == (demo.Left, demo.Right), $"picking a recent comparison must load its paths (shows {picker.PathBarTexts.Left} ↔ {picker.PathBarTexts.Right})");
+                check(recentBox.SelectedIndex == 0 && Equals(recentBox.SelectedItem?.ToString(), Lang.Get("recent")), "after a choice the box returns to its caption instead of going blank");
+            }
+            finally
+            {
+                Lang.Apply("中文");
+                if (!Equals(languageBox.SelectedItem, "中文")) { languageBox.SelectedItem = "中文"; Pump(picker, 300); }
+                picker.Close();
+            }
+
             // ───────── 目录视图:名称筛选 / 状态筛选 ─────────
             string filterRoot = Path.Combine(root, "filter");
             foreach (var name in new[] { "src/a.cs", "src/b.txt", "readme.md", Path.Combine("docs", "deep", "c.cs"), Path.Combine("x", "y", "z.md") })

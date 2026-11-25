@@ -169,6 +169,8 @@
     "md_menu_isolate": "선택 줄 격리 (짝짓지 않음)",
     "md_menu_save_hex": "16진수 편집 저장 (왼쪽)",
     "md_menu_select_hunk": "현재 차이 블록 선택",
+    "md_recent_empty": "최근 비교 (없음)",
+    "md_session_empty": "세션 (없음)",
     "md_tab_diff": "차이 정렬",
     "md_tab_edit": "좌우 편집",
     "md_tab_folder": "폴더 비교",
