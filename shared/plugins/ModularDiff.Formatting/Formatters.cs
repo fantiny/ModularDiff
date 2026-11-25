@@ -47,7 +47,10 @@ public sealed class TextFormatter : IResultFormatter
             }
         }
         var files = result.Files.Where(f => !f.IsDirectory).ToArray();   // folder rows are never counted as files
-        await writer.WriteLineAsync($"\nFiles: {files.Length}; changed: {files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}; errors: {files.Count(f => f.Status == FileStatus.Error)}");
+        int oneSideFolders = result.Files.Count(f => f.IsDirectory && f.Status is FileStatus.LeftOnly or FileStatus.RightOnly);
+        // The exit code treats a folder that exists on one side only as a difference, so a summary
+        // that said "changed: 0" next to such a row would contradict it.
+        await writer.WriteLineAsync($"\nFiles: {files.Length}; changed: {files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}; errors: {files.Count(f => f.Status == FileStatus.Error)}{(oneSideFolders > 0 ? $"; one-side folders: {oneSideFolders}" : "")}");
     }
 
     /// <summary>Rows worth a line in a report: every file, plus folders that exist on one side only.</summary>

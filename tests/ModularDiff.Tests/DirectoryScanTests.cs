@@ -175,6 +175,8 @@ internal static class DirectoryScanTests
             string body = text.ToString();
             Check(!body.Contains("Pending"), "Text report shows a transient Pending state:\n" + body);
             Check(body.Contains("Files: 4; changed: 3; errors: 0"), "Text summary must count files, not folder rows:\n" + body);
+            // 退出码把"仅一侧存在的目录"算作差异,汇总就必须把这件事说出来,否则脚本读汇总会以为没有差异。
+            Check(body.Contains("one-side folders: 1"), $"Text summary must report the one-side folder (the exit code treats it as a difference):\n" + body);
             Check(body.Contains("[LeftOnly] onlyL/"), "Text report should list a folder that exists on one side only:\n" + body);
             // 逐行精确匹配:两侧都有的目录不应各占一行(宽松的 Contains 会误中 "sub/deeper/n.txt" 这样的合法行)
             string[] folderRows = body.Split('\n').Select(l => l.Trim())
@@ -186,7 +188,7 @@ internal static class DirectoryScanTests
             await plugins.Get<IResultFormatter>("html").WriteAsync(result, html);
             string page = html.ToString();
             Check(!page.Contains("Pending"), "HTML report shows Pending.");
-            Check(page.Contains("4 个文件") && page.Contains("差异 3"), "HTML summary counts:\n" + page[..Math.Min(400, page.Length)]);
+            Check(page.Contains("4 个文件") && page.Contains("差异 3") && page.Contains("单侧目录 1"), "HTML summary counts:\n" + page[..Math.Min(400, page.Length)]);
             Check(page.Contains("onlyL/"), "HTML report should list the one-side folder.");
 
             using var json = new StringWriter();

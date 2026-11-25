@@ -41,7 +41,10 @@ footer{margin-top:28px;color:#98A2B3;font-size:11px}
         var reported = result.Files.Where(f => !f.IsDirectory || f.Status is FileStatus.LeftOnly or FileStatus.RightOnly).ToArray();
         html.Append($"<br>模块 {Escape(result.ModuleId)} · 算法 {Escape(result.AlgorithmId)} · {files.Length} 个文件");
         html.Append($" · 差异 {files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}");
-        html.Append($" · 错误 {files.Count(f => f.Status == FileStatus.Error)}</div>");
+        html.Append($" · 错误 {files.Count(f => f.Status == FileStatus.Error)}");
+        int oneSideFolders = result.Files.Count(f => f.IsDirectory && f.Status is FileStatus.LeftOnly or FileStatus.RightOnly);
+        if (oneSideFolders > 0) html.Append($" · 单侧目录 {oneSideFolders}");   // 退出码把单侧目录算作差异,汇总要如实说出来
+        html.Append("</div>");
         foreach (string warning in result.Warnings) html.Append("<div class=\"warn\">WARNING: ").Append(Escape(warning)).Append("</div>");
 
         if (reported.Length > 1)
