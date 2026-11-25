@@ -137,7 +137,7 @@ public partial class MainWindow
         Require(ReferenceEquals(LeftFolders.SelectedItem, LeftFolders.Rows[0]), "When the selection is filtered out the first row is selected.");
 
         FolderSearch.Text = ""; UpdateLayout();
-            Require(LeftFolders.Rows.Count == 1 && host.FirstRow == 0 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 0)).Visibility == Visibility.Visible
+        Require(LeftFolders.Rows.Count == 1 && host.FirstRow == 0 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 0)).Visibility == Visibility.Visible
             && host.RowCount > 1 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 1)).Visibility == Visibility.Collapsed,
             "Without a filter only the collapsed root is listed, on the first of the pooled rows.");
 
@@ -146,7 +146,8 @@ public partial class MainWindow
         // row: a folder that expands adds rows below it, a file that resolves keeps its row.
         string Arrow(FrameworkElement row) =>
             (FindChild<DockPanel>(row) ?? throw new InvalidOperationException("The row visual has no name cell.")).Children.OfType<TextBlock>().First().Text;
-        string Glyph(Border row) => ((Grid)row.Child!).Children.OfType<TextBlock>().First().Text;
+        // The left row's columns in XAML order are the name cell, size, modified, status: the glyph is the fourth column.
+        string Glyph(Border row) => ((Grid)row.Child!).Children.OfType<TextBlock>().First(cell => Grid.GetColumn(cell) == 3).Text;
         var rootRow = (Border)VisualTreeHelper.GetChild(host, 0);
         Require(rows[0].IsDirectory && ReferenceEquals(rootRow.DataContext, rows[0]) && Arrow(rootRow) == "▸", $"The collapsed root must show a closed arrow (shows '{Arrow(rootRow)}').");
         // The root, its first library and that library's src folder, opened one after the other, put a file row on screen.
