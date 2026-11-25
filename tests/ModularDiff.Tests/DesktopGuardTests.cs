@@ -33,8 +33,11 @@ internal static class DesktopGuardTests
                     }
                 }
             }
-            Check(used.ContainsKey("md_title") && used.ContainsKey("md_tip_realign") && used.ContainsKey("file_status_modified") == false,
-                "the scan should find real Desktop pack keys and skip prefixes concatenated at run time");
+            // The keys the sources spell out must be found; a literal ending in '_' is only the front of a key joined at
+            // run time (Lang.PluginText tests for "sync_" and "file_status_"), and must not be reported as missing.
+            Check(used.ContainsKey("md_title") && used.ContainsKey("md_tip_realign") && used.ContainsKey("file_status_modified"),
+                "the scan should find the pack keys the Desktop sources spell out");
+            Check(!used.ContainsKey("file_status_") && !used.ContainsKey("sync_"), "the scan should skip prefixes joined at run time");
 
             var problems = new List<string>();
             foreach (string packFile in Directory.EnumerateFiles(languages, "lang-*.json").Order(StringComparer.Ordinal))
@@ -57,6 +60,6 @@ internal static class DesktopGuardTests
         return index < 0 ? line : line[..index];
     }
 
-    private static string RepoRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    internal static string RepoRoot() => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
 }
