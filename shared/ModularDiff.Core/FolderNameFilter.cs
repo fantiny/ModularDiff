@@ -8,6 +8,14 @@ public sealed class FolderNameFilter
 {
     // Takes the relative path already in filter form ('/' separators) and the bare name.
     private readonly Func<string, string, bool> _match;
+    // The filter runs on the UI thread for every row on every keystroke. A pattern that
+    // backtracks catastrophically must give up (and match nothing) rather than freeze the window.
+    private static readonly TimeSpan MatchBudget = TimeSpan.FromMilliseconds(50);
+    private static bool WithinBudget(Func<bool> match)
+    {
+        try { return match(); }
+        catch (RegexMatchTimeoutException) { return false; }
+    }
 
     private FolderNameFilter(Func<string, string, bool> match, bool isEmpty, string? error)
     {
@@ -29,8 +37,8 @@ public sealed class FolderNameFilter
         {
             try
             {
-                var re = new Regex(trimmed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
-                return new((path, name) => re.IsMatch(path) || re.IsMatch(name), isEmpty: false, error: null);
+                var re = new Regex(trimmed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled, MatchBudget);
+                return new((path, name) => WithinBudget(() => re.IsMatch(path) || re.IsMatch(name)), isEmpty: false, error: null);
             }
             catch (ArgumentException ex)
             {
@@ -47,7 +55,7 @@ public sealed class FolderNameFilter
         }
 
         var glob = GlobToRegex(Normalize(trimmed));
-        return new((path, name) => glob.IsMatch(path) || glob.IsMatch(name), isEmpty: false, error: null);
+        return new((path, name) => WithinBudget(() => glob.IsMatch(path) || glob.IsMatch(name)), isEmpty: false, error: null);
     }
 
     public bool Matches(string relativePath, string name) => _match(Normalize(relativePath), name);
@@ -83,6 +91,6 @@ public sealed class FolderNameFilter
             sb.Append(Regex.Escape(c.ToString()));
         }
         sb.Append('$');
-        return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        return new Regex(sb.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled, MatchBudget);
     }
 }

@@ -197,6 +197,83 @@ internal static class DirectoryScanTests
             Check(folders.Length == 3 && folders.All(f => f.GetProperty("Status").GetString() is "Equal" or "Modified" or "LeftOnly"),
                 "JSON keeps folder entries with a resolved status for tree views.");
         });
+
+        await test("Directory compare: never descends through a symbolic-link folder (Unix)", async () =>
+        {
+            if (OperatingSystem.IsWindows()) return;   // 创建符号链接在 Windows 上需要特权或开发者模式
+            string root = NewRoot("symlink"), left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+            Put(left, Path.Combine("real", "inside.txt"), "L");
+            Put(right, Path.Combine("current", "y.txt"), "R");
+            Directory.CreateSymbolicLink(Path.Combine(left, "current"), Path.Combine(left, "real"));
+            var result = await engine.CompareAsync(new(left, right, "myers"));
+            // 左侧 current 是指向外部的链接,右侧 current 是真目录:对侧有同名真目录时,扫描不得顺着链接走下去。
+            Check(!result.Files.Any(f => f.RelativePath == Path.Combine("current", "inside.txt")),
+                "the scan followed the symbolic-link folder on the left although the entry says it is excluded");
+            var link = result.Files.SingleOrDefault(f => f.RelativePath == "current");
+            Check(link is { Status: FileStatus.Error } && link.Note!.StartsWith("left:", StringComparison.Ordinal),
+                $"the link itself should be reported as an error that names its side: {link?.Status} {link?.Note}");
+            Check(result.Files.Any(f => f.RelativePath == Path.Combine("current", "y.txt") && f.Status == FileStatus.RightOnly), "the real folder on the right is still scanned");
+        });
+
+        await test("Directory compare: a replaced entry is announced again with its final state", async () =>
+        {
+            // 左侧 x 是文件、右侧 x 是目录(同名冲突):先公布的是"右侧独有目录",随后被"左侧独有文件"替换。
+            // 只应用增量的消费者必须拿到替换后的状态,否则扫描期间一直显示先入为主的那个。
+            string root = NewRoot("replaced"), left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+            Directory.CreateDirectory(left); Directory.CreateDirectory(right);
+            Put(left, "x", "I am a file"); Put(right, Path.Combine("x", "child.txt"), "child");
+            var recorder = new RecordingProgress();
+            var result = await engine.CompareAsync(new(left, right, "myers"), progress: recorder);
+            var final = result.Files.Single(f => f.RelativePath == "x");
+            Check(final.Status == FileStatus.LeftOnly && !final.IsDirectory, $"final entry should be the left-only file: {final.Status}");
+            Check(recorder.Announced.Contains("x"), "the colliding entry was never announced");
+            var last = recorder.Reports.Where(r => r.Added?.Any(a => a.RelativePath == "x") == true || r.FileUpdate?.RelativePath == "x").LastOrDefault();
+            Check(last?.FileUpdate is not null && !last.FileUpdate.IsDirectory && last.FileUpdate.Status == FileStatus.LeftOnly,
+                $"the last word on 'x' should be a FileUpdate carrying the final file state, got: {(last is null ? "nothing" : last.FileUpdate?.Status.ToString() ?? "Added " + last.Added!.First(a => a.RelativePath == "x").Status)}");
+
+            if (OperatingSystem.IsWindows()) return;   // 下面要 chmod,Windows 上目录 ACL 语义不同
+            // 更要紧的一种:目录在根波已作为 Pending 公布,随后发现它读不了 —— 消费者已经认识这个条目,
+            // 必须再收到一次"它现在是错误"的更新,否则扫描期间一直显示"子目录扫描中…"。
+            string lockedRoot = NewRoot("locked"), lockedLeft = Path.Combine(lockedRoot, "L"), lockedRight = Path.Combine(lockedRoot, "R");
+            Put(lockedLeft, "a.txt", "a"); Put(lockedRight, "a.txt", "a");
+            Put(lockedRight, Path.Combine("locked", "inside.txt"), "R");
+            Directory.CreateDirectory(Path.Combine(lockedLeft, "locked"));
+            string lockedDirectory = Path.Combine(lockedLeft, "locked");
+            var lockedRecorder = new RecordingProgress();
+            try
+            {
+                new DirectoryInfo(lockedDirectory).UnixFileMode = 0;   // 属主也不可读
+                var lockedResult = await engine.CompareAsync(new(lockedLeft, lockedRight, "myers"), progress: lockedRecorder);
+                var lockedEntry = lockedResult.Files.Single(f => f.RelativePath == "locked");
+                Check(lockedEntry.Status == FileStatus.Error && (lockedEntry.Note?.StartsWith("left:", StringComparison.Ordinal) ?? false),
+                    $"the unreadable folder should end as an error that names its side: {lockedEntry.Status} {lockedEntry.Note}");
+                Check(lockedRecorder.AnnounceIndex.ContainsKey("locked"), "the folder was announced by the root wave");
+                var lockedLast = lockedRecorder.Reports.Where(r => r.Added?.Any(a => a.RelativePath == "locked") == true || r.FileUpdate?.RelativePath == "locked").LastOrDefault();
+                Check(lockedLast?.FileUpdate is { Status: FileStatus.Error },
+                    "after the announcement, the error that replaces the folder must go out as a FileUpdate");
+            }
+            finally { if (Directory.Exists(lockedDirectory)) new DirectoryInfo(lockedDirectory).UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute; }
+        });
+
+        await test("Directory compare: cancellation in the middle of a scan stops promptly", async () =>
+        {
+            string root = NewRoot("midcancel"), left = Path.Combine(root, "L"), right = Path.Combine(root, "R");
+            for (int i = 0; i < 40; i++) { Put(left, $"f{i}.txt", "L"); Put(right, $"f{i}.txt", "R"); }
+            Put(left, Path.Combine("deep", "a", "b", "c", "d", "e", "n.txt"), "L"); Put(right, Path.Combine("deep", "a", "b", "c", "d", "e", "n.txt"), "R");
+            using var cancellation = new CancellationTokenSource();
+            var cancelling = new CallbackProgress(p => { if (p.Path == "scan:root") cancellation.Cancel(); });   // 根波列出后立刻取消
+            bool threw = false;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            try { await engine.CompareAsync(new(left, right, "myers"), progress: cancelling, cancellationToken: cancellation.Token); }
+            catch (OperationCanceledException) { threw = true; }
+            Check(threw, "cancelling mid-scan must surface as OperationCanceledException");
+            Check(watch.Elapsed < TimeSpan.FromSeconds(10), $"cancellation took {watch.Elapsed.TotalSeconds:0.0}s");
+        });
+    }
+
+    private sealed class CallbackProgress(Action<ComparisonProgress> callback) : IProgress<ComparisonProgress>
+    {
+        public void Report(ComparisonProgress value) => callback(value);
     }
 
     private static void Check(bool condition, string message) { if (!condition) throw new Exception(message); }

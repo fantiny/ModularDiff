@@ -60,6 +60,8 @@ try
     await MergeTests.Run(Test);
     await LocalizationGuardTests.Run(Test);
     await IsolationGuardTests.Run(temp, Test);
+    await DesktopGuardTests.Run(Test);
+    await RobustnessTests.Run(Test);
     await SessionStoreTests.Run(Test, temp);
 
     await Test("Presentation highlights word-level differences as separate spans", () =>

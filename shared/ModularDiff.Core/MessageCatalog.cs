@@ -40,12 +40,12 @@ public sealed class MessageCatalog
             foreach (Match placeholder in placeholders)
             {
                 string literal = source[at..placeholder.Index];
-                pattern.Append(Regex.Escape(literal)).Append("(.*?)");
+                pattern.Append(Regex.Escape(literal)).Append("([\\s\\S]*?)");   // 捕获可跨行:异常消息、多行备注并不罕见
                 literalLength += literal.Length;
                 at = placeholder.Index + placeholder.Length;
             }
             string tail = source[at..];
-            pattern.Append(Regex.Escape(tail)).Append('$');
+            pattern.Append(Regex.Escape(tail)).Append("\\z");   // 不用 $:它会在末尾换行之前就收尾,把换行留在匹配之外
             patterns.Add((new Regex(pattern.ToString(), RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250)), target, literalLength + tail.Length));
         }
         // Most specific first: the entry with the longest literal text wins when several match.

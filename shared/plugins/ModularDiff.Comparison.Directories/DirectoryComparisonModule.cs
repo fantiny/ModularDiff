@@ -35,6 +35,15 @@ public sealed class DirectoryComparisonModule : IComparisonModule
         // would let a compare worker slip its FileUpdate in ahead of the entry's own announcement.
         var announced = new ConcurrentDictionary<string, byte>(comparer);
         var heldUpdates = new ConcurrentDictionary<string, FileComparison>(comparer);
+        // A path discovered twice (a file and a folder of the same name, a folder that fails to
+        // enumerate) ends up replaced. A consumer that only applies deltas was told the first
+        // version, so the final one goes out as an update once the entry has been announced.
+        void Replace(FileComparison entry)
+        {
+            inventory[entry.RelativePath] = entry;
+            if (!announced.ContainsKey(entry.RelativePath)) { heldUpdates[entry.RelativePath] = entry; return; }   // goes out right after its announcement
+            Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), entry.RelativePath, FileUpdate: entry));
+        }
         void Delivered(IReadOnlyList<FileComparison> entries)
         {
             foreach (var entry in entries) announced.TryAdd(entry.RelativePath, 0);
@@ -88,104 +97,115 @@ public sealed class DirectoryComparisonModule : IComparisonModule
         var scanWorkers = Math.Clamp(Environment.ProcessorCount, 2, 8);
         long lastWaveReport = Environment.TickCount64;
 
-        while (!pending.IsEmpty)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var wave = new List<string>();
-            while (pending.TryDequeue(out var rel)) wave.Add(rel);
-            if (wave.Count == 0) break;
-
-            var nextDirs = new ConcurrentDictionary<string, byte>(comparer);
-            var waveAdded = new ConcurrentBag<FileComparison>();
-            await Parallel.ForEachAsync(wave, new ParallelOptions
+            while (!pending.IsEmpty)
             {
-                CancellationToken = cancellationToken, MaxDegreeOfParallelism = scanWorkers
-            }, async (relative, token) =>
-            {
-                string leftDir = relative.Length == 0 ? request.LeftPath : Path.Combine(request.LeftPath, relative);
-                string rightDir = relative.Length == 0 ? request.RightPath : Path.Combine(request.RightPath, relative);
-                var leftTask = Task.Run(() => Enumerate("left", leftDir, relative, comparer, token), token);
-                var rightTask = Task.Run(() => Enumerate("right", rightDir, relative, comparer, token), token);
-                await Task.WhenAll(leftTask, rightTask).ConfigureAwait(false);
-                var leftEntries = leftTask.Result;
-                var rightEntries = rightTask.Result;
+                cancellationToken.ThrowIfCancellationRequested();
+                var wave = new List<string>();
+                while (pending.TryDequeue(out var rel)) wave.Add(rel);
+                if (wave.Count == 0) break;
 
-                foreach (string name in leftEntries.Dirs.Keys.Union(rightEntries.Dirs.Keys, comparer))
+                var nextDirs = new ConcurrentDictionary<string, byte>(comparer);
+                var waveAdded = new ConcurrentBag<FileComparison>();
+                await Parallel.ForEachAsync(wave, new ParallelOptions
                 {
-                    token.ThrowIfCancellationRequested();
-                    string childRel = relative.Length == 0 ? name : Path.Combine(relative, name);
-                    bool onLeft = leftEntries.Dirs.ContainsKey(name);
-                    bool onRight = rightEntries.Dirs.ContainsKey(name);
-                    FileStatus status = !onLeft ? FileStatus.RightOnly : !onRight ? FileStatus.LeftOnly
-                        : request.EffectiveOptions.Recursive ? FileStatus.Pending : FileStatus.Equal;
-                    var entry = new FileComparison(childRel, status, [], IsDirectory: true,
-                        Note: status == FileStatus.Pending ? "子目录扫描中…" : null);
-                    if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
-                    else inventory[childRel] = entry;
-                    if (request.EffectiveOptions.Recursive) nextDirs.TryAdd(childRel, 0);
-                }
+                    CancellationToken = cancellationToken, MaxDegreeOfParallelism = scanWorkers
+                }, async (relative, token) =>
+                {
+                    string leftDir = relative.Length == 0 ? request.LeftPath : Path.Combine(request.LeftPath, relative);
+                    string rightDir = relative.Length == 0 ? request.RightPath : Path.Combine(request.RightPath, relative);
+                    var leftTask = Task.Run(() => Enumerate("left", leftDir, relative, comparer, token), token);
+                    var rightTask = Task.Run(() => Enumerate("right", rightDir, relative, comparer, token), token);
+                    await Task.WhenAll(leftTask, rightTask).ConfigureAwait(false);
+                    var leftEntries = leftTask.Result;
+                    var rightEntries = rightTask.Result;
 
-                foreach (string name in leftEntries.Files.Keys.Union(rightEntries.Files.Keys, comparer))
-                {
-                    token.ThrowIfCancellationRequested();
-                    string childRel = relative.Length == 0 ? name : Path.Combine(relative, name);
-                    leftEntries.Files.TryGetValue(name, out var leftFile);
-                    rightEntries.Files.TryGetValue(name, out var rightFile);
-                    FileComparison entry;
-                    if (leftFile is null)
-                        entry = new(childRel, FileStatus.RightOnly, []);
-                    else if (rightFile is null)
-                        entry = new(childRel, FileStatus.LeftOnly, []);
-                    else
-                        entry = new(childRel, FileStatus.Pending, [], Note: "内容比较中…");
-                    // The placeholder goes into the inventory BEFORE the pair is queued: the compare
-                    // worker replaces inventory[relative] with its result, and a placeholder written
-                    // afterwards would overwrite a result that is already in.
-                    if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
-                    else inventory[childRel] = entry;
-                    if (leftFile is not null && rightFile is not null)
+                    foreach (string name in leftEntries.Dirs.Keys.Union(rightEntries.Dirs.Keys, comparer))
                     {
-                        Interlocked.Increment(ref compareTotal);
-                        await bothSides.Writer.WriteAsync((childRel, leftFile, rightFile), token).ConfigureAwait(false);
+                        token.ThrowIfCancellationRequested();
+                        string childRel = relative.Length == 0 ? name : Path.Combine(relative, name);
+                        bool onLeft = leftEntries.Dirs.ContainsKey(name);
+                        bool onRight = rightEntries.Dirs.ContainsKey(name);
+                        FileStatus status = !onLeft ? FileStatus.RightOnly : !onRight ? FileStatus.LeftOnly
+                            : request.EffectiveOptions.Recursive ? FileStatus.Pending : FileStatus.Equal;
+                        var entry = new FileComparison(childRel, status, [], IsDirectory: true,
+                            Note: status == FileStatus.Pending ? "子目录扫描中…" : null);
+                        if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
+                        else Replace(entry);
+                        if (request.EffectiveOptions.Recursive) nextDirs.TryAdd(childRel, 0);
                     }
-                    Interlocked.Increment(ref filesFound);
-                }
 
-                foreach (var err in leftEntries.Errors.Concat(rightEntries.Errors))
+                    foreach (string name in leftEntries.Files.Keys.Union(rightEntries.Files.Keys, comparer))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        string childRel = relative.Length == 0 ? name : Path.Combine(relative, name);
+                        leftEntries.Files.TryGetValue(name, out var leftFile);
+                        rightEntries.Files.TryGetValue(name, out var rightFile);
+                        FileComparison entry;
+                        if (leftFile is null)
+                            entry = new(childRel, FileStatus.RightOnly, []);
+                        else if (rightFile is null)
+                            entry = new(childRel, FileStatus.LeftOnly, []);
+                        else
+                            entry = new(childRel, FileStatus.Pending, [], Note: "内容比较中…");
+                        // The placeholder goes into the inventory BEFORE the pair is queued: the compare
+                        // worker replaces inventory[relative] with its result, and a placeholder written
+                        // afterwards would overwrite a result that is already in.
+                        if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
+                        else Replace(entry);
+                        if (leftFile is not null && rightFile is not null)
+                        {
+                            Interlocked.Increment(ref compareTotal);
+                            await bothSides.Writer.WriteAsync((childRel, leftFile, rightFile), token).ConfigureAwait(false);
+                        }
+                        Interlocked.Increment(ref filesFound);
+                    }
+
+                    foreach (var err in leftEntries.Errors.Concat(rightEntries.Errors))
+                    {
+                        if (inventory.TryAdd(err.RelativePath, err)) waveAdded.Add(err);
+                        else Replace(err);
+                    }
+
+                    if (relative.Length > 0 && inventory.TryGetValue(relative, out var parent) && parent.IsDirectory
+                        && parent.Status == FileStatus.Pending)
+                        inventory[relative] = parent with { Note = null };
+                });
+
+                foreach (string dir in nextDirs.Keys) pending.Enqueue(dir);
+                foreach (var entry in waveAdded) unreported.Add(entry);
+
+                int found = Volatile.Read(ref filesFound);
+                long now = Environment.TickCount64;
+                if (firstWave)
                 {
-                    if (inventory.TryAdd(err.RelativePath, err)) waveAdded.Add(err);
-                    else inventory[err.RelativePath] = err;
+                    lastWaveReport = now;
+                    var root = Snapshot();
+                    Report(new(found, 0, "scan:root", PartialResult: root));
+                    Delivered(root.Files);
+                    unreported.Clear();   // the root wave was announced in full; its entries are not deltas
                 }
-
-                if (relative.Length > 0 && inventory.TryGetValue(relative, out var parent) && parent.IsDirectory
-                    && parent.Status == FileStatus.Pending)
-                    inventory[relative] = parent with { Note = null };
-            });
-
-            foreach (string dir in nextDirs.Keys) pending.Enqueue(dir);
-            foreach (var entry in waveAdded) unreported.Add(entry);
-
-            int found = Volatile.Read(ref filesFound);
-            long now = Environment.TickCount64;
-            if (firstWave)
-            {
-                lastWaveReport = now;
-                var root = Snapshot();
-                Report(new(found, 0, "scan:root", PartialResult: root));
-                Delivered(root.Files);
-                unreported.Clear();   // the root wave was announced in full; its entries are not deltas
+                else if (!unreported.IsEmpty && (now - lastWaveReport >= 250 || pending.IsEmpty))
+                {
+                    // Later waves are throttled to keep progress.Report cheap for the UI.
+                    lastWaveReport = now;
+                    var added = unreported.ToArray();
+                    unreported.Clear();
+                    Report(new(found, 0, $"scan:wave:{found}", Added: added));
+                    Delivered(added);
+                }
+                firstWave = false;
+                if (!request.EffectiveOptions.Recursive) break;
             }
-            else if (!unreported.IsEmpty && (now - lastWaveReport >= 250 || pending.IsEmpty))
-            {
-                // Later waves are throttled to keep progress.Report cheap for the UI.
-                lastWaveReport = now;
-                var added = unreported.ToArray();
-                unreported.Clear();
-                Report(new(found, 0, $"scan:wave:{found}", Added: added));
-                Delivered(added);
-            }
-            firstWave = false;
-            if (!request.EffectiveOptions.Recursive) break;
+        }
+        catch
+        {
+            // The scan failed or was cancelled mid-way: close the gate and let the compare workers
+            // wind down, so they do not live on as a task nobody awaits. The original exception wins.
+            bothSides.Writer.TryComplete();
+            try { await compareTask.ConfigureAwait(false); } catch { }
+            throw;
         }
 
         bothSides.Writer.TryComplete();
@@ -228,6 +248,9 @@ public sealed class DirectoryComparisonModule : IComparisonModule
         if (!Directory.Exists(directory)) return listing;
         try
         {
+            // Never descend through a link: the other side may have a real folder of the same name,
+            // which alone puts this path in the scan queue.
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return listing;
             foreach (var path in Directory.EnumerateFileSystemEntries(directory))
             {
                 token.ThrowIfCancellationRequested();
