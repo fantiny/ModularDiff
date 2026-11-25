@@ -87,7 +87,10 @@ public sealed class FolderList : Control
     {
         _rows = rows;
         _host?.InvalidateMeasure();
-        if (_selection.RemoveAll(node => !rows.Contains(node)) > 0) SelectionEdited();
+        // Rows.Contains is linear. A selection kept across a large list — everything selected in a tree
+        // of 100,000 files — would otherwise cost their product, seconds per keystroke, to drop what is gone.
+        HashSet<FolderNode>? listed = (long)_selection.Count * rows.Count > 1_000_000 ? new HashSet<FolderNode>(rows) : null;
+        if (_selection.RemoveAll(node => !(listed?.Contains(node) ?? rows.Contains(node))) > 0) SelectionEdited();
     }
 
     public void ScrollIntoView(FolderNode node)

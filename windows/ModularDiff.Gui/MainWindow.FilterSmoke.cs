@@ -40,7 +40,7 @@ public partial class MainWindow
                 int expected = files / 5 + files / 25 + 1;
                 Require(LeftFolders.Rows.Count == expected && RightFolders.Rows.Count == expected,
                     $"The filter must list {expected} rows of {files} files (left shows {LeftFolders.Rows.Count}).");
-                if (files == 20_000) FilterSmokeLists();
+                if (files == 20_000) await FilterSmokeLists();
                 (double steady, double turnover, double typed) = MeasureFilterKeystrokes();
                 report[$"{files}:steadyMs"] = Math.Round(steady, 1);
                 report[$"{files}:turnoverMs"] = Math.Round(turnover, 1);
@@ -59,8 +59,9 @@ public partial class MainWindow
     }
 
     /// <summary>What the pooled lists owe the user beyond speed: fixed row visuals, re-pointed by
-    /// filtering and scrolling; keyboard navigation; per-side selection; a header above the columns.</summary>
-    private void FilterSmokeLists()
+    /// filtering and scrolling; keyboard navigation; per-side selection; a header above the columns;
+    /// a row redrawn when its own node changes under it.</summary>
+    private async Task FilterSmokeLists()
     {
         var host = FindChild<FolderRowHost>(LeftFolders) ?? throw new InvalidOperationException("The folder list has no row host.");
         var scroll = FindChild<ScrollViewer>(LeftFolders) ?? throw new InvalidOperationException("The folder list has no scroll viewer.");
@@ -136,9 +137,35 @@ public partial class MainWindow
         Require(ReferenceEquals(LeftFolders.SelectedItem, LeftFolders.Rows[0]), "When the selection is filtered out the first row is selected.");
 
         FolderSearch.Text = ""; UpdateLayout();
-        Require(LeftFolders.Rows.Count == 1 && host.FirstRow == 0 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 0)).Visibility == Visibility.Visible
+            Require(LeftFolders.Rows.Count == 1 && host.FirstRow == 0 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 0)).Visibility == Visibility.Visible
             && host.RowCount > 1 && ((FrameworkElement)VisualTreeHelper.GetChild(host, 1)).Visibility == Visibility.Collapsed,
             "Without a filter only the collapsed root is listed, on the first of the pooled rows.");
+
+        // A node that changes under its row must be redrawn in place. The pool keeps a row's visuals and its
+        // data context while the node stays at that position — which is exactly when nothing re-points the
+        // row: a folder that expands adds rows below it, a file that resolves keeps its row.
+        string Arrow(FrameworkElement row) =>
+            (FindChild<DockPanel>(row) ?? throw new InvalidOperationException("The row visual has no name cell.")).Children.OfType<TextBlock>().First().Text;
+        string Glyph(Border row) => ((Grid)row.Child!).Children.OfType<TextBlock>().First().Text;
+        var rootRow = (Border)VisualTreeHelper.GetChild(host, 0);
+        Require(rows[0].IsDirectory && ReferenceEquals(rootRow.DataContext, rows[0]) && Arrow(rootRow) == "▸", $"The collapsed root must show a closed arrow (shows '{Arrow(rootRow)}').");
+        // The root, its first library and that library's src folder, opened one after the other, put a file row on screen.
+        ToggleFolder(rows[0]); ToggleFolder(rows[1]); ToggleFolder(rows[2]); UpdateLayout();
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);   // a binding takes its new value in a later pass
+        Require(ReferenceEquals(rootRow, VisualTreeHelper.GetChild(host, 0)) && ReferenceEquals(rootRow.DataContext, rows[0]), "Expanding the root must keep its row on the root.");
+        Require(Arrow(rootRow) == "▾", $"An expanded folder must show an open arrow (shows '{Arrow(rootRow)}').");
+        FolderNode resolved = rows[3];
+        var libraryRow = (Border)VisualTreeHelper.GetChild(host, 1);
+        var fileRow = (Border)VisualTreeHelper.GetChild(host, 3);
+        Require(!resolved.IsDirectory && ReferenceEquals(fileRow.DataContext, resolved) && Glyph(fileRow) == resolved.StatusGlyph, "The fourth row must be the first file of the first library.");
+        FileStatus statusBefore = resolved.Status;
+        Require(_tree!.ApplyFileUpdate(new FileComparison(resolved.RelativePath, FileStatus.Error, []), _folderResult!.LeftPath, _folderResult.RightPath), "The file is in the tree.");
+        UpdateLayout();
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        Require(Glyph(fileRow) == "!" && Glyph(libraryRow) == "!" && Glyph(rootRow) == "!",
+            $"A file that turns into an error under its row, and the folders above it, must be redrawn (shows '{Glyph(fileRow)}', '{Glyph(libraryRow)}', '{Glyph(rootRow)}').");
+        _tree.ApplyFileUpdate(new FileComparison(resolved.RelativePath, statusBefore, []), _folderResult.LeftPath, _folderResult.RightPath);
+        ToggleFolder(rows[2]); ToggleFolder(rows[1]); ToggleFolder(rows[0]); UpdateLayout();   // back as the smoke found it
     }
 
     /// <summary>Median milliseconds of a keystroke, with the layout it causes: one that keeps the row

@@ -345,6 +345,7 @@ try
         Check(updates.Any(u => u.RelativePath == "root.txt"), "FileUpdate reports resolved root file.");
     });
     await DirectoryScanTests.Run(engine, catalog, temp, Test);
+    await WpfLogicTests.Run(engine, temp, Test);
     await Test("Invalid paths and unavailable algorithms fail explicitly", async () =>
     {
         await ThrowsAsync<InvalidOperationException>(() => engine.CompareAsync(new("/does-not-exist-left", "/does-not-exist-right")));

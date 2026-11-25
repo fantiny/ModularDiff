@@ -69,7 +69,9 @@ public partial class MainWindow
     /// <summary>"N visible files / M files" at the right of the folder toolbar.</summary>
     private void UpdateFolderSummary()
     {
+        // Both counts come from the tree. The result the window was handed is the root wave alone while a
+        // scan runs, and it counts the folder entries too: the total would sit below the visible count.
         FolderSummary.Text = _tree is null ? ""
-            : Lang.Get("folder_visible_summary", _folderRows.Count(n => !n.IsDirectory), _folderResult?.Files.Count ?? 0);
+            : Lang.Get("folder_visible_summary", _folderRows.Count(n => !n.IsDirectory), _tree.All.Count(n => !n.IsDirectory));
     }
 }

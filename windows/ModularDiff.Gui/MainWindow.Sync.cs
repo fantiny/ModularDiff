@@ -79,7 +79,7 @@ public partial class MainWindow
         var expanded = _tree?.All.Where(n => n.IsDirectory).ToDictionary(n => n.RelativePath, n => n.IsExpanded);
         string? selected = (LeftFolders.SelectedItem as FolderNode)?.RelativePath;
         var result = await Task.Run(() => _engine.CompareAsync(_rootRequest, "directories"));
-        _folderResult = result; _tree = await Task.Run(() => FolderTree.Build(result, CancellationToken.None));
+        _folderResult = result; _folderResultFinal = true; _tree = await Task.Run(() => FolderTree.Build(result, CancellationToken.None));
         foreach (var node in _tree.All.Where(n => n.IsDirectory)) if (expanded?.TryGetValue(node.RelativePath, out bool value) == true) node.IsExpanded = value;
         _fileResult = null; _textFile = null; _currentNode = null; _presentation = null;
         LeftCode.SetRows([]); RightCode.SetRows([]); Overview.SetPresentation(null);

@@ -26,7 +26,8 @@ public sealed class SyncPreviewRow(SyncPreviewItem item) : INotifyPropertyChange
         info == "sync_stamp_missing" ? Lang.Get("sync_stamp_missing") : Lang.Text(info);
     private static string LocalizeState(string state) =>
         state.StartsWith("sync_", StringComparison.Ordinal) || state.StartsWith("file_status_", StringComparison.Ordinal)
-            ? Lang.Get(state) : state;
+            ? Lang.Get(state)
+            : Lang.Text(state);   // a problem's text comes from Core or a plugin: translated as the states set after the run are
 }
 
 public partial class SyncPreviewWindow : Window

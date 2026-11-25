@@ -23,6 +23,9 @@ public partial class MainWindow : Window
     private readonly ComparisonEngine _engine;
     private readonly string[] _arguments;
     private ComparisonResult? _folderResult, _fileResult;
+    /// <summary>Whether <see cref="_folderResult"/> is the whole comparison. While a scan runs — and after one was
+    /// cancelled — it is the root wave alone, which is not what a report should be made of.</summary>
+    private bool _folderResultFinal;
     private ComparisonRequest? _rootRequest;
     private FolderTree? _tree;
     private readonly List<FolderNode> _folderRows = [];
@@ -260,7 +263,7 @@ public partial class MainWindow : Window
         var token = _comparisonCancellation.Token;
         _busy = true; CompareButton.IsEnabled = false; CancelButton.IsEnabled = true; ExportButton.IsEnabled = false;
         _binarySession = null;   // the panes are about to show a new root comparison, not a tab's bytes
-        _folderResult = _fileResult = null; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows.Clear();
+        _folderResult = _fileResult = null; _folderResultFinal = false; _rootRequest = null; _tree = null; _currentNode = null; _textFile = null; _presentation = null; _folderRows.Clear();
         _folderSnapshotVersion++;
         while (_folderAdds.TryDequeue(out _)) { }
         while (_folderUpdates.TryDequeue(out _)) { }
@@ -329,10 +332,11 @@ public partial class MainWindow : Window
                     if (!_busy || version != _folderSnapshotVersion) return;
                     string? selectedPath = (LeftFolders.SelectedItem as FolderNode)?.RelativePath;
                     _tree = tree;
-                    _folderResult = partial;
+                    _folderResult = partial; _folderResultFinal = false;
                     RefreshFolderRows(selectedPath is null ? null : tree.All.FirstOrDefault(n =>
                         string.Equals(n.RelativePath, selectedPath, StringComparison.OrdinalIgnoreCase)));
-                    ExportButton.IsEnabled = true;
+                    // Not ExportButton: the result handed over here is the root wave alone. A report of it
+                    // would look complete and hold the top folder only. It is enabled with the final result.
                     OpenButton.IsEnabled = true;
                     UpdateSummary();
                 }, DispatcherPriority.Background);
@@ -425,7 +429,7 @@ public partial class MainWindow : Window
 
     private async Task ApplyFinalFolderResult(ComparisonResult result, CancellationToken token)
     {
-        _folderResult = result;
+        _folderResult = result; _folderResultFinal = true;
         var expanded = _tree?.All.Where(n => n.IsDirectory && n.IsExpanded)
             .Select(n => n.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         string? selectedPath = (LeftFolders.SelectedItem as FolderNode)?.RelativePath;
@@ -509,7 +513,9 @@ public partial class MainWindow : Window
         }
         OpenButton.IsEnabled = !text && _folderResult is not null;
         PreviousFileButton.IsEnabled = NextFileButton.IsEnabled = text && _folderResult is not null;
-        ExportButton.IsEnabled = text ? _fileResult is not null : _folderResult is not null;
+        // Only a whole comparison is exported: while a scan runs — and after one was cancelled — the folder
+        // result is the root wave alone.
+        ExportButton.IsEnabled = text ? _fileResult is not null : _folderResultFinal;
         UpdateSummary();
         UpdateFileStats();
         UpdateEditState();

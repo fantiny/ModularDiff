@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using ModularDiff.Contracts;
@@ -5,28 +6,65 @@ using ModularDiff.Core;
 
 namespace ModularDiff.Gui;
 
-public sealed class FolderNode
+public sealed class FolderNode : INotifyPropertyChanged
 {
+    public event PropertyChangedEventHandler? PropertyChanged;
+
     public required string Name { get; init; }
     public required string RelativePath { get; init; }
-    public bool IsDirectory { get; set; }
+    // A row shows a node through bindings, and the pooled row lists keep a row's visuals and its data
+    // context while the node stays at that position. A node that is patched in place — a file resolves,
+    // a folder is expanded — has to say what changed, or its row goes on showing the old state. Nothing
+    // is allocated or raised while no row shows the node, so building a tree costs nothing more.
+    private bool _isDirectory;
+    public bool IsDirectory
+    {
+        get => _isDirectory;
+        set { if (value == _isDirectory) return; _isDirectory = value; Changed([nameof(Symbol), nameof(KindIcon)]); }
+    }
     public int Depth { get; init; }
     /// <summary>Collapsed by default so huge trees only paint the top level until expanded.</summary>
-    public bool IsExpanded { get; set; }
-    public bool LeftExists { get; set; }
-    public bool RightExists { get; set; }
-    public FileComparison? File { get; set; }
-    public FileStatus Status { get; set; }
+    private bool _isExpanded;
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set { if (value == _isExpanded) return; _isExpanded = value; Changed([nameof(Symbol)]); }
+    }
+    private bool _leftExists;
+    public bool LeftExists
+    {
+        get => _leftExists;
+        set { if (value == _leftExists) return; _leftExists = value; Changed([nameof(LeftExists), nameof(LeftName)]); }
+    }
+    private bool _rightExists;
+    public bool RightExists
+    {
+        get => _rightExists;
+        set { if (value == _rightExists) return; _rightExists = value; Changed([nameof(RightExists), nameof(RightName)]); }
+    }
+    private FileComparison? _file;
+    public FileComparison? File
+    {
+        get => _file;
+        set { if (ReferenceEquals(value, _file)) return; _file = value; Changed([nameof(Description)]); }
+    }
+    private FileStatus _status;
+    public FileStatus Status
+    {
+        get => _status;
+        set { if (value == _status) return; _status = value; Changed([nameof(Status), nameof(StatusGlyph), nameof(StatusText), nameof(Color), nameof(Description)]); }
+    }
     public List<FolderNode> Children { get; } = [];
     public FolderNode? Parent { get; set; }
     private string? _normalizedPath;
     /// <summary>RelativePath with '/' separators — the form the name filter matches. Every
     /// keystroke in the filter box evaluates the whole tree, so it is built once per node.</summary>
     public string NormalizedPath => _normalizedPath ??= RelativePath.Replace('\\', '/');
-    public string LeftSize { get; set; } = "";
-    public string RightSize { get; set; } = "";
-    public string LeftModified { get; set; } = "";
-    public string RightModified { get; set; } = "";
+    private string _leftSize = "", _rightSize = "", _leftModified = "", _rightModified = "";
+    public string LeftSize { get => _leftSize; set { if (value == _leftSize) return; _leftSize = value; Changed([nameof(LeftSize)]); } }
+    public string RightSize { get => _rightSize; set { if (value == _rightSize) return; _rightSize = value; Changed([nameof(RightSize)]); } }
+    public string LeftModified { get => _leftModified; set { if (value == _leftModified) return; _leftModified = value; Changed([nameof(LeftModified)]); } }
+    public string RightModified { get => _rightModified; set { if (value == _rightModified) return; _rightModified = value; Changed([nameof(RightModified)]); } }
     public string LeftName => LeftExists ? Name : "";
     public string RightName => RightExists ? Name : "";
     public string Symbol => IsDirectory ? IsExpanded ? "▾" : "▸" : "·";
@@ -59,6 +97,13 @@ public sealed class FolderNode
     public string KindIcon => IsDirectory ? "▰" : "▤";
     public Thickness Indent => new(Depth * 17, 0, 0, 0);
     public string Description => RelativePath + " · " + StatusText + (File?.Note is null ? "" : " · " + Controls.Lang.Text(File.Note));
+
+    /// <summary>Names the properties the rows bind to.</summary>
+    private void Changed(scoped ReadOnlySpan<string> names)
+    {
+        if (PropertyChanged is null) return;
+        foreach (string name in names) PropertyChanged(this, new(name));
+    }
 }
 
 public sealed class FolderTree
@@ -191,6 +236,9 @@ public sealed class FolderTree
     {
         if (!node.LeftExists) return FileStatus.RightOnly;
         if (!node.RightExists) return FileStatus.LeftOnly;
+        // The folder itself could not be listed. That is an error, not merely "different": "different"
+        // suggests files to copy, and the files under it are only the side that could be read.
+        if (node.File?.Status == FileStatus.Error) return FileStatus.Error;
         if (node.Children.Count == 0)
             return node.File?.Status == FileStatus.Pending ? FileStatus.Pending : node.Status is FileStatus.Pending ? FileStatus.Pending : FileStatus.Equal;
         if (node.Children.Any(c => c.Status == FileStatus.Error)) return FileStatus.Error;

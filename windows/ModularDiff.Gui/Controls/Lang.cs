@@ -102,7 +102,12 @@ public static class Lang
             Packs[name] = strings;
             PackCodes[name] = code;
             if (code.Equals("en-US", StringComparison.OrdinalIgnoreCase))
+            {
+                // Both English tables are ready as soon as the pack is loaded: another language falls back to
+                // them for a text it lacks whether or not English was applied earlier in this session.
                 _english = strings;
+                _englishMessages = Catalogs[name];
+            }
         }
         catch (JsonException ex)
         {
