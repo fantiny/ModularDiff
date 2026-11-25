@@ -155,7 +155,7 @@
     "left_path": "왼쪽 경로",
     "load_cancelled": "로드가 취소되었습니다. 폴더로 돌아가 다른 파일을 고르세요.",
     "lock_scroll": "수평 스크롤 동기화",
-    "md_lang_switched": "인터페이스 언어 전환됨: {0} (상태 표시 등 동적 텍스트는 새 창부터 완전 적용)",
+    "md_lang_switched": "UI 언어를 {0}(으)로 변경했습니다",
     "md_menu_align": "정렬 대상 지정… (반대쪽 줄 클릭)",
     "md_menu_clear_align": "수동 정렬/격리 지우기",
     "md_menu_copy_all_l": "모두 복사 왼쪽→오른쪽",

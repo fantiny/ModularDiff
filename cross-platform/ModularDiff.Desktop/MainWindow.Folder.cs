@@ -97,7 +97,18 @@ public sealed partial class MainWindow
     private static bool IsFolderRow(FileComparison entry) =>
         !entry.IsDirectory || entry.Status is FileStatus.LeftOnly or FileStatus.RightOnly;
 
-    public static string FolderStatusText(FileStatus status) => Lang.Get("file_status_" + status.ToString().ToLowerInvariant());
+    // 键名不能由枚举名机械拼出:LeftOnly 对应的是 file_status_left_only(不是 file_status_leftonly)。
+    // 机械拼接曾让单侧条目在界面上显示成原始键名 —— 单元测试只断言了"相同"状态,是视觉验收发现的。
+    public static string FolderStatusText(FileStatus status) => Lang.Get(status switch
+    {
+        FileStatus.Equal => "file_status_equal",
+        FileStatus.Error => "file_status_error",
+        FileStatus.LeftOnly => "file_status_left_only",
+        FileStatus.Modified => "file_status_modified",
+        FileStatus.Pending => "file_status_pending",
+        FileStatus.RightOnly => "file_status_right_only",
+        _ => "file_status_error",
+    });
     private static string EntryName(FileComparison entry) => Path.GetFileName(entry.RelativePath);
 
     /// <summary>目录行某一侧显示的文本:状态用界面语言(不再输出枚举名),后跟路径、大小与修改时间、备注。</summary>
@@ -232,7 +243,7 @@ public sealed partial class MainWindow
         if (batch.Count == 0) return;
         foreach (var progress in batch) ApplyFolderProgressCore(progress);
         RefreshFolderView(keepSelection: true);
-        _status.Text = FolderProgressText();
+        _status.Localized(FolderProgressText);
     }
 
     private string FolderProgressText() =>
@@ -244,7 +255,7 @@ public sealed partial class MainWindow
     {
         ApplyFolderProgressCore(progress);
         RefreshFolderView(keepSelection: true);
-        _status.Text = FolderProgressText();
+        _status.Localized(FolderProgressText);
     }
 
     private void ApplyFolderProgressCore(ComparisonProgress progress)
@@ -308,8 +319,8 @@ public sealed partial class MainWindow
             foreach (var row in _folderRows) if (keep.Contains(row.RelativePath)) _files.SelectedItems?.Add(row);
         if (switchToTab) _tabs.SelectedIndex = 2;
         var files = result.Files.Where(f => !f.IsDirectory).ToArray();
-        _status.Text = Lang.Get("status_summary", files.Length, files.Count(f => f.Status == FileStatus.Equal),
-            files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly), files.Count(f => f.Status == FileStatus.Error));
+        int equal = files.Count(f => f.Status == FileStatus.Equal), different = files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly), errors = files.Count(f => f.Status == FileStatus.Error);
+        _status.Localized(() => Lang.Get("status_summary", files.Length, equal, different, errors));
     }
 
     // ─── 选择 → 文件集合(选中目录行 = 其下全部文件)───
@@ -334,7 +345,7 @@ public sealed partial class MainWindow
         if (first is null || !await Leave()) return;
         if (first.IsBinary || first.Status == FileStatus.Error)
         {
-            _status.Text = string.IsNullOrEmpty(first.Note) ? Lang.Get("md_folder_binary_hint") : $"{Lang.Get("md_folder_binary_hint")} {Lang.Text(first.Note)}";
+            _status.Localized(() => string.IsNullOrEmpty(first.Note) ? Lang.Get("md_folder_binary_hint") : $"{Lang.Get("md_folder_binary_hint")} {Lang.Text(first.Note)}");
             return;
         }
         await OpenFile(Path.Combine(_directory.LeftPath, first.RelativePath), Path.Combine(_directory.RightPath, first.RelativePath));
@@ -345,9 +356,10 @@ public sealed partial class MainWindow
     {
         if (row.IsDirectory || _directory is null) return;
         if (left) _pickedLeft = row; else _pickedRight = row;
-        _status.Text = _pickedLeft is not null && _pickedRight is not null
-            ? Lang.Get("status_will_compare", Path.Combine(_directory.LeftPath, _pickedLeft.RelativePath), Path.Combine(_directory.RightPath, _pickedRight.RelativePath))
-            : Lang.Get("md_folder_pick_half", Lang.Get(left ? "side_left" : "side_right"), row.RelativePath);
+        var picked = (Left: _pickedLeft, Right: _pickedRight); string side = left ? "side_left" : "side_right"; var row_ = row;
+        _status.Localized(() => picked.Left is not null && picked.Right is not null
+            ? Lang.Get("status_will_compare", Path.Combine(_directory.LeftPath, picked.Left.RelativePath), Path.Combine(_directory.RightPath, picked.Right.RelativePath))
+            : Lang.Get("md_folder_pick_half", Lang.Get(side), row_.RelativePath));
     }
 
     public (string Left, string Right)? PickedPair => _pickedLeft is { } l && _pickedRight is { } r && _directory is { } dir
@@ -355,7 +367,7 @@ public sealed partial class MainWindow
 
     public async Task OpenPickedPair()
     {
-        if (PickedPair is not { } pair) { _status.Text = Lang.Get("md_folder_pick_need_both"); return; }
+        if (PickedPair is not { } pair) { _status.Localized(() => Lang.Get("md_folder_pick_need_both")); return; }
         if (!await Leave()) return;
         await OpenFile(pair.Left, pair.Right);
     }
@@ -458,7 +470,7 @@ public sealed partial class MainWindow
         if (_busy) return false;
         if (!PathBarCommit.TryResolve(_leftPath.Text, _rightPath.Text, out string left, out string right, out string? error))
         {
-            _status.Text = error is null ? Lang.Get("status_path_restored") : Lang.Text(error);
+            _status.Localized(() => error is null ? Lang.Get("status_path_restored") : Lang.Text(error));
             return false;
         }
         // 规范成不带尾部分隔符的绝对路径:之后"同路径重对齐"、会话保存等按字符串比较路径的逻辑才有稳定依据

@@ -155,7 +155,7 @@
     "left_path": "左パス",
     "load_cancelled": "読込を取消しました。フォルダに戻って別ファイルを選べます。",
     "lock_scroll": "水平スクロールを同期",
-    "md_lang_switched": "UI 言語を切り替えました：{0}（動的テキストは次のウィンドウから完全適用）",
+    "md_lang_switched": "表示言語を {0} に切り替えました",
     "md_menu_align": "整列先を指定…（対側の行をクリック）",
     "md_menu_clear_align": "手動整列／分離をクリア",
     "md_menu_copy_all_l": "すべてコピー 左→右",

@@ -155,7 +155,7 @@
     "left_path": "左侧路径",
     "load_cancelled": "已取消加载。可以返回目录选择其他文件。",
     "lock_scroll": "联动水平滚动",
-    "md_lang_switched": "界面语言已切换：{0}（状态提示等动态文本自新窗口起完全生效）",
+    "md_lang_switched": "界面语言已切换为 {0}",
     "md_menu_align": "对齐到…（再点对侧行）",
     "md_menu_clear_align": "清除手动对齐/隔离",
     "md_menu_copy_all_l": "全部复制 左→右",

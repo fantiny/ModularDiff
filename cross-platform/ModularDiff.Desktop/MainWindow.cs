@@ -20,7 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly ComparisonSession _session;
     private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
-    private readonly TextBlock _status = new() { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap };
+    private readonly StatusLine _status = new(new TextBlock { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap });
     private readonly AlignedRowsView _rows = new();
     private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly ScrollViewer _diffScroll = new();
@@ -50,6 +50,21 @@ public sealed partial class MainWindow : Window
         _folderTab.Header = Lang.Get("md_tab_folder");
         foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
         LocalizeFolderView();   // 筛选下拉/计数/已显示的行跟着换语言
+        // 页签标题变了长短,页签条要重新测量:否则切到更长的语言时标题被截成 "Aligned ["。
+        int selected = Math.Max(0, _tabs.SelectedIndex);
+        _tabs.ItemsSource = null; _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab }; _tabs.SelectedIndex = selected;
+        _status.Relocalize();   // 用语言键生成的状态文本跟着换语言
+    }
+    /// <summary>状态栏。直接赋值的文本是"说过的原话";用 <see cref="Localized"/> 设置的文本带一份配方,
+    /// 切换界面语言时按新语言重新生成。两类互斥 —— 直接赋值会清掉配方,不会把过期的配方重新渲染出来。</summary>
+    internal sealed class StatusLine(TextBlock block)
+    {
+        private Func<string>? _recipe;
+        public TextBlock Block => block;
+        public bool HasRecipe => _recipe is not null;
+        public string? Text { get => block.Text; set { _recipe = null; block.Text = value; } }
+        public void Localized(Func<string> recipe) { _recipe = recipe; block.Text = recipe(); }
+        public void Relocalize() { if (_recipe is not null) block.Text = _recipe(); }
     }
     private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
     private bool HexMode => _hexLeft is not null;
@@ -65,7 +80,9 @@ public sealed partial class MainWindow : Window
     private SessionStore.SessionFile _sessions = SessionStore.Load();
     private IReadOnlyList<string> _unimportant = [];
     private static int _windowCount;
-    private readonly StackPanel _toolbar = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
+    // 可换行:25 个控件共需约 1340px,默认窗口放不下一行。此前用不换行的 StackPanel,最右侧的按钮被窗口
+    // 边缘切掉、中间的下拉框被挤成空白。WrapPanel 在不够宽时折到下一行。
+    private readonly WrapPanel _toolbar = new() { Name = "MainToolbar", Orientation = Orientation.Horizontal };
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
@@ -111,8 +128,8 @@ public sealed partial class MainWindow : Window
             {
                 Lang.Apply(name);
                 Palette.SaveLanguage(name);
-                ApplyLanguage();
-                _status.Text = string.Format(Lang.Get("md_lang_switched"), name);
+                ApplyLanguage();   // 带配方的状态文本(如目录汇总)会按新语言重新生成
+                if (!_status.HasRecipe) _status.Localized(() => Lang.Get("md_lang_switched", name));
             }
         };
         Tip(languageBox, "md_tip_lang");
@@ -214,7 +231,8 @@ public sealed partial class MainWindow : Window
         _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab };
         InitializeFolderView();   // 目录页:筛选栏 + 行模板 + 右键菜单 + 双击打开(见 MainWindow.Folder.cs)
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(10), RowSpacing = 8 };
-        root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status, 3); root.Children.Add(_status); Content = root;
+        foreach (var control in _toolbar.Children) control.Margin = new Thickness(2, 0, 2, 3);   // WrapPanel 没有 Spacing:用外边距留出间隔
+        root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status.Block, 3); root.Children.Add(_status.Block); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
         _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = ex.Message; } };
         _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? FirstAlgorithmId(); _rows.Rows = []; _debounce.Start(); };
@@ -782,7 +800,7 @@ public sealed partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");
         string left = Path.GetFullPath(_leftPath.Text.Trim()), right = Path.GetFullPath(_rightPath.Text.Trim());
         _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
-        _status.Text = Lang.Get("status_comparing");
+        _status.Localized(() => Lang.Get("status_comparing"));
         int run = ++_compareRun;
         bool folderPair = Directory.Exists(left) && Directory.Exists(right);
         // 目录比较先列出根目录,随后按增量生长(见 MainWindow.Folder.cs)。进度只入队不处理:单线程按报告顺序消费,
@@ -1146,28 +1164,28 @@ public sealed partial class MainWindow : Window
         await Compare();
         var restored = _folderRows.FirstOrDefault(f => f.RelativePath == reopen);
         if (restored is not null) _files.SelectedItem = restored;
-        _status.Text = Lang.Get("status_batch_copy_done", copied) + (failed > 0 ? Lang.Get("status_batch_copy_fail_suffix", failed) : "");
+        _status.Localized(() => Lang.Get("status_batch_copy_done", copied) + (failed > 0 ? Lang.Get("status_batch_copy_fail_suffix", failed) : ""));
     }
     private async Task Sync(SyncMode mode)
     {
         if (_directory is null) throw new IOException(Lang.Get("md_folder_need_compare"));
         if (!await Leave()) return;
         var targets = SyncTargetPaths();
-        if (targets.Length == 0) { _status.Text = Lang.Get("status_no_sync_files"); return; }
+        if (targets.Length == 0) { _status.Localized(() => Lang.Get("status_no_sync_files")); return; }
         var plan = await Plugin<ISyncPlanner>().PlanAsync(_directory.LeftPath, _directory.RightPath, targets, mode);
         var preview = Plugin<ISyncPreview>().Describe(plan);
         string runLabel = Lang.Get("md_folder_sync_run");
         if (await Ask(Lang.Get("md_folder_sync_preview_title"), Lang.Get("md_folder_sync_intro") + "\n\n" + string.Join("\n", FormatSyncPlan(preview)), [runLabel, Lang.Get("dlg_cancel")]) != runLabel) return;
         var result = await Plugin<ISyncExecutor>().ExecuteAsync(plan, preview.Select(p => new SyncDecision(p.RelativePath, p.SuggestedAction)).ToArray(), Safety());
         _session.Clear(); RefreshEditors();
-        _status.Text = Lang.Get("status_sync_done", result.Entries.Count(e => e.Outcome == SyncOutcome.Copied), result.Entries.Count(e => e.Outcome == SyncOutcome.Failed), result.Entries.Count(e => e.Outcome == SyncOutcome.Cancelled)) + " " + Lang.Get("md_folder_sync_refresh");
+        _status.Localized(() => Lang.Get("status_sync_done", result.Entries.Count(e => e.Outcome == SyncOutcome.Copied), result.Entries.Count(e => e.Outcome == SyncOutcome.Failed), result.Entries.Count(e => e.Outcome == SyncOutcome.Cancelled)) + " " + Lang.Get("md_folder_sync_refresh"));
         await Ask(Lang.Get("md_folder_sync_result_title"), string.Join("\n", DescribeSyncResult(result)), [Lang.Get("md_folder_close")]);
         await Compare();   // 列表已过时:重新比较目录以反映同步结果
     }
     private async Task History()
     {
         var safety = Safety(); var listing = await safety.Journal.ListAsync(safety.StoreRoot);
-        if (listing.Operations.Count == 0) { _status.Text = Lang.Get("md_folder_history_empty") + string.Join("；", listing.Errors); return; }
+        if (listing.Operations.Count == 0) { _status.Localized(() => Lang.Get("md_folder_history_empty") + string.Join("；", listing.Errors)); return; }
         var window = new Window { Title = Lang.Get("md_folder_history_title"), Width = 850, Height = 500, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         var list = new ListBox { ItemsSource = listing.Operations.OrderByDescending(o => o.CreatedUtc).ToArray(), ItemTemplate = new FuncDataTemplate<SyncOperation>((o, _) => new TextBlock { Text = o is null ? "" : $"{o.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss} · {SyncOperationStateText(o.State)} · {o.LeftRoot} ↔ {o.RightRoot}", Margin = new Thickness(6) }) };
         list.DoubleTapped += (_, _) => { if (list.SelectedItem is SyncOperation operation) window.Close(operation); }; window.Content = list;

@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using ModularDiff.Contracts;
 using ModularDiff.Core;
 using ModularDiff.Desktop;
@@ -49,6 +50,48 @@ internal static class FolderViewTests
 
     public static void Run(string pluginsPath, PluginCatalog plugins, Action<bool, string> check)
     {
+        // ───────── 工具栏在默认窗口尺寸下不得被裁切 ─────────
+        // 存量缺陷:工具栏 25 个控件共需约 1340px,默认窗口只给得了 1230px —— 最右侧的按钮被窗口边缘切掉,
+        // 中间的下拉框被挤成空白(用户截图里"算法下拉框是空的"就有它一份)。
+        {
+            var sized = new MainWindow(["--plugins", pluginsPath]);   // 不指定尺寸:用默认的 1250x820
+            sized.Show(); Pump(sized);
+            var bar = sized.GetVisualDescendants().OfType<Panel>().Single(p => p.Name == "MainToolbar");
+            var rootLayout = (Grid)sized.Content!;
+            var sizeLanguage = sized.GetVisualDescendants().OfType<ComboBox>().Single(c => Avalonia.Automation.AutomationProperties.GetAutomationId(c) == "md_tip_lang");
+            foreach (string pack in new[] { "中文", "English", "日本語", "繁體中文" })
+            {
+                sizeLanguage.SelectedItem = pack; Pump(sized, 300);
+                check(bar.Bounds.Right <= rootLayout.Bounds.Width + 0.5 && bar.Bounds.Bottom <= rootLayout.Bounds.Height,
+                    $"{pack}: the toolbar itself runs past the window (toolbar {bar.Bounds}, content {rootLayout.Bounds})");
+                foreach (var control in bar.Children)
+                    check(control.Bounds.Left >= -0.5 && control.Bounds.Right <= bar.Bounds.Width + 0.5 && control.Bounds.Bottom <= bar.Bounds.Height + 0.5,
+                        $"{pack}: toolbar control is clipped at the window edge: {control.GetType().Name} '{control.GetType().GetProperty("Content")?.GetValue(control)}' at {control.Bounds}, toolbar {bar.Bounds}");
+                var algorithm = sized.GetVisualDescendants().OfType<ComboBox>().Single(c => Avalonia.Automation.AutomationProperties.GetAutomationId(c) == "md_tip_algo");
+                check(algorithm.Bounds.Width >= 90 && Equals(algorithm.SelectedItem, "myers"), $"{pack}: the algorithm box is squeezed ({algorithm.Bounds.Width:0}px) or lost its selection");
+            }
+            sizeLanguage.SelectedItem = "中文"; Pump(sized, 200);
+            sized.Close();
+        }
+
+        // ───────── 状态栏的配方规则 ─────────
+        // 用语言键生成的状态文本带"配方",切语言时按新语言重新生成;直接赋值的文本必须让旧配方失效,
+        // 否则下次切语言会把一条早已过期的消息(比如上一次的目录汇总)重新渲染出来,顶掉当前状态。
+        var line = new MainWindow.StatusLine(new TextBlock());
+        string language = "zh";
+        line.Localized(() => $"summary in {language}");
+        check(line.Text == "summary in zh", "a localized status renders from its recipe");
+        language = "en"; line.Relocalize();
+        check(line.Text == "summary in en", "a language switch re-renders a localized status");
+        line.Text = "plain message";
+        check(line.Text == "plain message" && !line.HasRecipe, "a plain assignment invalidates the recipe");
+        language = "ja"; line.Relocalize();
+        check(line.Text == "plain message", "a plain message must survive a language switch instead of being replaced by a stale recipe");
+        line.Relocalize();
+        check(line.Text == "plain message", "re-localizing without a recipe is a no-op");
+        line.Localized(() => "again");
+        check(line.Text == "again" && line.HasRecipe, "a new recipe takes over");
+
         check(Dispatcher.UIThread.CheckAccess(), "folder tests create windows, so they must be started on the UI thread");
         check(SynchronizationContext.Current is not null, "folder tests need the Avalonia synchronization context: with it cleared, a window's awaited work resumes on a thread-pool thread and UI access throws. Insert the call before the test program clears the context.");
         string originalDirectory = Environment.CurrentDirectory;
@@ -197,6 +240,59 @@ internal static class FolderViewTests
             cross.Close();
 
             var deadline = DateTime.MinValue;   // 路径栏用例的等待截止时间(在下面赋值)
+            // ───────── 视觉验收发现的两类缺陷 ─────────
+            // (1) 单侧条目的状态曾显示成原始键名 file_status_leftonly / file_status_rightonly:
+            //     状态文本是用 "file_status_" + 枚举名小写 拼出来的,而 LeftOnly 对应的键是 file_status_left_only。
+            foreach (string pack in new[] { "中文", "English", "日本語", "한국어", "繁體中文" })
+            {
+                Lang.Apply(pack);
+                foreach (FileStatus status in Enum.GetValues<FileStatus>())
+                {
+                    string text = MainWindow.FolderStatusText(status);
+                    string key = "file_status_" + status.ToString().ToLowerInvariant();
+                    string expected = status is FileStatus.LeftOnly or FileStatus.RightOnly
+                        ? Lang.Get("file_status_" + (status == FileStatus.LeftOnly ? "left_only" : "right_only")) : Lang.Get(key);
+                    check(text == expected && !Regex.IsMatch(text, "^[a-z_]+$"), $"{pack}: status {status} should read '{expected}', got '{text}'");
+                }
+                // 真实行文本:左侧独有 / 右侧独有的文件与目录,四种类别都要是本地化文字。
+                foreach (var entry in new[]
+                {
+                    Entry("a.txt", FileStatus.LeftOnly), Entry("dirA", FileStatus.LeftOnly, directory: true),
+                    Entry("b.txt", FileStatus.RightOnly), Entry("dirB", FileStatus.RightOnly, directory: true),
+                })
+                {
+                    string leftText = filtered.FolderRowText(entry, left: true), rightText = filtered.FolderRowText(entry, left: false);
+                    string wanted = Lang.Get(entry.Status == FileStatus.LeftOnly ? "file_status_left_only" : "file_status_right_only");
+                    check((entry.Status == FileStatus.LeftOnly ? leftText : rightText).Contains(wanted) && !Regex.IsMatch(leftText + rightText, "file_status_[a-z_]+"),
+                        $"{pack}: a one-side row should read '{wanted}': {leftText} | {rightText}");
+                }
+            }
+            Lang.Apply("中文");
+
+            // (2) 切换语言后页签标题曾变长却被截断("Aligned ["、"Folder C("):页签条没有重新测量。
+            //     用仍然打开着的 filtered 窗口,走真实的语言下拉框。
+            var tabs = filtered.GetVisualDescendants().OfType<TabControl>().Single();
+            var summaryBox = filtered.GetVisualDescendants().OfType<ComboBox>().Single(c => Avalonia.Automation.AutomationProperties.GetAutomationId(c) == "md_tip_lang");
+            int selectedIndexBefore = tabs.SelectedIndex;
+            summaryBox.SelectedItem = "English"; Pump(filtered, 400);
+            var pages = tabs.Items.OfType<TabItem>().ToArray();
+            check(pages.Length == 3 && pages.All(t => t.IsAttachedToVisualTree()), "every tab must stay attached to the window after the language switch");
+            check(tabs.SelectedIndex == selectedIndexBefore && ReferenceEquals(tabs.SelectedContent, pages[selectedIndexBefore].Content), "the selected tab and its content survive the language switch");
+            foreach (TabItem tab in pages)
+            {
+                var header = tab.GetVisualDescendants().OfType<TextBlock>().First();
+                check(tab.Bounds.Width + 0.5 >= header.Bounds.Width && header.Bounds.Width + 0.5 >= header.DesiredSize.Width,
+                    $"tab header '{tab.Header}' is clipped after the language switch: tab {tab.Bounds.Width:0}px, header box {header.Bounds.Width:0}px, header needs {header.DesiredSize.Width:0}px");
+            }
+            check(string.Equals(pages[2].Header as string, Lang.Get("md_tab_folder"), StringComparison.Ordinal), "tab headers follow the language switch");
+
+            // 用一个状态栏仍停在"目录汇总"的窗口:切语言后汇总应按新语言重新生成,而不是被提示语顶掉。
+            check(filtered.StatusText == Lang.Get("status_summary", 5, 3, 2, 0), $"precondition: the status bar shows the folder summary: {filtered.StatusText}");
+            summaryBox.SelectedItem = "English"; Pump(filtered, 300);
+            check(filtered.StatusText == Lang.Get("status_summary", 5, 3, 2, 0), $"the status bar should re-render the folder summary in the new language: {filtered.StatusText}");
+            summaryBox.SelectedItem = "中文"; Pump(filtered, 300);
+            check(filtered.StatusText == Lang.Get("status_summary", 5, 3, 2, 0), $"back to Chinese: {filtered.StatusText}");
+
             // ───────── 路径栏:回车即比较 ─────────
             var bars = new MainWindow(["--plugins", pluginsPath]);
             bars.Show(); Pump(bars);

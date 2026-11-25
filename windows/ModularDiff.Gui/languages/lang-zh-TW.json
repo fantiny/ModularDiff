@@ -155,7 +155,7 @@
     "left_path": "左側路徑",
     "load_cancelled": "已取消載入。可以返回目錄選擇其他檔案。",
     "lock_scroll": "連動水平捲動",
-    "md_lang_switched": "介面語言已切換：{0}（狀態提示等動態文字自新視窗起完全生效）",
+    "md_lang_switched": "介面語言已切換為 {0}",
     "md_menu_align": "對齊到…（再點對側行）",
     "md_menu_clear_align": "清除手動對齊/隔離",
     "md_menu_copy_all_l": "全部複製 左→右",

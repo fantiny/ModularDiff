@@ -155,7 +155,7 @@
     "left_path": "Left path",
     "load_cancelled": "Load cancelled. Return to the folder to pick another file.",
     "lock_scroll": "Sync horizontal scroll",
-    "md_lang_switched": "UI language switched to {0} (dynamic status text fully applies to new windows)",
+    "md_lang_switched": "UI language is now {0}",
     "md_menu_align": "Align With… (then click the other side)",
     "md_menu_clear_align": "Clear Manual Align/Isolate",
     "md_menu_copy_all_l": "Copy All Left→Right",

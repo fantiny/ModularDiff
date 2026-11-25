@@ -67,7 +67,7 @@ Check(window.CreateSplitMenu(cssMenuRow, false) is { ItemCount: > 0 }, "css line
 cellEditor!.Text += " // edited";
 Dispatcher.UIThread.RunJobs();
 Check(((Grid)window.Content!).Children.OfType<TextBlock>().Any(t => t.Text?.Contains("未保存") == true), "inline cell edit marks session dirty");
-var compareButton = ((Grid)window.Content!).Children.OfType<StackPanel>().Single(p => p.Orientation == Avalonia.Layout.Orientation.Horizontal && p.Children.OfType<Button>().Any()).Children.OfType<Button>().First();
+var compareButton = ById<Button>(window, "md_tip_compare");   // 工具栏已改为 WrapPanel;按自动化标识找"比较"按钮
 compareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var realign = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < realign) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
@@ -513,7 +513,7 @@ try
     Check(hexWindow.SaveHexEdit(), "hex save reports success");
     Check(File.ReadAllBytes(Path.Combine(binRoot, "a.bin"))[7] == 0x7b, "hex edit written to disk");
     // 保存后的重新比较由菜单处理器链式执行;无头直调路径下用 ▶ 触发同一 Compare
-    var hexCompareButton = ((Grid)hexWindow.Content!).Children.OfType<StackPanel>().Single(p => p.Orientation == Avalonia.Layout.Orientation.Horizontal && p.Children.OfType<Button>().Any()).Children.OfType<Button>().First();
+    var hexCompareButton = ById<Button>(hexWindow, "md_tip_compare");   // 工具栏已改为 WrapPanel;按自动化标识找"比较"按钮
     hexCompareButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
     var hexRelist = DateTime.UtcNow.AddSeconds(5);
     while (DateTime.UtcNow < hexRelist) { Dispatcher.UIThread.RunJobs(); hexWindow.UpdateLayout(); Thread.Sleep(10); }
