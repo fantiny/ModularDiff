@@ -1148,7 +1148,7 @@ public sealed class MainWindow : Window
         return await window.ShowDialog<string?>(this) ?? "取消";
     }
     private T Plugin<T>() where T : class, IPlugin => _plugins.GetAll<T>().First();
-    private SyncSafetyContext Safety() => new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "SyncHistory"), Plugin<ISyncBackup>(), Plugin<ISyncJournal>());
+    private SyncSafetyContext Safety() => new(Path.Combine(AppPaths.DataDirectory, "SyncHistory"), Plugin<ISyncBackup>(), Plugin<ISyncJournal>());
     /// <summary>测试/程序化入口:按相对路径选中目录页文件(等价于用户在列表中多选)。</summary>
     public void SelectFolderFiles(params string[] relativePaths)
     {

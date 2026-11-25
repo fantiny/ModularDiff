@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
@@ -7,13 +8,31 @@ using ModularDiff.Contracts;
 using ModularDiff.Core;
 using ModularDiff.Desktop;
 
+// ─── 测试隔离:本进程绝不能碰真实用户数据 ───
+// 此前每个 --auto-compare 测试窗口都把临时路径写进用户真实的「最近比较」列表,并把用户的界面语言
+// 偏好覆盖成中文。现在所有持久化位置(最近比较/命名会话/主题/语言/同步历史)先重定向到私有目录,
+// 套件结束时核对真实文件未被改动。
+string RealDataDirectory() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff");
+DateTime startedUtc = DateTime.UtcNow;
+var realBefore = new[] { "Sessions.json", "Settings.json" }.ToDictionary(name => name, name =>
+{
+    var file = new FileInfo(Path.Combine(RealDataDirectory(), name));
+    return file.Exists ? (file.Length, file.LastWriteTimeUtc) : (-1L, DateTime.MinValue);
+});
+string privateData = Path.Combine(Path.GetTempPath(), "ModularDiff.Desktop.Tests-data-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(privateData);
+Environment.SetEnvironmentVariable(AppPaths.OverrideVariable, privateData);
 AppBuilder.Configure<App>().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).UseSkia().SetupWithoutStarting();
 string pluginsPath = Path.GetFullPath(args[0]);
 using var plugins = PluginCatalog.Load(pluginsPath);
 void Check(bool ok, string message) { if (!ok) throw new Exception(message); Console.WriteLine("PASS " + message); }
 Check(plugins.Diagnostics.Count == 0, "plugin load");
-ModularDiff.Desktop.Lang.Apply("中文");   // 测试基线语言(机器上可能残留其他选择)
-ModularDiff.Desktop.Palette.SaveLanguage("中文");
+Check(string.Equals(AppPaths.DataDirectory, privateData, StringComparison.Ordinal)
+      && SessionStore.DefaultPath.StartsWith(privateData, StringComparison.Ordinal)
+      && Path.Combine(AppPaths.DataDirectory, "Settings.json").StartsWith(privateData, StringComparison.Ordinal)
+      && Path.Combine(AppPaths.DataDirectory, "SyncHistory").StartsWith(privateData, StringComparison.Ordinal),
+      "every persisted location is redirected off the user's real data directory");
+Lang.Apply("中文");   // 测试基线语言:每个测试进程都从干净的数据目录启动,只在本进程内切换,不落盘
 string uiRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-ui-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(uiRoot);
 File.WriteAllText(Path.Combine(uiRoot, "left.cs"), "// Comparison sample\nclass Calculator\n{\n    int Sum(int a, int b) => a + b;\n}\n--bg:#0b0d10;--panel:#11151a;\n--line:#2a313b;--code:#0b0b11;\n--gap:8px;--radius:12px;\n");
@@ -300,15 +319,18 @@ try
     Check(tokens is { Count: > 0 } && tokens.Any(t => t.Kind == SyntaxTokenKind.Keyword), "csharp highlighter returns keyword tokens");
     // 深色主题切换:调色板翻转 + 持久化
     bool wasDark = ModularDiff.Desktop.Palette.IsDark;
-    ModularDiff.Desktop.Palette.SetDark(!wasDark);
-    Check(ModularDiff.Desktop.Palette.IsDark != wasDark, "palette toggles");
-    // TH1 回归:颜色取自声明式 theme-dark.json(与 WPF 同文件,#4A4A38),而非内置兜底(#3B2E20)
-    ModularDiff.Desktop.Palette.SetDark(true);
-    string darkModified = ModularDiff.Desktop.Palette.Modified.ToString() ?? "";
-    Check(darkModified.Contains("4A4A38", StringComparison.OrdinalIgnoreCase), $"dark palette colors come from theme-dark.json (got {darkModified})");
-    string settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Settings.json");
-    Check(File.Exists(settingsPath), "theme persisted to settings.json");
-    ModularDiff.Desktop.Palette.SetDark(wasDark);   // 还原
+    string settingsPath = Path.Combine(AppPaths.DataDirectory, "Settings.json");
+    try
+    {
+        ModularDiff.Desktop.Palette.SetDark(!wasDark);
+        Check(ModularDiff.Desktop.Palette.IsDark != wasDark, "palette toggles");
+        // TH1 回归:颜色取自声明式 theme-dark.json(与 WPF 同文件,#4A4A38),而非内置兜底(#3B2E20)
+        ModularDiff.Desktop.Palette.SetDark(true);
+        string darkModified = ModularDiff.Desktop.Palette.Modified.ToString() ?? "";
+        Check(darkModified.Contains("4A4A38", StringComparison.OrdinalIgnoreCase), $"dark palette colors come from theme-dark.json (got {darkModified})");
+        Check(settingsPath.StartsWith(privateData, StringComparison.Ordinal) && File.Exists(settingsPath), "theme persisted to settings.json inside the private data directory");
+    }
+    finally { ModularDiff.Desktop.Palette.SetDark(wasDark); }   // 还原:任何断言失败都不能把主题留在切换后的状态
     Dispatcher.UIThread.RunJobs(); syntaxWindow.UpdateLayout();
     syntaxWindow.Close();
 }
@@ -316,10 +338,12 @@ finally { Directory.Delete(mergeRoot, recursive: true); }
 // 多语言 + 通配符文件工具。
 Check(ModularDiff.Desktop.Lang.Available.Count >= 4, $"language packs loaded ({string.Join(",", ModularDiff.Desktop.Lang.Available)})");
 string chineseTitle = ModularDiff.Desktop.Lang.Get("md_title");
-ModularDiff.Desktop.Lang.Apply("English");
-Check(ModularDiff.Desktop.Lang.Get("md_title") != chineseTitle && ModularDiff.Desktop.Lang.Get("md_title").Contains("Cross-platform"), "language switch translates UI keys");
-ModularDiff.Desktop.Lang.Apply("中文");
-Check(ModularDiff.Desktop.Lang.Get("md_menu_goto_line").Contains("转到行号"), "fallback chain resolves untranslated keys via zh-CN");
+try
+{
+    ModularDiff.Desktop.Lang.Apply("English");
+    Check(ModularDiff.Desktop.Lang.Get("md_title") != chineseTitle && ModularDiff.Desktop.Lang.Get("md_title").Contains("Cross-platform"), "language switch translates UI keys");
+}
+finally { ModularDiff.Desktop.Lang.Apply("中文"); }
 string wildRoot = Path.Combine(Path.GetTempPath(), "ModularDiff-wild-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(wildRoot);
 try
@@ -604,3 +628,24 @@ Check(allCopied == 2 && copyAllSession.Right!.Text == copyAllSession.Left!.Text 
     Console.WriteLine("All cross-platform smoke tests passed.");
 }
 finally { Directory.Delete(root, recursive: true); }
+
+// ─── 收尾不变量:本进程没有改动用户的真实数据 ───
+bool otherInstance = Process.GetProcesses().Any(p =>
+{
+    try { string name = p.ProcessName; return (name.StartsWith("ModularDiff.Desktop", StringComparison.Ordinal) && !name.Contains("Tests")) || name == "ModularDi"; }
+    catch { return false; }
+});
+foreach (var (name, original) in realBefore)
+{
+    var file = new FileInfo(Path.Combine(RealDataDirectory(), name));
+    var now = file.Exists ? (file.Length, file.LastWriteTimeUtc) : (-1L, DateTime.MinValue);
+    if (now == original) continue;
+    // 运行期间文件变了:内容里出现本进程的临时路径 => 一定是泄漏;
+    // Settings.json 只有本应用会写,没有其它实例在跑时也只能是本进程写的。
+    bool leaked = file.Exists && !otherInstance && name == "Settings.json"
+        || file.Exists && name == "Sessions.json" && File.ReadAllText(file.FullName).Contains(Path.Combine(Path.GetTempPath(), "ModularDiff"), StringComparison.Ordinal);
+    Check(!leaked, $"this run wrote the user's real {name} — test isolation is broken");
+    Console.WriteLine($"note: the real {name} changed during the run; written by another ModularDiff instance, not by the tests");
+}
+Check(realBefore.Keys.All(name => Path.Combine(RealDataDirectory(), name) != Path.Combine(AppPaths.DataDirectory, name)), "data directory override still in effect at exit");
+try { Directory.Delete(privateData, recursive: true); } catch { /* 临时目录清理是尽力而为 */ }

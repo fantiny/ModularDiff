@@ -19,7 +19,7 @@ public static class SessionStore
     };
     public const int RecentLimit = 10;
     public static string DefaultPath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Sessions.json");
+        Path.Combine(AppPaths.DataDirectory, "Sessions.json");
 
     public sealed record SessionFile(IReadOnlyList<SavedSession> Named, IReadOnlyList<SavedSession> Recent);
 

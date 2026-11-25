@@ -72,7 +72,7 @@ public static class Palette
     {
         try
         {
-            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff");
+            string directory = AppPaths.DataDirectory;
             Directory.CreateDirectory(directory);
             AtomicFile.WriteAllText(Path.Combine(directory, "Settings.json"), JsonSerializer.Serialize(new SettingsRecord(IsDark, SavedLanguage)));
         }
@@ -121,7 +121,7 @@ public static class Palette
     {
         try
         {
-            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModularDiff", "Settings.json");
+            string path = Path.Combine(AppPaths.DataDirectory, "Settings.json");
             var settings = File.Exists(path) ? JsonSerializer.Deserialize<SettingsRecord>(File.ReadAllText(path)) : null;
             return (settings?.Dark == true, settings?.Language);
         }
