@@ -59,6 +59,7 @@ try
     MergeTests.Catalog = catalog;
     await MergeTests.Run(Test);
     await LocalizationGuardTests.Run(Test);
+    await IsolationGuardTests.Run(temp, Test);
     await SessionStoreTests.Run(Test, temp);
 
     await Test("Presentation highlights word-level differences as separate spans", () =>
@@ -323,17 +324,14 @@ try
         await File.WriteAllTextAsync(Path.Combine(right, "root.txt"), "right-root");
         await File.WriteAllTextAsync(Path.Combine(left, "deep", "nested.txt"), "L");
         await File.WriteAllTextAsync(Path.Combine(right, "deep", "nested.txt"), "R");
+        // 同步记录器:Progress<T> 会把回调异步投递到线程池,比较返回时回调未必送达(曾导致本用例间歇性失败),
+        // 且多个工作线程并发写无锁 List 也不安全。
+        var progress = new DirectoryScanTests.RecordingProgress();
         ComparisonResult? rootWave = null;
         var addedWaves = new List<FileComparison>();
         var updates = new List<FileComparison>();
-        var progress = new Progress<ComparisonProgress>(p =>
-        {
-            if (p.Path == "scan:root" && p.PartialResult is { } partial && rootWave is null)
-                rootWave = partial;
-            if (p.Added is { Count: > 0 } added) addedWaves.AddRange(added);
-            if (p.FileUpdate is { } update) updates.Add(update);
-        });
         var result = await engine.CompareAsync(new(left, right, "myers"), progress: progress);
+        rootWave = progress.RootWave; addedWaves.AddRange(progress.Added); updates.AddRange(progress.Updates);
         Check(rootWave is not null, "Root wave PartialResult must arrive before nested scan finishes.");
         Check(rootWave!.Files.Any(f => !f.IsDirectory && f.RelativePath == "root.txt"), "Root file listed in first wave.");
         Check(rootWave.Files.Any(f => f.IsDirectory && f.RelativePath == "deep"), "Root subdirectory placeholder in first wave.");
@@ -344,6 +342,7 @@ try
         Check(result.Files.Single(f => f.RelativePath == "root.txt").Status == FileStatus.Modified, "Root file resolves to Modified.");
         Check(updates.Any(u => u.RelativePath == "root.txt"), "FileUpdate reports resolved root file.");
     });
+    await DirectoryScanTests.Run(engine, catalog, temp, Test);
     await Test("Invalid paths and unavailable algorithms fail explicitly", async () =>
     {
         await ThrowsAsync<InvalidOperationException>(() => engine.CompareAsync(new("/does-not-exist-left", "/does-not-exist-right")));

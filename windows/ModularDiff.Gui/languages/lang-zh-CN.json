@@ -585,6 +585,6 @@
     "XML tools": "XML 工具",
     "YAML tools": "YAML 工具",
     "assembly must be a DLL filename within the package.": "assembly 必须是插件包内的 DLL 文件名。",
-    "symbolic link/reparse point excluded; comparison is incomplete.": "符号链接/重解析点已排除；比较不完整。"
+    "{0}: symbolic link/reparse point excluded; comparison is incomplete.": "{0}：符号链接/重解析点已排除；比较不完整。"
   }
 }

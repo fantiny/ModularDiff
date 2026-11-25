@@ -35,24 +35,28 @@ footer{margin-top:28px;color:#98A2B3;font-size:11px}
 """);
         html.Append("<h1>ModularDiff 比较报告</h1><div class=\"meta\">");
         html.Append(Escape(result.LeftPath)).Append(" ↔ ").Append(Escape(result.RightPath));
-        html.Append($"<br>模块 {Escape(result.ModuleId)} · 算法 {Escape(result.AlgorithmId)} · {result.Files.Count} 个文件");
-        html.Append($" · 差异 {result.Files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}");
-        html.Append($" · 错误 {result.Files.Count(f => f.Status == FileStatus.Error)}</div>");
+        // Folder rows are never counted as files; a folder that exists on one side only is still
+        // listed as a finding, folders present on both sides are structure.
+        var files = result.Files.Where(f => !f.IsDirectory).ToArray();
+        var reported = result.Files.Where(f => !f.IsDirectory || f.Status is FileStatus.LeftOnly or FileStatus.RightOnly).ToArray();
+        html.Append($"<br>模块 {Escape(result.ModuleId)} · 算法 {Escape(result.AlgorithmId)} · {files.Length} 个文件");
+        html.Append($" · 差异 {files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}");
+        html.Append($" · 错误 {files.Count(f => f.Status == FileStatus.Error)}</div>");
         foreach (string warning in result.Warnings) html.Append("<div class=\"warn\">WARNING: ").Append(Escape(warning)).Append("</div>");
 
-        if (result.Files.Count > 1)
+        if (reported.Length > 1)
         {
             html.Append("<table><tr><th>状态</th><th>文件</th></tr>");
-            foreach (var file in result.Files)
+            foreach (var file in reported)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 html.Append("<tr><td class=\"status-").Append(file.Status).Append("\">").Append(file.Status).Append("</td><td>")
-                    .Append(Escape(file.RelativePath)).Append(file.IsBinary ? "（字节比较）" : "").Append("</td></tr>");
+                    .Append(Escape(file.RelativePath)).Append(file.IsDirectory ? "/" : "").Append(file.IsBinary ? "（字节比较）" : "").Append("</td></tr>");
             }
             html.Append("</table>");
         }
 
-        foreach (var file in result.Files)
+        foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             html.Append("<div class=\"file\"><h2>").Append(Escape(file.RelativePath));

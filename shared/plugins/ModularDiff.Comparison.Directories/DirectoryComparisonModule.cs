@@ -21,8 +21,29 @@ public sealed class DirectoryComparisonModule : IComparisonModule
             new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
         int compareTotal = 0, compareDone = 0, filesFound = 0;
 
-        ComparisonResult Snapshot() => new(request.LeftPath, request.RightPath, Id, request.AlgorithmId,
-            inventory.Values.OrderBy(f => f.RelativePath, comparer).ThenBy(f => f.Status).ToArray(), []);
+        // A faulty progress sink must never fail the comparison itself.
+        void Report(ComparisonProgress value)
+        {
+            try { progress?.Report(value); }
+            catch { /* the sink's problem, not the compare's */ }
+        }
+
+        // Entries reach a consumer through PartialResult (root wave) or Added (later waves). A
+        // FileUpdate is only sent once its entry was announced, so a consumer that applies deltas in
+        // order always has somewhere to put it; a result that arrives early is held until then.
+        // The "announced" flag is set only AFTER the announcement was delivered: setting it first
+        // would let a compare worker slip its FileUpdate in ahead of the entry's own announcement.
+        var announced = new ConcurrentDictionary<string, byte>(comparer);
+        var heldUpdates = new ConcurrentDictionary<string, FileComparison>(comparer);
+        void Delivered(IReadOnlyList<FileComparison> entries)
+        {
+            foreach (var entry in entries) announced.TryAdd(entry.RelativePath, 0);
+            foreach (var entry in entries)
+                if (heldUpdates.TryRemove(entry.RelativePath, out var update))
+                    Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), update.RelativePath, FileUpdate: update));
+        }
+        FileComparison[] Ordered() => inventory.Values.OrderBy(f => f.RelativePath, comparer).ThenBy(f => f.Status).ToArray();
+        ComparisonResult Snapshot() => new(request.LeftPath, request.RightPath, Id, request.AlgorithmId, Ordered(), []);
 
         // Content compare overlaps BFS scan. Only FileUpdate is reported (no full Snapshot) so
         // the UI thread is not flooded with million-entry arrays.
@@ -48,13 +69,21 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                 inventory[pair.Relative] = item;
                 int done = Interlocked.Increment(ref compareDone);
                 int total = Math.Max(Volatile.Read(ref compareTotal), done);
-                progress?.Report(new(done, total, pair.Relative, FileUpdate: item));
+                if (announced.ContainsKey(pair.Relative)) Report(new(done, total, pair.Relative, FileUpdate: item));
+                else
+                {
+                    heldUpdates[pair.Relative] = item;
+                    if (announced.ContainsKey(pair.Relative) && heldUpdates.TryRemove(pair.Relative, out _))
+                        Report(new(done, total, pair.Relative, FileUpdate: item));   // announced while we were holding it
+                }
             });
         }, cancellationToken);
 
-        // BFS: root wave sends PartialResult once; later waves send only Added deltas.
+        // BFS: root wave sends PartialResult once; later waves send only Added deltas. Entries found
+        // in a throttled wave carry over to the next reported wave — a delta is never dropped.
         var pending = new ConcurrentQueue<string>();
         pending.Enqueue("");
+        var unreported = new ConcurrentBag<FileComparison>();
         bool firstWave = true;
         var scanWorkers = Math.Clamp(Environment.ProcessorCount, 2, 8);
         long lastWaveReport = Environment.TickCount64;
@@ -75,8 +104,8 @@ public sealed class DirectoryComparisonModule : IComparisonModule
             {
                 string leftDir = relative.Length == 0 ? request.LeftPath : Path.Combine(request.LeftPath, relative);
                 string rightDir = relative.Length == 0 ? request.RightPath : Path.Combine(request.RightPath, relative);
-                var leftTask = Task.Run(() => Enumerate(leftDir, relative, comparer, token), token);
-                var rightTask = Task.Run(() => Enumerate(rightDir, relative, comparer, token), token);
+                var leftTask = Task.Run(() => Enumerate("left", leftDir, relative, comparer, token), token);
+                var rightTask = Task.Run(() => Enumerate("right", rightDir, relative, comparer, token), token);
                 await Task.WhenAll(leftTask, rightTask).ConfigureAwait(false);
                 var leftEntries = leftTask.Result;
                 var rightEntries = rightTask.Result;
@@ -108,13 +137,17 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     else if (rightFile is null)
                         entry = new(childRel, FileStatus.LeftOnly, []);
                     else
-                    {
                         entry = new(childRel, FileStatus.Pending, [], Note: "内容比较中…");
+                    // The placeholder goes into the inventory BEFORE the pair is queued: the compare
+                    // worker replaces inventory[relative] with its result, and a placeholder written
+                    // afterwards would overwrite a result that is already in.
+                    if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
+                    else inventory[childRel] = entry;
+                    if (leftFile is not null && rightFile is not null)
+                    {
                         Interlocked.Increment(ref compareTotal);
                         await bothSides.Writer.WriteAsync((childRel, leftFile, rightFile), token).ConfigureAwait(false);
                     }
-                    if (inventory.TryAdd(childRel, entry)) waveAdded.Add(entry);
-                    else inventory[childRel] = entry;
                     Interlocked.Increment(ref filesFound);
                 }
 
@@ -130,18 +163,26 @@ public sealed class DirectoryComparisonModule : IComparisonModule
             });
 
             foreach (string dir in nextDirs.Keys) pending.Enqueue(dir);
+            foreach (var entry in waveAdded) unreported.Add(entry);
 
             int found = Volatile.Read(ref filesFound);
             long now = Environment.TickCount64;
-            // Root always reports; later waves throttle to keep progress.Report cheap for the UI.
-            bool report = firstWave || waveAdded.Count > 0 && (now - lastWaveReport >= 250 || pending.IsEmpty);
-            if (report)
+            if (firstWave)
             {
                 lastWaveReport = now;
-                if (firstWave)
-                    progress?.Report(new(found, 0, "scan:root", PartialResult: Snapshot()));
-                else
-                    progress?.Report(new(found, 0, $"scan:wave:{found}", Added: waveAdded.ToArray()));
+                var root = Snapshot();
+                Report(new(found, 0, "scan:root", PartialResult: root));
+                Delivered(root.Files);
+                unreported.Clear();   // the root wave was announced in full; its entries are not deltas
+            }
+            else if (!unreported.IsEmpty && (now - lastWaveReport >= 250 || pending.IsEmpty))
+            {
+                // Later waves are throttled to keep progress.Report cheap for the UI.
+                lastWaveReport = now;
+                var added = unreported.ToArray();
+                unreported.Clear();
+                Report(new(found, 0, $"scan:wave:{found}", Added: added));
+                Delivered(added);
             }
             firstWave = false;
             if (!request.EffectiveOptions.Recursive) break;
@@ -149,10 +190,39 @@ public sealed class DirectoryComparisonModule : IComparisonModule
 
         bothSides.Writer.TryComplete();
         await compareTask.ConfigureAwait(false);
-        return Snapshot();
+        foreach (var update in heldUpdates.Values) Report(new(Volatile.Read(ref compareDone), Math.Max(Volatile.Read(ref compareTotal), Volatile.Read(ref compareDone)), update.RelativePath, FileUpdate: update));
+        return new(request.LeftPath, request.RightPath, Id, request.AlgorithmId, ResolveFolders(Ordered(), comparer), []);
     }
 
-    private static DirListing Enumerate(string directory, string relativePrefix, StringComparer comparer, CancellationToken token)
+    /// <summary>The final result never carries <see cref="FileStatus.Pending"/>. A folder present on
+    /// both sides summarises its subtree the way a tree view rolls statuses up: a differing or
+    /// one-sided file inside makes it Modified, an error inside makes it Error, otherwise Equal.
+    /// Consumers that only care about files can still filter on <c>IsDirectory</c>.</summary>
+    private static FileComparison[] ResolveFolders(FileComparison[] entries, StringComparer comparer)
+    {
+        var rollup = new Dictionary<string, FileStatus>(comparer);
+        foreach (var entry in entries)
+            if (entry.IsDirectory && entry.Status == FileStatus.Pending) rollup[entry.RelativePath] = FileStatus.Equal;
+        if (rollup.Count == 0) return entries;
+        foreach (var entry in entries)
+        {
+            if (entry.IsDirectory || entry.Status == FileStatus.Equal) continue;
+            for (string? folder = Path.GetDirectoryName(entry.RelativePath); !string.IsNullOrEmpty(folder); folder = Path.GetDirectoryName(folder))
+                if (rollup.TryGetValue(folder, out var current))
+                    rollup[folder] = entry.Status == FileStatus.Error ? FileStatus.Error
+                        : current == FileStatus.Error ? FileStatus.Error : FileStatus.Modified;
+        }
+        return [.. entries.Select(entry => entry.IsDirectory && rollup.TryGetValue(entry.RelativePath, out var status) ? entry with { Status = status } : entry)];
+    }
+
+    private sealed class DirListing(StringComparer comparer)
+    {
+        public Dictionary<string, string> Files { get; } = new(comparer);
+        public Dictionary<string, string> Dirs { get; } = new(comparer);
+        public List<FileComparison> Errors { get; } = [];
+    }
+
+    private static DirListing Enumerate(string side, string directory, string relativePrefix, StringComparer comparer, CancellationToken token)
     {
         var listing = new DirListing(comparer);
         if (!Directory.Exists(directory)) return listing;
@@ -169,7 +239,7 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                     if ((attributes & FileAttributes.ReparsePoint) != 0)
                     {
                         listing.Errors.Add(new(childRel, FileStatus.Error, [],
-                            Note: "symbolic link/reparse point excluded; comparison is incomplete."));
+                            Note: $"{side}: symbolic link/reparse point excluded; comparison is incomplete."));
                         continue;
                     }
                     if ((attributes & FileAttributes.Directory) != 0) listing.Dirs[name] = path;
@@ -179,21 +249,14 @@ public sealed class DirectoryComparisonModule : IComparisonModule
                 {
                     string name = Path.GetFileName(path);
                     string childRel = relativePrefix.Length == 0 ? name : Path.Combine(relativePrefix, name);
-                    listing.Errors.Add(new(childRel, FileStatus.Error, [], Note: ex.Message));
+                    listing.Errors.Add(new(childRel, FileStatus.Error, [], Note: $"{side}: {ex.Message}"));
                 }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            listing.Errors.Add(new(relativePrefix.Length == 0 ? "." : relativePrefix, FileStatus.Error, [], Note: ex.Message));
+            listing.Errors.Add(new(relativePrefix.Length == 0 ? "." : relativePrefix, FileStatus.Error, [], Note: $"{side}: {ex.Message}"));
         }
         return listing;
-    }
-
-    private sealed class DirListing(StringComparer comparer)
-    {
-        public Dictionary<string, string> Files { get; } = new(comparer);
-        public Dictionary<string, string> Dirs { get; } = new(comparer);
-        public List<FileComparison> Errors { get; } = [];
     }
 }

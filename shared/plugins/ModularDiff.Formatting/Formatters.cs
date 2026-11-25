@@ -29,10 +29,12 @@ public sealed class TextFormatter : IResultFormatter
     {
         await writer.WriteLineAsync($"Left:  {result.LeftPath}\nRight: {result.RightPath}\nModule: {result.ModuleId} | Algorithm: {result.AlgorithmId}");
         foreach (var warning in result.Warnings) await writer.WriteLineAsync($"WARNING: {warning}");
-        foreach (var file in result.Files)
+        // A folder that exists on one side only is a finding of its own; folders present on both
+        // sides are structure (their files are listed one by one) and are not reported as rows.
+        foreach (var file in result.Files.Where(Reported))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await writer.WriteLineAsync($"\n[{file.Status}] {file.RelativePath}{(file.IsBinary ? " (byte comparison)" : "")}");
+            await writer.WriteLineAsync($"\n[{file.Status}] {file.RelativePath}{(file.IsDirectory ? "/" : "")}{(file.IsBinary ? " (byte comparison)" : "")}");
             if (file.Note is not null) await writer.WriteLineAsync($"  {file.Note}");
             foreach (var line in file.Lines.Where(l => l.Kind != EditKind.Equal))
             {
@@ -44,6 +46,11 @@ public sealed class TextFormatter : IResultFormatter
                 await writer.WriteLineAsync($"{marker} {number,6} | {text} [{ending}]");
             }
         }
-        await writer.WriteLineAsync($"\nFiles: {result.Files.Count}; changed: {result.Files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}; errors: {result.Files.Count(f => f.Status == FileStatus.Error)}");
+        var files = result.Files.Where(f => !f.IsDirectory).ToArray();   // folder rows are never counted as files
+        await writer.WriteLineAsync($"\nFiles: {files.Length}; changed: {files.Count(f => f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly)}; errors: {files.Count(f => f.Status == FileStatus.Error)}");
     }
+
+    /// <summary>Rows worth a line in a report: every file, plus folders that exist on one side only.</summary>
+    internal static bool Reported(FileComparison entry) =>
+        !entry.IsDirectory || entry.Status is FileStatus.LeftOnly or FileStatus.RightOnly;
 }

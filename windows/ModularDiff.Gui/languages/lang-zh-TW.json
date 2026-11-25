@@ -596,7 +596,7 @@
     "extensions[] 必须是非空字符串": "extensions[] 必須是非空字串",
     "rules[].kind '{0}' 不是有效的 SyntaxTokenKind": "rules[].kind '{0}' 不是有效的 SyntaxTokenKind",
     "rules[].pattern 必须是字符串": "rules[].pattern 必須是字串",
-    "symbolic link/reparse point excluded; comparison is incomplete.": "符號連結/重新解析點已排除；比較不完整。",
+    "{0}: symbolic link/reparse point excluded; comparison is incomplete.": "{0}：符號連結/重新解析點已排除；比較不完整。",
     "不支持符号链接或目录联接：{0}": "不支援符號連結或目錄聯接：{0}",
     "不是有效的 xlsx（缺少 workbook.xml）。": "不是有效的 xlsx（缺少 workbook.xml）。",
     "不是有效的 xlsx（缺少关系映射）。": "不是有效的 xlsx（缺少關聯對應）。",
