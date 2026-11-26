@@ -116,6 +116,9 @@ public sealed partial class MainWindow : Window
     private ComparisonResult? _pair;
     private bool _lastFocusLeft = true;
     private bool _loading, _busy, _allowClose, _closePending;
+    [Flags]
+    private enum EditTyping { None = 0, Left = 1, Right = 2 }
+    private EditTyping _typingIn;   // a box of the edit tab took input that its TextChanged has not committed yet
     private int _compareRun;   // 进度回调所属的比较轮次:结果已应用(或已开始新一轮)后,迟到的进度更新不再改写状态栏
     public MainWindow(string[] args)
     {
@@ -277,6 +280,16 @@ public sealed partial class MainWindow : Window
         foreach (var control in _toolbar.Children) control.Margin = new Thickness(2, 0, 2, 3);   // WrapPanel 没有 Spacing:用外边距留出间隔
         root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status.Block, 3); root.Children.Add(_status.Block); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
+        // A box's TextChanged comes after its text changed, on a later pass. Until then the box is ahead of its buffer,
+        // and SyncEditors must leave it alone: it would write the buffer's older text over what was just typed.
+        foreach (var (box, left) in new[] { (_leftEditor, true), (_rightEditor, false) })
+        {
+            void Typing(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => _typingIn |= left ? EditTyping.Left : EditTyping.Right;
+            // On the way down: the box handles both events itself (typing, the paste key), and a handler that only sees
+            // unhandled events would never learn of them.
+            box.AddHandler(Avalonia.Input.InputElement.TextInputEvent, Typing, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+            box.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, Typing, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        }
         _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = Lang.Text(ex.Message); } };
         _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? FirstAlgorithmId(); _rows.Rows = []; _debounce.Start(); };
         Closing += async (_, e) =>
@@ -317,6 +330,52 @@ public sealed partial class MainWindow : Window
             { e.Handled = true; CloseFind(); }   // the find box handles its own Esc; this one is for when the focus is elsewhere
             if (e.Key == Avalonia.Input.Key.Escape && _awaitingAlignTarget)
             { _awaitingAlignTarget = false; _status.Text = Lang.Get("status_align_cancelled"); e.Handled = true; }
+            var shift = Avalonia.Input.KeyModifiers.Shift;
+            // Cmd+S saves the side that has the focus (a text box of the edit tab), or both sides when neither does;
+            // Shift+Cmd+S saves both. In the hex view it writes the edited bytes to disk.
+            if (e.Key == Avalonia.Input.Key.S && (e.KeyModifiers & command) != 0)
+            {
+                e.Handled = true;
+                if (HexMode) Run(async () => { if (SaveHexEdit()) await Compare(); });
+                else
+                {
+                    var focused = FocusManager?.GetFocusedElement() as Control;
+                    Run(async () =>
+                    {
+                        bool side = ReferenceEquals(focused, _leftEditor) || ReferenceEquals(focused, _rightEditor);
+                        if (side && !e.KeyModifiers.HasFlag(shift)) await _session.SaveAsync(ReferenceEquals(focused, _leftEditor));
+                        else { await _session.SaveAsync(true); await _session.SaveAsync(false); }
+                        RefreshDirty();
+                    });
+                }
+            }
+            else if (e.Key == Avalonia.Input.Key.F5)
+            { e.Handled = true; Run(Compare); }
+            else if (e.Key == Avalonia.Input.Key.Z && (e.KeyModifiers & command) != 0 && _tabs.SelectedIndex == 0 && !HexMode)
+            {
+                // The edit tab's text boxes undo their own typing. This is for the diff tab, where a change went into
+                // the comparison itself: it takes the last step back on each side (Shift+Cmd+Z puts it again).
+                e.Handled = true;
+                Run(() => { _session.History(true, e.KeyModifiers.HasFlag(shift)); _session.History(false, e.KeyModifiers.HasFlag(shift)); RefreshEditors(); return Task.CompletedTask; });
+            }
+        });
+
+        // Files dropped on the window: two fill the left and the right path, one fills the half it was dropped on
+        // (as the WPF GUI does). The paths are filled in, not compared: Enter or the compare button does that.
+        Avalonia.Input.DragDrop.SetAllowDrop(this, true);
+        AddHandler(Avalonia.Input.DragDrop.DragOverEvent, (_, e) =>
+        {
+            e.DragEffects = Avalonia.Input.DataTransferExtensions.Contains(e.DataTransfer, Avalonia.Input.DataFormat.File) ? Avalonia.Input.DragDropEffects.Copy : Avalonia.Input.DragDropEffects.None;
+        });
+        AddHandler(Avalonia.Input.DragDrop.DropEvent, (_, e) =>
+        {
+            e.Handled = true;
+            if (_busy || !Avalonia.Input.DataTransferExtensions.Contains(e.DataTransfer, Avalonia.Input.DataFormat.File)) return;
+            string[] dropped = Avalonia.Input.DataTransferExtensions.TryGetFiles(e.DataTransfer)?.Select(Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath).OfType<string>().ToArray() ?? [];
+            if (dropped.Length == 0) return;
+            if (dropped.Length > 1) { _leftPath.Text = dropped[0]; _rightPath.Text = dropped[1]; }
+            else if (e.GetPosition(this).X < Bounds.Width / 2) _leftPath.Text = dropped[0];
+            else _rightPath.Text = dropped[0];
         });
         if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         if (Palette.SavedLanguage is { } saved && Lang.Available.Contains(saved)) Lang.Apply(saved);
@@ -1145,6 +1204,7 @@ public sealed partial class MainWindow : Window
     }
     private void Edited(bool left)
     {
+        _typingIn &= left ? ~EditTyping.Left : ~EditTyping.Right;
         if (_loading) return;
         try { if (_session.Left is null) return; string text = (left ? _leftEditor.Text : _rightEditor.Text) ?? ""; if ((left ? _session.Left : _session.Right)?.Text == text) return; _session.Edit(left, text); _rows.Rows = []; _debounce.Stop(); _debounce.Start(); RefreshDirty(); } catch (Exception ex) { _status.Text = ex.Message; }
     }
@@ -1195,6 +1255,11 @@ public sealed partial class MainWindow : Window
     public bool FindCaseSensitive { get => _findCase.IsChecked == true; set => _findCase.IsChecked = value; }
     public Avalonia.Controls.Primitives.ToggleButton FindCaseToggle => _findCase;
     public TextBox FindBox => _findBox;
+    /// <summary>编辑页某一侧的整文编辑框(测试用它确认 ⌘S 保存的是聚焦的一侧)。</summary>
+    public TextBox EditorBox(bool left) => left ? _leftEditor : _rightEditor;
+    /// <summary>会话缓冲区本身(与编辑页的文本框相对):文本与是否有未保存的修改。测试用它区分"文本框里是什么"和"比较用的是什么"。</summary>
+    public (string? Left, string? Right) SessionText => (_session.Left?.Text, _session.Right?.Text);
+    public (bool Left, bool Right) SessionDirty => (_session.Left?.IsDirty == true, _session.Right?.IsDirty == true);
 
     /// <summary>打开查找条并把输入焦点放进去(差异页)。</summary>
     public void ShowFind()
@@ -1230,11 +1295,30 @@ public sealed partial class MainWindow : Window
         ? ((_findBox.Text ?? "").Length > 0 && _findBar.IsVisible ? Lang.Get("md_find_none") : "")
         : $"{_rows.FindIndex + 1} / {_rows.FindMatchCount}";
 
+    /// <summary>The edit tab's text boxes show the buffers. A change made anywhere else — an inline edit, a line copied
+    /// to the other side, a tool of the context menu — has to reach them: while a box showed the old text, the next
+    /// keystroke typed in it wrote the old text back over the change. A box is left alone while it already shows its
+    /// buffer's text, so typing there keeps its caret. Every path that changes a buffer ends in RefreshDirty.</summary>
+    private void SyncEditors()
+    {
+        if (_loading) return;
+        _loading = true;
+        try
+        {
+            string left = _session.Left?.Text ?? "", right = _session.Right?.Text ?? "";
+            // A box that took input waits for its own TextChanged: what is in it is newer than the buffer.
+            if ((_typingIn & EditTyping.Left) == 0 && _leftEditor.Text != left) _leftEditor.Text = left;
+            if ((_typingIn & EditTyping.Right) == 0 && _rightEditor.Text != right) _rightEditor.Text = right;
+        }
+        finally { _loading = false; }
+    }
+
     // Between an edit and its realignment there is no presentation (in manual mode for the 250 ms of the debounce):
     // the count shown is the last one there was. Zero would be false, and the realign brings the true number.
     private int _knownHunks;
     private void RefreshDirty()
     {
+        SyncEditors();
         if (_session.Left is null) { _status.Text = Lang.Get("md_pick_path_hint"); return; }
         if (_session.Presentation is { } presentation) _knownHunks = presentation.Hunks.Count;
         // From a recipe: the status line says the same thing in whatever language is chosen later.
