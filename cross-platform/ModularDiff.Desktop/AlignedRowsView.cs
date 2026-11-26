@@ -26,6 +26,15 @@ public sealed class AlignedRowsView : Control
     private bool _dragging;
     private bool _vertical;
     private readonly Dictionary<int, int> _bookmarks = new();
+    // ─── 查找:两侧的行文本里都找。行集合一换就按原查询重找 ───
+    private readonly List<(int Row, bool Left, int Start, int Length)> _findMatches = [];
+    private Dictionary<int, List<(bool Left, int Start, int Length)>> _findInRow = [];
+    private int _findCurrent = -1;
+    private string _findQuery = "";
+    private bool _findIgnoreCase = true;
+    private static readonly IBrush FindMatchBrush = new SolidColorBrush(Color.FromArgb(0x70, 0xF5, 0xA6, 0x23));
+    private static readonly IBrush FindCurrentBrush = new SolidColorBrush(Color.FromArgb(0xFF, 0xC2, 0x6A, 0x00));
+    private static readonly Pen FindCurrentPen = new(FindCurrentBrush, 1.5);
 
     public AlignedRowsView()
     {
@@ -55,7 +64,7 @@ public sealed class AlignedRowsView : Control
         if (row < 0 || row >= _rows.Count) return null;
         return (row, point.X >= Math.Max(80, Bounds.Width / 2));
     }
-    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; ResetPointerState(); InvalidateMeasure(); InvalidateVisual(); } }
+    public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; ResetPointerState(); SetFind(_findQuery, _findIgnoreCase); InvalidateMeasure(); InvalidateVisual(); } }
     public int RowCount => _rows.Count;
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
     public int PrimarySelected => _primary;
@@ -121,6 +130,70 @@ public sealed class AlignedRowsView : Control
             }
         return false;
     }
+    /// <summary>匹配的总数。</summary>
+    public int FindMatchCount => _findMatches.Count;
+    /// <summary>当前匹配的序号(从 0 起);没有匹配为 -1。</summary>
+    public int FindIndex => _findCurrent;
+    /// <summary>当前匹配:行、侧、在行文本里的起点与长度。</summary>
+    public (int Row, bool Left, int Start, int Length)? FindMatch => _findCurrent >= 0 ? _findMatches[_findCurrent] : null;
+
+    /// <summary>按 <paramref name="query"/> 重新找一遍,按行、左侧先于右侧、起点的顺序排列。
+    /// 当前匹配还是原来那一处(如果它仍是匹配);否则取原行上的第一处,再没有就取第一处。</summary>
+    public void SetFind(string query, bool ignoreCase = true)
+    {
+        (int Row, bool Left, int Start, int Length)? was = FindMatch;
+        _findQuery = query ?? "";
+        _findIgnoreCase = ignoreCase;
+        _findMatches.Clear();
+        if (_findQuery.Length > 0)
+        {
+            var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            for (int i = 0; i < _rows.Count; i++)
+                foreach (bool left in new[] { true, false })
+                {
+                    var text = (left ? _rows[i].Left : _rows[i].Right)?.Text;
+                    if (string.IsNullOrEmpty(text)) continue;
+                    for (int at = text.IndexOf(_findQuery, comparison); at >= 0; at = text.IndexOf(_findQuery, at + _findQuery.Length, comparison))
+                        _findMatches.Add((i, left, at, _findQuery.Length));
+                }
+        }
+        _findInRow = _findMatches.GroupBy(match => match.Row).ToDictionary(group => group.Key, group => group.Select(match => (match.Left, match.Start, match.Length)).ToList());
+        _findCurrent = was is { } keep ? _findMatches.IndexOf(keep) : -1;
+        if (_findCurrent < 0 && _findMatches.Count > 0)
+            _findCurrent = Math.Max(0, _findMatches.FindIndex(match => match.Row >= (was?.Row ?? 0)));
+        InvalidateVisual();
+    }
+
+    /// <summary>走到下一处 / 上一处(首尾相接),选中它所在的行并滚动到可见。没有匹配时返回 false。</summary>
+    public bool FindNext(bool backwards = false)
+    {
+        if (_findMatches.Count == 0) return false;
+        _findCurrent = _findCurrent < 0 ? (backwards ? _findMatches.Count - 1 : 0)
+            : (_findCurrent + (backwards ? -1 : 1) + _findMatches.Count) % _findMatches.Count;
+        var match = _findMatches[_findCurrent];
+        _selected.Clear(); _selected.Add(match.Row); _primary = _anchor = match.Row;
+        EnsureVisible(match.Row);
+        InvalidateVisual();
+        SelectionChanged?.Invoke();
+        return true;
+    }
+
+    /// <summary>查找匹配:文字下面铺一层底色,当前匹配再描一圈边。只画可见前缀里的部分。</summary>
+    private void DrawFindMatches(DrawingContext context, int index, bool left, int drawnLength, double textX, double charWidth, Rect band)
+    {
+        if (!_findInRow.TryGetValue(index, out var matches)) return;
+        foreach (var match in matches)
+        {
+            if (match.Left != left) continue;
+            int start = Math.Clamp(match.Start, 0, drawnLength), length = Math.Clamp(match.Length, 0, drawnLength - start);
+            if (length <= 0) continue;
+            var rect = new Rect(textX + start * charWidth, band.Y + 2, length * charWidth, RowHeight - 5);
+            context.FillRectangle(FindMatchBrush, rect, 2);
+            if (_findCurrent >= 0 && _findMatches[_findCurrent] == (index, left, match.Start, match.Length))
+                context.DrawRectangle(FindCurrentPen, rect.Deflate(0.75), 2);
+        }
+    }
+
     /// <summary>选中当前行所在的整个差异块(所有同 HunkId 的行)。</summary>
     public void SelectHunk(AlignedRow row)
     {
@@ -213,6 +286,7 @@ public sealed class AlignedRowsView : Control
             if (length <= 0) continue;
                 context.FillRectangle(Palette.Word, new Rect(textX + start * charWidth, band.Y + 2, length * charWidth, RowHeight - 5), 2);
         }
+        DrawFindMatches(context, index, left, drawn.Length, textX, charWidth, band);
         // 语法着色:令牌分彩段绘制(等宽字体按字符宽推进,避免逐字符排版开销)
         var syntax = (left ? SyntaxLeft : SyntaxRight)?.Invoke(cell.Text);
         double y = band.Y + (RowHeight - TextSize * 1.35) / 2;   // 与居中编辑器的文本基线对齐
@@ -258,6 +332,8 @@ public sealed class AlignedRowsView : Control
     };
     private static double _charWidth;
     private static double CharWidth => _charWidth != 0 ? _charWidth : _charWidth = new FormattedText("M", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, Typeface, TextSize, Palette.Ink).Width;
+    /// <summary>一行文本里一个字符的宽度(等宽字体);查找匹配的位置按它算。</summary>
+    public double CharacterWidth => CharWidth;
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {

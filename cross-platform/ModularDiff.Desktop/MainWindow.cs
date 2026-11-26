@@ -32,6 +32,12 @@ public sealed partial class MainWindow : Window
     private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly ScrollViewer _diffScroll = new();
     private readonly Canvas _editorHost = new();
+    // ─── 查找:差异视图两侧的行文本。查找条在差异页上方,⌘F 打开;F3 / ⇧F3 下一处 / 上一处,Enter 在查找框里是下一处,Esc 关闭 ───
+    private readonly Grid _diffHost = new();
+    private readonly Grid _findBar = new() { IsVisible = false, ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto,Auto"), Margin = new Thickness(6, 4, 6, 2) };
+    private readonly TextBox _findBox = new() { Watermark = Lang.Get("a11y_find"), Width = 380, MinWidth = 160, HorizontalAlignment = HorizontalAlignment.Left };
+    private readonly TextBlock _findCount = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0), MinWidth = 64 };
+    private readonly Avalonia.Controls.Primitives.ToggleButton _findCase = new() { Content = "Aa", Padding = new Thickness(6, 2) };
     private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
     private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
@@ -60,6 +66,7 @@ public sealed partial class MainWindow : Window
         ToolTip.SetTip(_algorithm, AlgorithmTip());   // names the unimportant rules too, when there are any
         _leftPath.Watermark = Lang.Get("md_path_left_hint"); _rightPath.Watermark = Lang.Get("md_path_right_hint");
         _leftSideLabel.Text = Lang.Get("side_left"); _rightSideLabel.Text = Lang.Get("side_right");
+        _findBox.Watermark = Lang.Get("a11y_find"); UpdateFindCount();
         LocalizeFolderView();   // 筛选下拉/计数/已显示的行跟着换语言
         // 页签标题变了长短,页签条要重新测量:否则切到更长的语言时标题被截成 "Aligned ["。
         int selected = Math.Max(0, _tabs.SelectedIndex);
@@ -185,7 +192,12 @@ public sealed partial class MainWindow : Window
         _toolbar.Children.Add(LButton("⤓", "export", () => Run(() => ExportReportAsync())));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
         _diffTab.Header = Lang.Get("md_tab_diff");
-        _diffTab.Content = _diffScroll; _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
+        _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
+        BuildFindBar();
+        _diffHost.RowDefinitions = new RowDefinitions("Auto,*");
+        _diffHost.Children.Add(_findBar);
+        Grid.SetRow(_diffScroll, 1); _diffHost.Children.Add(_diffScroll);
+        _diffTab.Content = _diffHost;
         _editorHost.Children.Add(_cellEditor); _cellEditor.IsVisible = false;
         _cellEditor.TextChanged += (_, _) => { if (_editingRow is { } row && !_editorLoading) CellEdited(row, _editingLeft, _cellEditor); };
         _cellEditor.KeyDown += (_, e) => { if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Escape) { if (e.Key == Avalonia.Input.Key.Escape) _editorLoading = true; EndCellEdit(); e.Handled = true; } };
@@ -296,6 +308,13 @@ public sealed partial class MainWindow : Window
         {
             if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
             { e.Handled = true; Run(GoToLineAsync); }
+            var command = Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control;
+            if (e.Key == Avalonia.Input.Key.F && (e.KeyModifiers & command) != 0 && !HexMode)
+            { e.Handled = true; ShowFind(); }
+            else if (e.Key == Avalonia.Input.Key.F3 && _findBar.IsVisible)
+            { e.Handled = true; FindNext(e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift)); }
+            else if (e.Key == Avalonia.Input.Key.Escape && _findBar.IsVisible)
+            { e.Handled = true; CloseFind(); }   // the find box handles its own Esc; this one is for when the focus is elsewhere
             if (e.Key == Avalonia.Input.Key.Escape && _awaitingAlignTarget)
             { _awaitingAlignTarget = false; _status.Text = Lang.Get("status_align_cancelled"); e.Handled = true; }
         });
@@ -917,7 +936,7 @@ public sealed partial class MainWindow : Window
     private async Task OpenFile(string left, string right)
     {
         _diffTab.Header = Lang.Get("md_tab_diff");
-        _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false; _pair = null;
+        _diffTab.Content = _diffHost; _hexLeft = null; _hexDirty = false; _pair = null;
         await _session.LoadAsync(left, right);
         WireSyntax(left, right);
         RefreshEditors(); _tabs.SelectedIndex = 0;
@@ -951,7 +970,7 @@ public sealed partial class MainWindow : Window
         var a = Read(left); var b = Read(right);
         _hexLeft = a; _hexRight = b; _hexLeftPath = left; _hexRightPath = right; _hexDirty = false;
         _diffTab.Header = Lang.Get("md_tab_diff");
-        _diffTab.Content = _diffScroll;
+        _diffTab.Content = _diffHost; _findBar.IsVisible = false;   // 十六进制行里查找文本没有意义
         _rows.Rows = BuildHexRows(a, b);
         int first = FirstHexDifferenceRow(a, b);
         if (first >= 0) { _rows.SelectRows([_rows.Rows[first]]); _rows.EnsureVisible(first); }
@@ -1053,7 +1072,7 @@ public sealed partial class MainWindow : Window
         Grid.SetColumn(rightPane, 1);
         images.Children.Add(rightPane);
         panel.Children.Add(images);
-        _diffTab.Content = panel;
+        _diffTab.Content = panel; _findBar.IsVisible = false;
     }
     private static Avalonia.Media.IImage? OverlayDifference(string left, string right)
     {
@@ -1143,6 +1162,74 @@ public sealed partial class MainWindow : Window
         _rows.Rows = _session.Presentation?.Rows ?? [];
         RefreshDirty();
     }
+    private void BuildFindBar()
+    {
+        Tip(_findBox, "find");
+        _findBox.TextChanged += (_, _) => ApplyFind();
+        _findBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.Enter) { e.Handled = true; FindNext(e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift)); }
+            else if (e.Key == Avalonia.Input.Key.F3) { e.Handled = true; FindNext(e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift)); }
+            else if (e.Key == Avalonia.Input.Key.Escape) { e.Handled = true; CloseFind(); }
+        };
+        Tip(_findCase, "md_find_case_tip");
+        _findCase.IsCheckedChanged += (_, _) => ApplyFind();
+        // Every control in its own column (they would all land in the first one and pile up).
+        void Place(Control control, int column) { Grid.SetColumn(control, column); _findBar.Children.Add(control); }
+        Place(new TextBlock { Text = "🔍", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) }, 0);
+        Place(_findBox, 1);
+        Place(_findCount, 2);
+        Place(_findCase, 3);
+        Place(LButton("↑", "md_find_prev_tip", () => FindNext(true)), 4);
+        Place(LButton("↓", "find_next_tip", () => FindNext(false)), 5);
+        Place(LButton("✕", "md_find_close_tip", CloseFind), 6);
+    }
+
+    /// <summary>查找框里的文字。设置即打开查找条并重新找。</summary>
+    public string FindText { get => _findBox.Text ?? ""; set { ShowFind(); _findBox.Text = value; ApplyFind(); } }
+    public bool FindBarVisible => _findBar.IsVisible;
+    /// <summary>当前匹配的序号(从 0 起,没有匹配为 -1)、匹配总数、当前匹配所在的行。</summary>
+    public (int Index, int Count, int? Row) FindState => (_rows.FindIndex, _rows.FindMatchCount, _rows.FindMatch?.Row);
+    public (int Row, bool Left, int Start, int Length)? FindMatch => _rows.FindMatch;
+    public string FindCountText => _findCount.Text ?? "";
+    public bool FindCaseSensitive { get => _findCase.IsChecked == true; set => _findCase.IsChecked = value; }
+    public Avalonia.Controls.Primitives.ToggleButton FindCaseToggle => _findCase;
+    public TextBox FindBox => _findBox;
+
+    /// <summary>打开查找条并把输入焦点放进去(差异页)。</summary>
+    public void ShowFind()
+    {
+        if (_tabs.SelectedIndex != 0) _tabs.SelectedIndex = 0;
+        _findBar.IsVisible = true;
+        _findBox.Focus();
+        _findBox.SelectAll();
+    }
+
+    public void CloseFind()
+    {
+        _findBox.Text = "";   // clears the matches through ApplyFind
+        _findBar.IsVisible = false;
+        _rows.Focus();
+    }
+
+    /// <summary>下一处 / 上一处;计数文字跟着更新。没有匹配时返回 false。</summary>
+    public bool FindNext(bool backwards = false)
+    {
+        bool found = _rows.FindNext(backwards);
+        UpdateFindCount();
+        return found;
+    }
+
+    private void ApplyFind()
+    {
+        _rows.SetFind(_findBox.Text ?? "", !FindCaseSensitive);
+        UpdateFindCount();
+    }
+
+    private void UpdateFindCount() => _findCount.Text = _rows.FindMatchCount == 0
+        ? ((_findBox.Text ?? "").Length > 0 && _findBar.IsVisible ? Lang.Get("md_find_none") : "")
+        : $"{_rows.FindIndex + 1} / {_rows.FindMatchCount}";
+
     // Between an edit and its realignment there is no presentation (in manual mode for the 250 ms of the debounce):
     // the count shown is the last one there was. Zero would be false, and the realign brings the true number.
     private int _knownHunks;
