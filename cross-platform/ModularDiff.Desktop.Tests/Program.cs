@@ -597,6 +597,7 @@ Task.Run(async () =>
 // 必须放在下面这次 SetSynchronizationContext(null) 之前:上下文清空后,窗口里 Run() 的 await 后续体会落到
 // 线程池线程,再碰控件就是 "Call from invalid thread"。
 FolderViewTests.Run(pluginsPath, plugins, Check);
+ReportExportTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

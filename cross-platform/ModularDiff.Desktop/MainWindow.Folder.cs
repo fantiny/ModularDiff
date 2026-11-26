@@ -307,7 +307,7 @@ public sealed partial class MainWindow
     private void ApplyFolderResult(ComparisonResult result, bool switchToTab = true)
     {
         StopFolderScan();
-        _directory = result;
+        _directory = result; _pair = null;
         FolderCompareComplete = true;
         _scanStatus = _compareStatus = "";
         var keep = _files.SelectedItems?.Cast<FileComparison>().Select(f => f.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);

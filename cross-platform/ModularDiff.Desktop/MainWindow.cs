@@ -56,6 +56,7 @@ public sealed partial class MainWindow : Window
         int selected = Math.Max(0, _tabs.SelectedIndex);
         _tabs.ItemsSource = null; _tabs.ItemsSource = new[] { _diffTab, _editTab, _folderTab }; _tabs.SelectedIndex = selected;
         RefreshSessions();     // 会话 / 最近比较 两个框的标题跟着换语言
+        RefreshFormatBox();    // 报告格式的名字是插件名的译文,也跟着换
         _status.Relocalize();   // 用语言键生成的状态文本跟着换语言
     }
     /// <summary>状态栏。直接赋值的文本是"说过的原话";用 <see cref="Localized"/> 设置的文本带一份配方,
@@ -77,6 +78,9 @@ public sealed partial class MainWindow : Window
     private readonly TabItem _diffTab = new() { Header = "差异对齐" }, _editTab = new(), _folderTab = new();
     private readonly ComboBox _languageBox = new() { Width = 96 };
     private readonly ComboBox _algorithm = new() { Width = 130 };
+    // 报告导出:格式全部来自 IResultFormatter 插件(文本 / JSON / HTML)。下拉里显示的是插件名的译文,换语言时重建。
+    private readonly ComboBox _formatBox = new() { Width = 150 };
+    private IResultFormatter[] _formatters = [];
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreEol = new() { Content = "↵", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreWhitespace = new() { Content = "␣", MinWidth = 32, Padding = new Thickness(8, 4) };
     private readonly Avalonia.Controls.Primitives.ToggleButton _ignoreCase = new() { Content = "Aa", MinWidth = 32, Padding = new Thickness(8, 4) };
@@ -91,6 +95,9 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _debounce = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly TextBlock _binaryInfo = new() { TextWrapping = TextWrapping.Wrap, FontSize = 14, Foreground = Brush.Parse("#253041"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private ComparisonResult? _directory;
+    /// <summary>最近一次直接比较的文件对(十六进制 / 图片 / 出错的那些没有文本会话);导出报告时用它。
+    /// 目录比较与打开文本对都会清掉它。</summary>
+    private ComparisonResult? _pair;
     private bool _lastFocusLeft = true;
     private bool _loading, _busy, _allowClose, _closePending;
     private int _compareRun;   // 进度回调所属的比较轮次:结果已应用(或已开始新一轮)后,迟到的进度更新不再改写状态栏
@@ -163,6 +170,10 @@ public sealed partial class MainWindow : Window
         _toolbar.Children.Add(LButton("⇥", "md_tip_sync_l2r", () => Run(() => Sync(SyncMode.LeftToRight))));
         _toolbar.Children.Add(LButton("⇤", "md_tip_sync_r2l", () => Run(() => Sync(SyncMode.RightToLeft))));
         _toolbar.Children.Add(LButton("◷", "md_tip_history", () => Run(History)));
+        RefreshFormatBox();
+        Tip(_formatBox, "format_report");
+        _toolbar.Children.Add(_formatBox);
+        _toolbar.Children.Add(LButton("⤓", "export", () => Run(() => ExportReportAsync())));
         var paths = Columns(PathPanel(_leftPath), PathPanel(_rightPath));
         _diffTab.Header = Lang.Get("md_tab_diff");
         _diffTab.Content = _diffScroll; _diffScroll.Content = new Grid { Children = { _rows, _editorHost } };
@@ -843,6 +854,8 @@ public sealed partial class MainWindow : Window
         catch { StopFolderScan(); throw; }
         finally { _compareRun++; }   // this run is over (or failed): its late progress updates are dropped
         StopFolderScan();
+        // 十六进制 / 图片 / 出错的文件对没有文本会话:导出报告时用的就是这一次比较的结果。
+        _pair = folderPair ? null : result;
         if (folderPair)
         {
             // 扫描期间用户可能编辑了上一对文本:先问再丢弃。目录结果无论如何都落到列表里。
@@ -893,7 +906,7 @@ public sealed partial class MainWindow : Window
     private async Task OpenFile(string left, string right)
     {
         _diffTab.Header = Lang.Get("md_tab_diff");
-        _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false;
+        _diffTab.Content = _diffScroll; _hexLeft = null; _hexDirty = false; _pair = null;
         await _session.LoadAsync(left, right);
         WireSyntax(left, right);
         RefreshEditors(); _tabs.SelectedIndex = 0;
