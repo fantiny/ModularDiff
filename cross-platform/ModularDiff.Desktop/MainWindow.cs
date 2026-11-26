@@ -18,11 +18,16 @@ public sealed partial class MainWindow : Window
     private readonly PluginCatalog _plugins;
     private readonly bool _ownsPlugins;
     private readonly ComparisonSession _session;
-    private readonly TextBox _leftPath = new() { Watermark = "左侧文件或目录" }, _rightPath = new() { Watermark = "右侧文件或目录" };
+    private readonly TextBox _leftPath = new() { Watermark = Lang.Get("md_path_left_hint") }, _rightPath = new() { Watermark = Lang.Get("md_path_right_hint") };
     private readonly TextBox _leftEditor = Editor(), _rightEditor = Editor();
-    private readonly StatusLine _status = new(new TextBlock { Text = "选择左右文件或目录后比较", TextWrapping = TextWrapping.Wrap });
+    // Each edit panel is built once, so the side captions are kept where a language switch can find them.
+    private readonly TextBlock _leftSideLabel = new() { Text = Lang.Get("side_left"), VerticalAlignment = VerticalAlignment.Center },
+        _rightSideLabel = new() { Text = Lang.Get("side_right"), VerticalAlignment = VerticalAlignment.Center };
+    private readonly StatusLine _status = new(new TextBlock { Text = Lang.Get("status_initial"), TextWrapping = TextWrapping.Wrap });
     // 状态栏若正显示"语言已切换"的通知,记着它的配方:再切一次要换成这一次的语言,而不是把上一次的通知按新语言重新渲染。
     private Func<string>? _languageNotice;
+    // 启动提示("已加载 N 个插件…")同理:切语言时让位给切换通知 —— 它只是一句提示,而通知确认了刚才的操作。
+    private Func<string>? _startupNotice;
     private readonly AlignedRowsView _rows = new();
     private readonly ListBox _files = new() { SelectionMode = SelectionMode.Multiple };
     private readonly ScrollViewer _diffScroll = new();
@@ -44,6 +49,7 @@ public sealed partial class MainWindow : Window
         Tip(button, tipKey);
         return button;
     }
+    private string AlgorithmTip() => _unimportant.Count > 0 ? Lang.Get("md_algo_box_tip", Lang.Get("md_tip_algo"), _unimportant.Count) : Lang.Get("md_tip_algo");
     private void ApplyLanguage()
     {
         Title = Lang.Get("md_title");
@@ -51,6 +57,9 @@ public sealed partial class MainWindow : Window
         _editTab.Header = Lang.Get("md_tab_edit");      // 三个 tab 头全部纳入语言切换(此前编辑/目录页永不更新)
         _folderTab.Header = Lang.Get("md_tab_folder");
         foreach (var (target, key) in _localized) ToolTip.SetTip(target, Lang.Get(key));
+        ToolTip.SetTip(_algorithm, AlgorithmTip());   // names the unimportant rules too, when there are any
+        _leftPath.Watermark = Lang.Get("md_path_left_hint"); _rightPath.Watermark = Lang.Get("md_path_right_hint");
+        _leftSideLabel.Text = Lang.Get("side_left"); _rightSideLabel.Text = Lang.Get("side_right");
         LocalizeFolderView();   // 筛选下拉/计数/已显示的行跟着换语言
         // 页签标题变了长短,页签条要重新测量:否则切到更长的语言时标题被截成 "Aligned ["。
         int selected = Math.Max(0, _tabs.SelectedIndex);
@@ -75,7 +84,7 @@ public sealed partial class MainWindow : Window
     private byte[]? _hexLeft, _hexRight; private string _hexLeftPath = "", _hexRightPath = ""; private bool _hexDirty;
     private bool HexMode => _hexLeft is not null;
     private readonly TabControl _tabs = new();
-    private readonly TabItem _diffTab = new() { Header = "差异对齐" }, _editTab = new(), _folderTab = new();
+    private readonly TabItem _diffTab = new() { Header = Lang.Get("md_tab_diff") }, _editTab = new(), _folderTab = new();
     private readonly ComboBox _languageBox = new() { Width = 96 };
     private readonly ComboBox _algorithm = new() { Width = 130 };
     // 报告导出:格式全部来自 IResultFormatter 插件(文本 / JSON / HTML)。下拉里显示的是插件名的译文,换语言时重建。
@@ -118,7 +127,7 @@ public sealed partial class MainWindow : Window
         _toolbar.Children.Add(LButton("⟳", "md_tip_realign", Realign));
         Tip(_autoRealign, "md_tip_auto");
         _toolbar.Children.Add(_autoRealign);
-        _toolbar.Children.Add(LButton("◱", "md_tip_layout", () => { _rows.Vertical = !_rows.Vertical; _status.Text = _rows.Vertical ? "布局：上下分栏。" : "布局：左右并排。"; }));
+        _toolbar.Children.Add(LButton("◱", "md_tip_layout", () => { _rows.Vertical = !_rows.Vertical; _status.Text = Lang.Get(_rows.Vertical ? "status_layout_vertical" : "status_layout_horizontal"); }));
         _toolbar.Children.Add(LButton("⌗", "md_tip_format", FormatSide));
         _toolbar.Children.Add(LButton("◈", "md_tip_rules", EditRules));
         _toolbar.Children.Add(LButton("💾", "md_tip_session", () => Run(SaveSession)));
@@ -141,8 +150,8 @@ public sealed partial class MainWindow : Window
                 Lang.Apply(name);
                 Palette.SaveLanguage(name);
                 ApplyLanguage();   // 带配方的状态文本(如目录汇总)会按新语言重新生成
-                // 状态栏显示的是别的内容(目录汇总等)时不抢它的位置;显示的是上一次的切换通知时,换成这一次的语言。
-                if (!_status.HasRecipe || ReferenceEquals(_status.Recipe, _languageNotice))
+                // 状态栏显示的是别的内容(目录汇总等)时不抢它的位置;显示的是上一次的切换通知或启动提示时,换成这一次的语言。
+                if (!_status.HasRecipe || ReferenceEquals(_status.Recipe, _languageNotice) || ReferenceEquals(_status.Recipe, _startupNotice))
                 {
                     _languageNotice = () => Lang.Get("md_lang_switched", name);
                     _status.Localized(_languageNotice);
@@ -184,7 +193,7 @@ public sealed partial class MainWindow : Window
         _rows.EditRequested += (row, left) =>
         {
             if (_awaitingAlignTarget) { CompleteAlign(row, left); return; }
-            if (HexMode && !left) { _status.Text = "十六进制编辑仅支持左侧。"; return; }
+            if (HexMode && !left) { _status.Text = Lang.Get("md_hex_edit_left_only"); return; }
             BeginEditRow(_rows.IndexOfRow(row), left);
         };
         _rows.MenuRequested += (row, left) =>
@@ -256,20 +265,20 @@ public sealed partial class MainWindow : Window
         foreach (var control in _toolbar.Children) control.Margin = new Thickness(2, 0, 2, 3);   // WrapPanel 没有 Spacing:用外边距留出间隔
         root.Children.Add(_toolbar); Grid.SetRow(paths, 1); root.Children.Add(paths); Grid.SetRow(_tabs, 2); root.Children.Add(_tabs); Grid.SetRow(_status.Block, 3); root.Children.Add(_status.Block); Content = root;
         _leftEditor.TextChanged += (_, _) => Edited(true); _rightEditor.TextChanged += (_, _) => Edited(false);
-        _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = ex.Message; } };
+        _debounce.Tick += (_, _) => { _debounce.Stop(); try { _session.Recompare(); RefreshRows(); } catch (Exception ex) { _status.Text = Lang.Text(ex.Message); } };
         _algorithm.SelectionChanged += (_, _) => { _session.Algorithm = _algorithm.SelectedItem as string ?? FirstAlgorithmId(); _rows.Rows = []; _debounce.Start(); };
         Closing += async (_, e) =>
         {
             if (_allowClose) return;
-            if (_busy) { e.Cancel = true; _status.Text = "请等待当前操作完成后关闭。"; return; }
+            if (_busy) { e.Cancel = true; _status.Text = Lang.Get("md_close_wait"); return; }
             if (!_session.Dirty) return;
             e.Cancel = true; if (_closePending) return; _closePending = true;
             try { if (await Leave()) { _allowClose = true; Close(); } }
-            catch (Exception ex) { _status.Text = "保存失败，窗口保持打开：" + ex.Message; }
+            catch (Exception ex) { _status.Text = Lang.Get("md_close_save_failed", Lang.Text(ex.Message)); }
             finally { _closePending = false; }
         };
         Closed += (_, _) => { _debounce.Stop(); if (_ownsPlugins) _plugins.Dispose(); System.Threading.Interlocked.Decrement(ref _windowCount); };
-        if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics); _toolbar.IsEnabled = false; }
+        if (_plugins.Diagnostics.Count > 0) { _status.Text = string.Join("\n", _plugins.Diagnostics.Select(Lang.Text)); _toolbar.IsEnabled = false; }
         else
         {
             // 声明式文件(语法文法/语言包/主题)加载失败要报告而不是静默跳过 —— 状态栏计数,对话框逐文件给出行列与原因。
@@ -277,18 +286,18 @@ public sealed partial class MainWindow : Window
                 .Concat(Lang.LoadDiagnostics).Concat(Palette.Diagnostics).ToList();
             if (issues.Count > 0)
             {
-                _status.Text = $"⚠ {issues.Count} 个声明式文件加载失败（语法/语言包/主题）· 其余正常";
-                Opened += (_, _) => Run(async () => await Ask("声明式文件诊断",
-                    "以下文件已跳过，其余正常加载：\n\n" + string.Join("\n", issues), ["关闭"]));
+                _status.Localized(() => Lang.Get("status_declarative_failed", issues.Count));
+                Opened += (_, _) => Run(async () => await Ask(Lang.Get("dlg_declarative_title"),
+                    Lang.Get("dlg_declarative_body", string.Join("\n  ", issues.Select(Lang.Text))), [Lang.Get("md_folder_close")]));
             }
-            else _status.Text = $"已加载 {_plugins.GetAll<IPlugin>().Count} 个插件 · 双击目录条目打开文件";
+            else { _startupNotice = () => Lang.Get("md_plugins_loaded_hint", _plugins.GetAll<IPlugin>().Count); _status.Localized(_startupNotice); }
         }
         this.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, (_, e) =>
         {
             if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
             { e.Handled = true; Run(GoToLineAsync); }
             if (e.Key == Avalonia.Input.Key.Escape && _awaitingAlignTarget)
-            { _awaitingAlignTarget = false; _status.Text = "已取消手动对齐。"; e.Handled = true; }
+            { _awaitingAlignTarget = false; _status.Text = Lang.Get("status_align_cancelled"); e.Handled = true; }
         });
         if (Palette.IsDark) RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
         if (Palette.SavedLanguage is { } saved && Lang.Available.Contains(saved)) Lang.Apply(saved);
@@ -326,7 +335,7 @@ public sealed partial class MainWindow : Window
         {
             var chosen = splitter;
             int batch = CountSplittable(left, chosen);
-            var item = new MenuItem { Header = batch > 1 ? $"换行 · {chosen.DisplayName}（{batch} 行）" : "换行 · " + chosen.DisplayName, Tag = Math.Max(1, batch) };
+            var item = new MenuItem { Header = batch > 1 ? Lang.Get("menu_split_many", Lang.Text(chosen.DisplayName), batch) : Lang.Get("edit_desc_split", Lang.Text(chosen.DisplayName)), Tag = Math.Max(1, batch) };
             item.Click += (_, _) => { if (item.Tag is int n && n > 1) ApplySplitBatch(left, chosen); else ApplySplit(row, left, chosen); };
             menu.Items.Add(item);
         }
@@ -334,8 +343,8 @@ public sealed partial class MainWindow : Window
     }
     private async Task GoToLineAsync()
     {
-        if (_rows.RowCount == 0) { _status.Text = "请先打开文本比较。"; return; }
-        string? input = await Prompt("转到行号", $"行号（{( _lastFocusLeft ? "左" : "右")}侧，当前聚焦）", "1");
+        if (_rows.RowCount == 0) { _status.Text = Lang.Get("status_open_file_first"); return; }
+        string? input = await Prompt(Lang.Get("dlg_goto_line_title"), Lang.Get("md_goto_line_prompt", Lang.Get(_lastFocusLeft ? "side_left" : "side_right")), "1");
         if (!int.TryParse(input, out int line) || line < 1) return;
         bool left = _lastFocusLeft;
         for (int i = 0; i < _rows.RowCount; i++)
@@ -344,19 +353,19 @@ public sealed partial class MainWindow : Window
                 _rows.SelectRows([_rows.Rows[i]]); _rows.EnsureVisible(i); _rows.Focus();
                 return;
             }
-        _status.Text = $"行号 {line} 不在{(left ? "左" : "右")}侧。";
+        _status.Text = Lang.Get("md_goto_line_missing", Lang.Get(left ? "side_left" : "side_right"), line);
     }
     /// <summary>把一行(或文本选区覆盖的行)复制到对侧:按对齐重建目标侧,幽灵位置落为插入,行尾沿用目标风格。</summary>
     public void CopyToSide(AlignedRow? row = null, bool? fromLeft = null)
     {
-        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
+        if (_session.Left is null || _session.Right is null) { _status.Text = Lang.Get("status_open_file_first"); return; }
         var range = _rows.TextSelectionRange;
         int fromRow, toRow;
         if (range is { } r) { fromRow = r.FromRow; toRow = r.ToRow; }
         else
         {
             row ??= _rows.SelectedRows.FirstOrDefault();
-            if (row is null) { _status.Text = "请先选中要复制的行。"; return; }
+            if (row is null) { _status.Text = Lang.Get("status_select_copy_rows"); return; }
             int index = _rows.IndexOfRow(row);
             if (index < 0) return;
             fromRow = toRow = index;
@@ -388,34 +397,34 @@ public sealed partial class MainWindow : Window
         _session.Edit(!sourceLeft, joined);
         _debounce.Stop(); RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
-        else _status.Text = $"已复制 {copied} 行到{(sourceLeft ? "右" : "左")}侧 · 点 ⟳ 重新对齐";
+        else _status.Text = Lang.Get("md_copied_rows_realign", copied, Lang.Get(sourceLeft ? "side_right" : "side_left"));
     }
     // ─── Align With / Isolate(引擎已支持:AlignmentHint + isolatedLines)───
     private void StartAlignWith(AlignedRow row, bool left)
     {
         var cell = left ? row.Left : row.Right;
-        if (cell is null) { _status.Text = "此侧没有行可对齐。"; return; }
+        if (cell is null) { _status.Text = Lang.Get("md_align_no_rows"); return; }
         _alignSourceLine = cell.LineNumber;
         _alignSourceIsLeft = left;
         _awaitingAlignTarget = true;
-        _status.Text = $"对齐模式：请在另一侧点击目标行（Esc 取消）。源：{(left ? "左" : "右")}侧行 {cell.LineNumber}";
+        _status.Text = Lang.Get("md_align_pick_target", Lang.Get(left ? "side_left" : "side_right"), cell.LineNumber);
     }
     private void CompleteAlign(AlignedRow target, bool targetLeft)
     {
         _awaitingAlignTarget = false;
-        if (targetLeft == _alignSourceIsLeft) { _status.Text = "目标必须是另一侧的行。"; return; }
+        if (targetLeft == _alignSourceIsLeft) { _status.Text = Lang.Get("md_align_other_side"); return; }
         var targetCell = targetLeft ? target.Left : target.Right;
-        if (targetCell is null || _alignSourceLine < 1) { _status.Text = "目标行无效，请重新开始对齐。"; return; }
+        if (targetCell is null || _alignSourceLine < 1) { _status.Text = Lang.Get("md_align_target_invalid"); return; }
         int leftLine = targetLeft ? targetCell.LineNumber : _alignSourceLine;
         int rightLine = targetLeft ? _alignSourceLine : targetCell.LineNumber;
         _session.AlignmentHints = [.. _session.AlignmentHints, new(leftLine, rightLine)];
         _session.Recompare(); RefreshRows();
-        _status.Text = $"已手动对齐：左行 {leftLine} ↔ 右行 {rightLine}（共 {_session.AlignmentHints.Count} 条提示）";
+        _status.Text = Lang.Get("md_align_added", leftLine, rightLine, _session.AlignmentHints.Count);
     }
     private void IsolateSelection()
     {
         var rows = _rows.SelectedRows;
-        if (rows.Count == 0) { _status.Text = "请先选中要隔离的行。"; return; }
+        if (rows.Count == 0) { _status.Text = Lang.Get("status_select_isolate"); return; }
         var leftLines = new List<int>(_session.IsolatedLeftLines);
         var rightLines = new List<int>(_session.IsolatedRightLines);
         foreach (var row in rows)
@@ -425,7 +434,7 @@ public sealed partial class MainWindow : Window
         }
         _session.IsolatedLeftLines = leftLines; _session.IsolatedRightLines = rightLines;
         _session.Recompare(); RefreshRows();
-        _status.Text = $"已隔离 {rows.Count} 行（左 {leftLines.Count} / 右 {rightLines.Count}）";
+        _status.Text = Lang.Get("md_isolated", rows.Count, leftLines.Count, rightLines.Count);
     }
     /// <summary>测试/程序化入口:添加手动对齐提示并立即重排。</summary>
     public void AddAlignmentHint(int leftLine, int rightLine)
@@ -454,7 +463,7 @@ public sealed partial class MainWindow : Window
         var buffer = left ? _session.Left : _session.Right;
         if (buffer is null) return;
         string result = actions[index].Transform(new(buffer, 1, 1));
-        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = "内容无变化。"; return; }
+        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = Lang.Get("md_no_change"); return; }
         _session.Edit(left, result);
         _debounce.Stop(); RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
@@ -463,7 +472,7 @@ public sealed partial class MainWindow : Window
     {
         _session.AlignmentHints = []; _session.IsolatedLeftLines = []; _session.IsolatedRightLines = [];
         _session.Recompare(); RefreshRows();
-        _status.Text = "已清除全部手动对齐与隔离。";
+        _status.Text = Lang.Get("status_align_cleared");
     }
     // ─── 文件类型插件(IFileTypeProvider)右键子菜单:按点击侧扩展名给出语言专属操作 ───
     private IEnumerable<MenuItem> FileTypeMenus(AlignedRow row, bool left)
@@ -477,11 +486,11 @@ public sealed partial class MainWindow : Window
             if (wildcard && anySpecific) continue;                 // 专属提供者优先;通配只在无专属时出现
             if (!wildcard && !provider.Extensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
             var capturedProvider = provider;
-            var submenu = new MenuItem { Header = $"{capturedProvider.LanguageName} 工具（{(left ? "左" : "右")}侧）" };
+            var submenu = new MenuItem { Header = Lang.Get("md_filetype_menu", Lang.Text(capturedProvider.LanguageName), Lang.Get(left ? "side_left" : "side_right")) };
             foreach (var (label, _, transform) in capturedProvider.EditActions)
             {
                 var action = transform;
-                var item = new MenuItem { Header = label };
+                var item = new MenuItem { Header = Lang.Text(label) };
                 item.Click += (_, _) => Run(async () =>
                 {
                     var buffer = left ? _session.Left : _session.Right;
@@ -489,13 +498,13 @@ public sealed partial class MainWindow : Window
                     try
                     {
                         string result = action(new(buffer, (left ? _rows.SelectedRows.FirstOrDefault()?.Left : _rows.SelectedRows.FirstOrDefault()?.Right)?.LineNumber ?? 1, 1));
-                        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = "内容无变化。"; return; }
+                        if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = Lang.Get("md_no_change"); return; }
                         _session.Edit(left, result);
                         _debounce.Stop(); RefreshDirty();
                         if ((bool)_autoRealign.IsChecked!) Realign();
-                        else _status.Text = $"已执行「{label}」· 点 ⟳ 重新对齐";
+                        else _status.Text = Lang.Get("md_tool_done_realign", Lang.Text(label));
                     }
-                    catch (Exception ex) { _status.Text = $"{label} 失败：{ex.Message}"; }
+                    catch (Exception ex) { _status.Text = Lang.Get("md_tool_failed", Lang.Text(label), Lang.Text(ex.Message)); }
                 });
                 submenu.Items.Add(item);
             }
@@ -506,7 +515,7 @@ public sealed partial class MainWindow : Window
     private async Task GoToOffsetAsync()
     {
         if (!HexMode) return;
-        string? input = await Prompt("转到字节偏移", "十六进制(0x…)或十进制", "0");
+        string? input = await Prompt(Lang.Get("md_goto_offset_title"), Lang.Get("md_goto_offset_prompt"), "0");
         if (string.IsNullOrWhiteSpace(input)) return;
         string trimmed = input.Trim();
         // 仅 0x 前缀按十六进制解析;纯数字按十进制(此前十进制输入被先按 hex 解析,回退分支永不命中)。
@@ -514,12 +523,12 @@ public sealed partial class MainWindow : Window
         if (!long.TryParse(hex ? trimmed[2..] : trimmed,
             hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.Integer,
             CultureInfo.InvariantCulture, out long offset))
-        { _status.Text = "无法解析偏移。"; return; }
+        { _status.Text = Lang.Get("status_bad_offset"); return; }
         long max = Math.Max(_hexLeft!.Length, _hexRight!.Length);
-        if (offset < 0 || offset >= max) { _status.Text = $"偏移超出范围 [0, {max})。"; return; }
+        if (offset < 0 || offset >= max) { _status.Text = Lang.Get("md_offset_range", max); return; }
         int index = (int)(offset / 16);
         _rows.SelectRows([_rows.Rows[index]]); _rows.EnsureVisible(index);
-        _status.Text = $"已定位偏移 0x{offset:X}（行 {index + 1}）。";
+        _status.Text = Lang.Get("md_offset_found", offset, index + 1);
     }
     private async Task ExportHexPatchAsync()
     {
@@ -545,7 +554,7 @@ public sealed partial class MainWindow : Window
         var target = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { SuggestedFileName = "modulardiff-binary.patch", DefaultExtension = "patch" });
         if (target is null) return;
         await File.WriteAllTextAsync(target.TryGetLocalPath() ?? "modulardiff-binary.patch", report.ToString());
-        _status.Text = $"补丁报告已导出（{segments} 段差异）。";
+        _status.Text = Lang.Get("md_patch_exported", segments);
     }
     /// <summary>把十六进制编辑写盘并返回是否成功;调用方自行决定是否重新比较。不再内部 Run(Compare) ——
     /// 本方法常在菜单的 Run 内被调用,嵌套 Run 会被 _busy 短路成静默 no-op(保存后视图停在旧差异)。
@@ -553,7 +562,7 @@ public sealed partial class MainWindow : Window
     public bool SaveHexEdit()
     {
         if (!HexMode) return false;
-        if (!_hexDirty) { _status.Text = "没有未保存的十六进制修改。"; return false; }
+        if (!_hexDirty) { _status.Text = Lang.Get("status_nothing_to_save"); return false; }
         try
         {
             var edited = _hexLeft!;
@@ -572,10 +581,10 @@ public sealed partial class MainWindow : Window
                 AtomicFile.WriteAllBytes(_hexLeftPath, full);   // 读句柄必须先关:File.Replace 换不掉本进程打开的文件
             }
             _hexDirty = false;
-            _status.Text = "十六进制编辑已写入磁盘。";
+            _status.Text = Lang.Get("status_hex_saved");
             return true;
         }
-        catch (Exception ex) { _status.Text = "保存失败：" + ex.Message; return false; }
+        catch (Exception ex) { _status.Text = Lang.Get("md_save_failed", Lang.Text(ex.Message)); return false; }
     }
     private void FormatSide()
     {
@@ -583,7 +592,7 @@ public sealed partial class MainWindow : Window
         bool left = _lastFocusLeft;
         var buffer = left ? _session.Left : _session.Right;
         var formatter = _plugins.GetAll<ICodeFormatter>().FirstOrDefault(f => f.CanFormat(buffer.Path));
-        if (formatter is null) { _status.Text = $"没有支持 {Path.GetFileName(buffer.Path)} 的格式化插件（当前插件：{string.Join("、", _plugins.GetAll<ICodeFormatter>().Select(f => f.DisplayName))}）。"; return; }
+        if (formatter is null) { _status.Text = Lang.Get("status_no_formatter", Path.GetFileName(buffer.Path), Lang.Get("status_formatter_list", string.Join(", ", _plugins.GetAll<ICodeFormatter>().Select(f => Lang.Text(f.DisplayName))))); return; }
         try
         {
             var bare = buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
@@ -592,15 +601,15 @@ public sealed partial class MainWindow : Window
             _debounce.Stop();
             RefreshDirty();
             if ((bool)_autoRealign.IsChecked!) Realign();
-            else _status.Text = $"已按「{formatter.DisplayName}」格式化{(left ? "左" : "右")}侧 · 点 ⟳ 重新对齐";
+            else _status.Text = Lang.Get("md_format_done_realign", Lang.Text(formatter.DisplayName), Lang.Get(left ? "side_left" : "side_right"));
         }
-        catch (Exception ex) { _status.Text = "格式化失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = Lang.Get("status_format_failed", Lang.Text(ex.Message)); }
     }
     private void Realign()
     {
         if (_session.Left is null || _session.Right is null) { Run(Compare); return; }
         try { _session.Recompare(); RefreshRows(); }
-        catch (Exception ex) { _status.Text = "重对齐失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = Lang.Get("md_realign_failed", Lang.Text(ex.Message)); }
     }
     private int CountSplittable(bool left, ILineSplitter splitter)
     {
@@ -632,7 +641,7 @@ public sealed partial class MainWindow : Window
         _debounce.Stop();
         RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
-        else _status.Text = $"已按「{splitter.DisplayName}」换行 {applied} 行 · 点 ⟳ 重新对齐";
+        else _status.Text = Lang.Get("md_split_done_realign", Lang.Text(splitter.DisplayName), applied);
     }
     private void ApplySplit(AlignedRow row, bool left, ILineSplitter splitter)
     {
@@ -658,7 +667,7 @@ public sealed partial class MainWindow : Window
     /// <summary>测试/交互入口:在指定行指定侧弹出行内编辑器(与视图点击同一通路)。</summary>
     public void BeginEditRow(int index, bool left)
     {
-        if (HexMode && !left) { _status.Text = "十六进制编辑仅支持左侧。"; return; }
+        if (HexMode && !left) { _status.Text = Lang.Get("md_hex_edit_left_only"); return; }
         if (index < 0 || index >= _rows.RowCount) return;
         var row = _rows.Rows[index];
         var cell = left ? row.Left : row.Right;
@@ -723,16 +732,18 @@ public sealed partial class MainWindow : Window
     private Control EditPanel(bool left)
     {
         var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        bar.Children.Add(new TextBlock { Text = left ? "左侧" : "右侧", VerticalAlignment = VerticalAlignment.Center });
+        bar.Children.Add(left ? _leftSideLabel : _rightSideLabel);
         bar.Children.Add(LButton("▣", "md_tip_save_side", () => Run(async () => { await _session.SaveAsync(left); RefreshDirty(); })));
-        bar.Children.Add(Button("↶", "撤销此侧编辑", () => { try { _session.History(left, false); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } }));
-        bar.Children.Add(Button("↷", "重做此侧编辑", () => { try { _session.History(left, true); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } }));
+        var undo = Button("↶", "", () => { try { _session.History(left, false); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } });
+        Tip(undo, "md_undo_side"); bar.Children.Add(undo);
+        var redo = Button("↷", "", () => { try { _session.History(left, true); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; } });
+        Tip(redo, "md_redo_side"); bar.Children.Add(redo);
         var grid = new Grid { RowDefinitions = new RowDefinitions("Auto,*") }; grid.Children.Add(bar); var editor = left ? _leftEditor : _rightEditor; Grid.SetRow(editor, 1); grid.Children.Add(editor); return grid;
     }
     private async void Run(Func<Task> operation)
     {
         if (_busy) return; _busy = true; _toolbar.IsEnabled = false; _tabs.IsEnabled = false; _leftPath.IsEnabled = _rightPath.IsEnabled = false;
-        try { await operation(); } catch (Exception ex) { _status.Text = "操作失败：" + ex.Message; }
+        try { await operation(); } catch (Exception ex) { _status.Text = Lang.Get("md_operation_failed", Lang.Text(ex.Message)); }
         finally { _busy = false; _toolbar.IsEnabled = true; _tabs.IsEnabled = true; _leftPath.IsEnabled = _rightPath.IsEnabled = true; }
     }
     private void ApplyOptions()
@@ -776,25 +787,26 @@ public sealed partial class MainWindow : Window
     }
     private async Task SaveSession()
     {
-        if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) { _status.Text = "请先指定左右路径。"; return; }
-        string? name = await Prompt("保存会话", "会话名称", $"{Path.GetFileName(_leftPath.Text)} ↔ {Path.GetFileName(_rightPath.Text)}");
+        if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) { _status.Text = Lang.Get("status_session_need_paths"); return; }
+        string? name = await Prompt(Lang.Get("dlg_session_title"), Lang.Get("dlg_session_name"), $"{Path.GetFileName(_leftPath.Text)} ↔ {Path.GetFileName(_rightPath.Text)}");
         if (string.IsNullOrWhiteSpace(name)) return;
         _sessions = _sessions.UpsertNamed(new(name, _leftPath.Text.Trim(), _rightPath.Text.Trim(), _session.Algorithm,
             (bool)_ignoreCase.IsChecked!, (bool)_ignoreWhitespace.IsChecked!, (bool)_ignoreEol.IsChecked!, true, DateTime.Now, _unimportant));
         SessionStore.Save(_sessions);
         RefreshSessions();
-        _status.Text = $"会话「{name}」已保存。";
+        _status.Text = Lang.Get("status_session_saved", name);
     }
     private async void EditRules()
     {
-        var window = new Window { Title = "不重要差异规则", Width = 600, Height = 340, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = true };
-        var input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), Text = string.Join("\n", _unimportant), Watermark = "每行一条正则，匹配到的文本不算差异。例：\\$Id:.*\\$　\\d{4}-\\d{2}-\\d{2}　v\\d+\\.\\d+", Margin = new Thickness(12), MinHeight = 180 };
+        var window = new Window { Title = Lang.Get("unimportant_rules"), Width = 600, Height = 340, WindowStartupLocation = WindowStartupLocation.CenterOwner, CanResize = true };
+        var input = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), Text = string.Join("\n", _unimportant), Watermark = Lang.Get("unimportant_tip"), Margin = new Thickness(12), MinHeight = 180 };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
         var panel = new DockPanel { Margin = new Thickness(6) };
-        foreach (var (label, _) in new[] { ("应用", ""), ("清空", ""), ("取消", "") })
+        // The buttons are told apart by a fixed value, not by their captions: the captions follow the UI language.
+        foreach (var (caption, value) in new[] { (Lang.Get("md_apply"), "apply"), (Lang.Get("md_clear"), "clear"), (Lang.Get("dlg_cancel"), "cancel") })
         {
-            string choice = label;
-            buttons.Children.Add(Button(choice, choice, () => window.Close(choice == "取消" ? null : choice == "清空" ? "" : input.Text ?? "")));
+            string choice = value;
+            buttons.Children.Add(Button(caption, caption, () => window.Close(choice == "cancel" ? null : choice == "clear" ? "" : input.Text ?? "")));
         }
         DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons); panel.Children.Add(input);
         window.Content = panel;
@@ -804,20 +816,20 @@ public sealed partial class MainWindow : Window
         foreach (string pattern in patterns)
         {
             try { _ = new System.Text.RegularExpressions.Regex(pattern); }
-            catch (ArgumentException ex) { _status.Text = $"规则无效：{pattern}（{ex.Message}）"; return; }
+            catch (ArgumentException ex) { _status.Text = Lang.Get("err_unimportant_rule", pattern, Lang.Text(ex.Message)); return; }
         }
         _unimportant = patterns;
-        ToolTip.SetTip(_algorithm, _unimportant.Count > 0 ? $"比较算法插件 · {_unimportant.Count} 条不重要规则" : "比较算法插件");
+        ToolTip.SetTip(_algorithm, AlgorithmTip());
         ApplyOptions();
-        _status.Text = $"已应用 {_unimportant.Count} 条不重要差异规则。";
+        _status.Text = Lang.Get("md_rules_applied", _unimportant.Count);
     }
     private async Task<string?> Prompt(string title, string label, string defaultValue)
     {
         var window = new Window { Title = title, Width = 480, Height = 170, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         var input = new TextBox { Text = defaultValue, Watermark = label, Margin = new Thickness(12) };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12) };
-        buttons.Children.Add(Button("保存", label, () => window.Close(input.Text)));
-        buttons.Children.Add(Button("取消", label, () => window.Close(null)));
+        buttons.Children.Add(Button(Lang.Get("md_ok"), label, () => window.Close(input.Text)));
+        buttons.Children.Add(Button(Lang.Get("dlg_cancel"), label, () => window.Close(null)));
         var panel = new DockPanel();
         DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons); panel.Children.Add(input);
         window.Content = panel;
@@ -830,12 +842,12 @@ public sealed partial class MainWindow : Window
             && SamePath(_leftPath.Text, _session.Left.Path) && SamePath(_rightPath.Text, _session.Right.Path))
         {
             try { _session.Recompare(); }
-            catch (Exception ex) { _status.Text = "重对齐失败：" + ex.Message; return; }
+            catch (Exception ex) { _status.Text = Lang.Get("md_realign_failed", Lang.Text(ex.Message)); return; }
             RefreshRows();
             return;
         }
         if (!await Leave()) return;
-        if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException("请指定左右路径。");
+        if (string.IsNullOrWhiteSpace(_leftPath.Text) || string.IsNullOrWhiteSpace(_rightPath.Text)) throw new IOException(Lang.Get("status_fill_paths"));
         string left = Path.GetFullPath(_leftPath.Text.Trim()), right = Path.GetFullPath(_rightPath.Text.Trim());
         _hexLeft = null; _hexDirty = false;   // 上一轮十六进制状态对新比较无效(文本/目录/图片分支);二进制分支稍后重新设置
         _status.Localized(() => Lang.Get("status_comparing"));
@@ -863,7 +875,7 @@ public sealed partial class MainWindow : Window
             if (!keepSession) { _session.Clear(); RefreshEditors(); }
             ApplyFolderResult(result, switchToTab: !keepSession);
             RecordRecent(left, right);
-            if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings.Select(Lang.Text));
+            if (result.Warnings.Count > 0) _status.Text += Environment.NewLine + string.Join(Environment.NewLine, result.Warnings.Select(Lang.Text));
             return;
         }
         _session.Clear(); RefreshEditors();
@@ -874,27 +886,26 @@ public sealed partial class MainWindow : Window
             {
                 ShowPicture(left, right, file);
                 _tabs.SelectedIndex = 0;   // 差异页承载图片视图:此前不切 tab,目录页之后看似"没反应"
-                _status.Text = $"图片比较 · {file.Note}";
+                _status.Text = Lang.Get("md_picture_status", Lang.Text(file.Note));
                 RecordRecent(left, right);
                 return;
             }
             if (file.IsBinary || file.Status == FileStatus.Error)
             {
                 _rows.Rows = []; _tabs.SelectedIndex = 0;
-                string summary = await BinarySummaryAsync(left, right);
-                if (file.Status == FileStatus.Error) { _diffTab.Content = _binaryInfo; _binaryInfo.Text = summary; _status.Text = $"{file.Status}：{file.Note}"; return; }
+                var (summary, verdict) = await BinarySummaryAsync(left, right);
+                if (file.Status == FileStatus.Error) { _diffTab.Content = _binaryInfo; _binaryInfo.Text = summary; _status.Text = FolderStatusText(file.Status) + ": " + Lang.Text(file.Note); return; }
                 ShowHex(left, right, file);
-                string verdict = summary.Split('\n').LastOrDefault(l => l.TrimStart().StartsWith("结论")) ?? "";
                 const long hexCap = 1 << 20;
-                string capNote = Math.Max(new FileInfo(left).Length, new FileInfo(right).Length) > hexCap ? " · 超过 1MB，仅显示前 1MB" : "";
-                _status.Text = $"十六进制视图（16 字节/行，着色行含差异字节）{capNote} · {verdict.Trim()}";
+                string capNote = Math.Max(new FileInfo(left).Length, new FileInfo(right).Length) > hexCap ? Lang.Get("md_hex_cap_note") : "";
+                _status.Text = Lang.Get("md_hex_view_status", capNote, verdict.Trim());
                 RecordRecent(left, right);
                 return;
             }
             await OpenFile(left, right);
         }
         RecordRecent(left, right);
-        if (result.Warnings.Count > 0) _status.Text += " · " + string.Join("；", result.Warnings.Select(Lang.Text));
+        if (result.Warnings.Count > 0) _status.Text += Environment.NewLine + string.Join(Environment.NewLine, result.Warnings.Select(Lang.Text));
     }
     private void RecordRecent(string left, string right)
     {
@@ -992,14 +1003,14 @@ public sealed partial class MainWindow : Window
         try
         {
             long offset = (long)(cell.LineNumber - 1) * HexRowBytes;
-            byte[] leftBytes = _hexLeft ?? throw new InvalidOperationException("十六进制模式未初始化。");
+            byte[] leftBytes = _hexLeft ?? throw new InvalidOperationException(Lang.Get("md_hex_not_ready"));
             int rowBytes = (int)Math.Min(HexRowBytes, Math.Max(0, leftBytes.Length - offset));
             if (rowBytes == 0) return;
             var tokens = (editor.Text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
                 .Where(t => t.Length == 2 && Uri.IsHexDigit(t[0]) && Uri.IsHexDigit(t[1])).Take(rowBytes + 1).ToList();
             if (tokens.Count != rowBytes)
             {
-                _status.Text = $"需恰好 {rowBytes} 个十六进制字节(如 4d 5a …)。";
+                _status.Text = Lang.Get("md_hex_need_bytes", rowBytes);
                 _editorLoading = true; editor.Text = DumpHex(leftBytes, offset); _editorLoading = false;
                 return;
             }
@@ -1008,9 +1019,9 @@ public sealed partial class MainWindow : Window
             int editedRow = cell.LineNumber - 1;
             _rows.Rows = BuildHexRows(leftBytes, _hexRight ?? []);
             _rows.SelectRows([_rows.Rows[editedRow]]); _rows.EnsureVisible(editedRow);
-            _status.Text = $"已修改第 {editedRow + 1} 行的 {rowBytes} 个字节 · 右键「保存十六进制编辑」写盘";
+            _status.Text = Lang.Get("md_hex_row_edited", editedRow + 1, rowBytes, Lang.Get("md_menu_save_hex"));
         }
-        catch (Exception ex) { _status.Text = "十六进制编辑失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = Lang.Get("md_hex_edit_failed", Lang.Text(ex.Message)); }
     }
     /// <summary>图片并排视图:尺寸一致(且 ≤4096×4096)时右侧叠加半透明红色差异像素(SkiaSharp 解码,无图像库落盘)。</summary>
     private void ShowPicture(string left, string right, FileComparison file)
@@ -1022,10 +1033,10 @@ public sealed partial class MainWindow : Window
         var overlay = OverlayDifference(left, right);
         Control Pane(Avalonia.Media.IImage? image, string title, Avalonia.Media.IImage? overlayImage)
         {
-            var header = new TextBlock { Text = title + (overlayImage is null ? "" : "（红色叠层 = 差异像素）"), Foreground = Brush.Parse("#8793A4"), Margin = new Thickness(0, 4) };
+            var header = new TextBlock { Text = title + (overlayImage is null ? "" : Lang.Get("md_picture_overlay_note")), Foreground = Brush.Parse("#8793A4"), Margin = new Thickness(0, 4) };
             Control content;
             if (image is null)
-                content = new TextBlock { Text = "无法解码", Foreground = Brush.Parse("#A52D22") };
+                content = new TextBlock { Text = Lang.Get("md_picture_undecodable"), Foreground = Brush.Parse("#A52D22") };
             else if (overlayImage is null)
                 content = new Image { Source = image, Stretch = Stretch.Uniform, MaxHeight = 480, HorizontalAlignment = HorizontalAlignment.Left };
             else
@@ -1037,8 +1048,8 @@ public sealed partial class MainWindow : Window
             }
             return new StackPanel { Children = { header, content } };
         }
-        images.Children.Add(Pane(Load(left), "左侧", null));
-        var rightPane = Pane(Load(right), "右侧", overlay);
+        images.Children.Add(Pane(Load(left), Lang.Get("side_left"), null));
+        var rightPane = Pane(Load(right), Lang.Get("side_right"), overlay);
         Grid.SetColumn(rightPane, 1);
         images.Children.Add(rightPane);
         panel.Children.Add(images);
@@ -1097,18 +1108,21 @@ public sealed partial class MainWindow : Window
         }
         catch { return null; }
     }
-    private static async Task<string> BinarySummaryAsync(string left, string right)
+    /// <summary>What the hex view and an unreadable pair say about the two files, and the verdict on its own
+    /// (the status line shows the verdict; the view shows the whole text).</summary>
+    private static async Task<(string Text, string Verdict)> BinarySummaryAsync(string left, string right)
     {
         static async Task<(long Size, DateTime Time, string Hash)> Info(string path)
         {
             var file = new FileInfo(path);
-            if (!file.Exists) return (0, default, "（缺失）");
+            if (!file.Exists) return (0, default, Lang.Get("md_missing"));
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
             return (file.Length, file.LastWriteTime, Convert.ToHexString(await SHA256.HashDataAsync(stream))[..16]);
         }
         var (lSize, lTime, lHash) = await Info(left);
         var (rSize, rTime, rHash) = await Info(right);
-        return $"二进制文件，不做文本差异（下方为 SHA-256 前 128 位摘要）\n\n左侧  {left}\n    {lSize:N0} 字节 · {lTime:yyyy-MM-dd HH:mm} · {lHash}\n\n右侧  {right}\n    {rSize:N0} 字节 · {rTime:yyyy-MM-dd HH:mm} · {rHash}\n\n结论：{(lSize == rSize && lHash == rHash ? "两文件内容完全相同" : "两文件内容不同")}";
+        string verdict = Lang.Get(lSize == rSize && lHash == rHash ? "md_binary_identical" : "md_binary_different");
+        return (Lang.Get("md_binary_summary", left, lSize, lTime, lHash, right, rSize, rTime, rHash) + "\n\n" + Lang.Get("md_binary_verdict", verdict), verdict);
     }
     private void Edited(bool left)
     {
@@ -1129,21 +1143,31 @@ public sealed partial class MainWindow : Window
         _rows.Rows = _session.Presentation?.Rows ?? [];
         RefreshDirty();
     }
-    private void RefreshDirty() => _status.Text = _session.Left is null ? "请选择文件或目录" : $"{(_session.Dirty ? "● 未保存" : "已保存")} · {_session.Presentation?.Hunks.Count ?? 0} 个差异块 · {_session.Left.Path} ↔ {_session.Right?.Path}";
+    // Between an edit and its realignment there is no presentation (in manual mode for the 250 ms of the debounce):
+    // the count shown is the last one there was. Zero would be false, and the realign brings the true number.
+    private int _knownHunks;
+    private void RefreshDirty()
+    {
+        if (_session.Left is null) { _status.Text = Lang.Get("md_pick_path_hint"); return; }
+        if (_session.Presentation is { } presentation) _knownHunks = presentation.Hunks.Count;
+        // From a recipe: the status line says the same thing in whatever language is chosen later.
+        _status.Localized(() => Lang.Get("md_edit_status", Lang.Get(_session.Dirty ? "edit_status_dirty" : "edit_status_saved"),
+            _knownHunks, _session.Left.Path, _session.Right?.Path ?? ""));
+    }
     private async Task CopyAllBlocks(bool toRight)
     {
-        if (_session.Left is null || _session.Right is null) { _status.Text = "请先打开文本比较。"; return; }
+        if (_session.Left is null || _session.Right is null) { _status.Text = Lang.Get("status_open_file_first"); return; }
         try
         {
             int copied = _session.MergeAll(toRight ? MergeDirection.LeftToRight : MergeDirection.RightToLeft);
             RefreshEditors();
-            _status.Text = copied == 0 ? "没有可复制的差异块。" : $"已复制 {copied} 个差异块到{(toRight ? "右侧" : "左侧")} · 未保存，保存后写入磁盘";
+            _status.Text = copied == 0 ? Lang.Get("md_no_hunks_to_copy") : Lang.Get("md_hunks_copied_unsaved", copied, Lang.Get(toRight ? "side_right" : "side_left"));
         }
-        catch (Exception ex) { _status.Text = "批量复制失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = Lang.Get("md_copy_all_failed", Lang.Text(ex.Message)); }
     }
     private void Merge(MergeDirection direction)
     {
-        if (_rows.SelectedRows.FirstOrDefault(r => r.HunkId >= 0) is not { } row) { _status.Text = "请在差异对齐页选中一个差异块。"; return; }
+        if (_rows.SelectedRows.FirstOrDefault(r => r.HunkId >= 0) is not { } row) { _status.Text = Lang.Get("status_not_in_hunk"); return; }
         try { _debounce.Stop(); _session.Merge(row.HunkId, direction); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; }
     }
     private void Navigate(int direction)
@@ -1156,9 +1180,11 @@ public sealed partial class MainWindow : Window
     private async Task<bool> Leave()
     {
         if (!_session.Dirty) return true;
-        string choice = await Ask("未保存的修改", "保存左右修改后继续，或放弃修改。", ["保存", "放弃", "取消"]);
-        if (choice == "保存") { await _session.SaveAsync(true); await _session.SaveAsync(false); return true; }
-        return choice == "放弃";
+        // Ask answers with the caption that was clicked, so that is what it is compared with.
+        string save = Lang.Get("dlg_save"), discard = Lang.Get("md_discard");
+        string choice = await Ask(Lang.Get("dlg_unsaved_title"), Lang.Get("md_unsaved_prompt"), [save, discard, Lang.Get("dlg_cancel")]);
+        if (choice == save) { await _session.SaveAsync(true); await _session.SaveAsync(false); return true; }
+        return choice == discard;
     }
     private async Task<string> Ask(string title, string text, string[] choices)
     {
@@ -1166,7 +1192,7 @@ public sealed partial class MainWindow : Window
         var panel = new DockPanel { Margin = new Thickness(16) }; var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
         foreach (string choice in choices) buttons.Children.Add(Button(choice, choice, () => window.Close(choice)));
         DockPanel.SetDock(buttons, Dock.Bottom); panel.Children.Add(buttons); panel.Children.Add(new ScrollViewer { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap } }); window.Content = panel;
-        return await window.ShowDialog<string?>(this) ?? "取消";
+        return await window.ShowDialog<string?>(this) ?? Lang.Get("dlg_cancel");
     }
     private T Plugin<T>() where T : class, IPlugin => _plugins.GetAll<T>().First();
     private SyncSafetyContext Safety() => new(Path.Combine(AppPaths.DataDirectory, "SyncHistory"), Plugin<ISyncBackup>(), Plugin<ISyncJournal>());
@@ -1183,7 +1209,7 @@ public sealed partial class MainWindow : Window
     /// <summary>目录页批量复制所选文件到另一侧:缺源跳过、逐文件容错、完成后重比较并恢复选中。</summary>
     public async Task CopySelectedFolderFiles(bool fromLeft)
     {
-        if (_directory is null) { _status.Text = "请先比较两个目录。"; return; }
+        if (_directory is null) { _status.Text = Lang.Get("md_folder_need_compare"); return; }
         var selected = SelectedFolderFiles();   // 选中目录行 = 其下全部文件
         if (selected.Length == 0) return;
         string reopen = (_files.SelectedItem as FileComparison ?? selected[0]).RelativePath;
@@ -1231,9 +1257,11 @@ public sealed partial class MainWindow : Window
         list.DoubleTapped += (_, _) => { if (list.SelectedItem is SyncOperation operation) window.Close(operation); }; window.Content = list;
         var selected = await window.ShowDialog<SyncOperation?>(this); if (selected is null) return;
         var recovery = Plugin<ISyncRecovery>(); var plan = await recovery.PreviewAsync(safety, selected.Id);
-        if (await Ask("撤销恢复预览", string.Join("\n", plan.Items.Select(i => $"{(i.CanRestore ? "可恢复" : "跳过")} {i.RelativePath}: {i.Reason}")), ["恢复可恢复项", "取消"]) != "恢复可恢复项") return;
+        string restore = Lang.Get("md_folder_restore_run");
+        if (await Ask(Lang.Get("md_folder_history_preview_title"), string.Join("\n", plan.Items.Select(i =>
+                $"{Lang.Get(i.CanRestore ? "md_folder_restorable" : "md_folder_skipped")} {i.RelativePath}: {Lang.Text(i.Reason)}")), [restore, Lang.Get("dlg_cancel")]) != restore) return;
         if (!await Leave()) return;
         var result = await recovery.RestoreAsync(safety, selected.Id, plan.Items.Where(i => i.CanRestore).Select(i => i.EntryId).ToArray());
-        _session.Clear(); RefreshEditors(); _status.Text = $"恢复 {result.Restored}，冲突 {result.Conflicts}，失败 {result.Failed}。请重新比较。";
+        _session.Clear(); RefreshEditors(); _status.Text = Lang.Get("md_restore_result", result.Restored, result.Conflicts, result.Failed);
     }
 }

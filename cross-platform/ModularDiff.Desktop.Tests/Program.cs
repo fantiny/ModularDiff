@@ -598,6 +598,7 @@ Task.Run(async () =>
 // 线程池线程,再碰控件就是 "Call from invalid thread"。
 FolderViewTests.Run(pluginsPath, plugins, Check);
 ReportExportTests.Run(pluginsPath, plugins, Check);
+LocalizationTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

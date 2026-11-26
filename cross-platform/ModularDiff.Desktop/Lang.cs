@@ -25,6 +25,8 @@ public static class Lang
     public static IReadOnlyList<string> Available => [.. Packs.Keys];
 
     /// <summary>逐文件加载错误,以及语言包之间的键不一致(缺键意味着某个界面会显示键名)。</summary>
+    // Diagnostics are made before any pack is applied, so they are written in English in every language,
+    // as the WPF host writes them.
     private static readonly List<string> _loadDiagnostics = [];
     public static IReadOnlyList<string> LoadDiagnostics => _loadDiagnostics;
 
@@ -99,11 +101,11 @@ public static class Lang
         }
         catch (JsonException ex)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行第 {ex.BytePositionInLine} 列 — {ex.Message}");
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: line {ex.LineNumber + 1}, column {ex.BytePositionInLine} — {ex.Message}");
         }
         catch (KeyNotFoundException ex)
         {
-            _loadDiagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
+            _loadDiagnostics.Add($"{Path.GetFileName(path)}: a required field is missing — {ex.Message}");
         }
         catch (Exception ex)
         {

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using ModularDiff.Core;
 
 /// <summary>共享层小工具的健壮性:它们都跑在界面线程上、对用户输入逐键执行,
@@ -53,6 +55,38 @@ internal static class RobustnessTests
             Check(catalog.Translate("前缀：第一行\n第二行") == "Prefix: 第一行\n第二行", $"a value with a newline must still be captured: {catalog.Translate("前缀：第一行\n第二行")}");
             Check(catalog.Translate("结尾 abc\n") == "Tail abc\n", "a trailing newline in the source must survive the translation");
             Check(catalog.Translate("前缀：") == "Prefix: ", "an empty capture is allowed (unchanged from the original behaviour)");
+            return Task.CompletedTask;
+        });
+
+        await test("Language packs: every text takes the same arguments in every language", () =>
+        {
+            // A translation that drops a {0} or renumbers it shows the wrong value, or throws when formatted — in that language only.
+            string languages = Path.Combine(DesktopGuardTests.RepoRoot(), "windows", "ModularDiff.Gui", "languages");
+            var placeholder = new Regex(@"\{(\d+)(?:[^}]*)?\}", RegexOptions.CultureInvariant);
+            string[] Arguments(string? text) => [.. placeholder.Matches(text ?? "").Select(m => m.Groups[1].Value).Order(StringComparer.Ordinal)];
+            // The guard must be able to fail: it sees repeated, formatted and absent arguments.
+            Check(Arguments("Line {1} is not on the {0} ({0:N0})").SequenceEqual(["0", "0", "1"]) && Arguments("no arguments here { }").Length == 0,
+                "the scan should list every placeholder of a text, repeated and formatted ones included");
+
+            var packs = Directory.EnumerateFiles(languages, "lang-*.json").Order(StringComparer.Ordinal)
+                .Select(file => (File: Path.GetFileName(file), Pack: JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(file))!)).ToArray();
+            Check(packs.Length == 5, $"five packs expected under {languages}, found {packs.Length}");
+            var problems = new List<string>();
+            foreach (string table in new[] { "strings", "messages" })
+            {
+                // The message tables translate different sources per language, so a key may be missing from some of them;
+                // where a key is, its text must take the arguments the others take.
+                var keys = packs.SelectMany(pack => pack.Pack[table].EnumerateObject().Select(property => property.Name)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+                foreach (string key in keys)
+                {
+                    var texts = packs.Select(pack => (pack.File, Text: pack.Pack[table].TryGetProperty(key, out var value) ? value.GetString() : null)).Where(entry => entry.Text is not null).ToArray();
+                    string[] reference = Arguments(texts[0].Text);
+                    foreach (var (file, text) in texts.Skip(1))
+                        if (!Arguments(text).SequenceEqual(reference))
+                            problems.Add($"{table} '{key}': {texts[0].File} takes {{{string.Join(", ", reference)}}}, {file} takes {{{string.Join(", ", Arguments(text))}}}");
+                }
+            }
+            Check(problems.Count == 0, "texts that format different arguments in different languages:\n  " + string.Join("\n  ", problems.Take(12)));
             return Task.CompletedTask;
         });
     }

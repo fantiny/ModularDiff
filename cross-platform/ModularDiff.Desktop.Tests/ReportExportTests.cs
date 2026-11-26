@@ -98,8 +98,11 @@ internal static class ReportExportTests
             string tooEarly = Path.Combine(outDir, "too-early.txt");
             check(scanning.CommitPathBars(), "Enter on the path bars starts the compare");
             // 决定"导出什么"发生在 ExportReportAsync 的同步开头,此时扫描定时器刚启动、比较的后续体还没机会跑。
-            check(!OnUi(scanning, scanning.ExportReportAsync(tooEarly)) && !File.Exists(tooEarly) && scanning.StatusText == Lang.Get("md_export_scanning"),
-                $"while the folder scan runs the export must wait for it and write nothing (status '{scanning.StatusText}')");
+            // 状态栏也必须在那一刻读:一旦让出线程,小目录的比较就结束并把汇总写进状态栏(这条断言曾靠时序碰巧通过)。
+            var tooEarlyExport = scanning.ExportReportAsync(tooEarly);
+            string answered = scanning.StatusText;
+            check(!OnUi(scanning, tooEarlyExport) && !File.Exists(tooEarly) && answered == Lang.Get("md_export_scanning"),
+                $"while the folder scan runs the export must wait for it and write nothing (answered '{answered}')");
             var deadline = DateTime.UtcNow.AddSeconds(20);
             while (!scanning.FolderCompareComplete && DateTime.UtcNow < deadline) Pump(scanning, 20);
             check(scanning.FolderCompareComplete, $"the folder compare did not finish (status: {scanning.StatusText})");
@@ -171,7 +174,9 @@ internal static class ReportExportTests
                     check(ToolTip.GetTip(ById<Button>(folder, "export"))?.ToString() == Lang.Get("export"), $"{pack}: the export tip follows the language");
                 }
             }
-            finally { Lang.Apply("中文"); if (!Equals(languageBox.SelectedItem, "中文")) { languageBox.SelectedItem = "中文"; Pump(folder, 400); } }
+            // 收尾要先拨下拉框:处理函数只在语言确实不同时才应用并保存。先 Apply 再拨框,已保存的语言就停在最后一次
+            // 切换的那种,之后同一进程里新建的每个窗口都会以它启动(每个窗口构造时应用的是已保存的偏好)。
+            finally { if (!Equals(languageBox.SelectedItem, "中文")) { languageBox.SelectedItem = "中文"; Pump(folder, 400); } Lang.Apply("中文"); }
             formatBox.SelectedIndex = htmlIndex; Pump(folder, 100);
 
             // ───────── 文本会话还开着,但用户已经回到目录页:导出的是目录比较 ─────────

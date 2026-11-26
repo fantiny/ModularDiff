@@ -11,9 +11,10 @@ namespace ModularDiff.Desktop;
 /// 冲突导航与"采用左/右侧"逐个决策;git mergetool 模式下关闭时写入 MERGED 并以 GitMergeCompleted(是否无冲突)回报退出码。</summary>
 public sealed class MergeWindow : Window
 {
-    private readonly TextBox _base = new() { Watermark = "公共祖先 (BASE)" }, _left = new() { Watermark = "左侧（我的）LOCAL" }, _right = new() { Watermark = "右侧（对方的）REMOTE" };
+    // 文字全部取自语言包:这个窗口此前从不用 Lang,任何界面语言下都是中文。
+    private readonly TextBox _base = new() { Watermark = Lang.Get("md_merge_base") }, _left = new() { Watermark = Lang.Get("md_merge_local") }, _right = new() { Watermark = Lang.Get("md_merge_remote") };
     private readonly TextBox _result = new() { AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.NoWrap, FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, IsReadOnly = false };
-    private readonly TextBlock _status = new() { Text = "填三个文件路径(或由 git mergetool 传入),点 ▶ 合并。", TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _status = new() { Text = Lang.Get("md_merge_start_hint"), TextWrapping = TextWrapping.Wrap };
     private List<(int Start, int Middle, int End)> _conflicts = [];
     private int _currentConflict = -1;
     private bool _everMerged;
@@ -37,15 +38,18 @@ public sealed class MergeWindow : Window
     }
     /// <summary>git mergetool 流程完成(参数=是否无未决冲突);宿主据此设置进程退出码 0/1。</summary>
     public event Action<bool>? GitMergeCompleted;
+    /// <summary>状态栏与三个路径框(测试核对它们的文字跟随界面语言)。</summary>
+    public string StatusText => _status.Text ?? "";
+    public IReadOnlyList<TextBox> PathBoxes => [_base, _left, _right];
     /// <summary>测试/程序化入口:结果编辑器(模拟用户手编,验证 TextChanged → 重析接线)。</summary>
     public TextBox ResultEditor => _result;
 
     private readonly PluginCatalog _plugins;
     public MergeWindow(string? basePath = null, string? leftPath = null, string? rightPath = null, PluginCatalog? plugins = null, string? gitOutputPath = null)
     {
-        _plugins = plugins ?? App.Plugins ?? throw new InvalidOperationException("插件目录不可用。");
+        _plugins = plugins ?? App.Plugins ?? throw new InvalidOperationException(Lang.Get("md_merge_no_plugins"));
         _gitOutputPath = gitOutputPath;
-        Title = "ModularDiff · 三方合并"; Width = 1150; Height = 780; MinWidth = 780; MinHeight = 520;
+        Title = Lang.Get("merge_window_title"); Width = 1150; Height = 780; MinWidth = 780; MinHeight = 520;
         _base.Text = basePath; _left.Text = leftPath; _right.Text = rightPath;
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         Button Button(string caption, string tip, Action action)
@@ -53,11 +57,11 @@ public sealed class MergeWindow : Window
             var button = new Button { Content = caption, MinWidth = 34, Padding = new Thickness(8, 4) };
             ToolTip.SetTip(button, tip); button.Click += (_, _) => action(); return button;
         }
-        toolbar.Children.Add(Button("▶", "执行三方合并", async () => await MergeAsync()));
-        toolbar.Children.Add(Button("↑", "上一处冲突", () => Navigate(-1)));
-        toolbar.Children.Add(Button("↓", "下一处冲突", () => Navigate(1)));
-        toolbar.Children.Add(Button("⇐", "当前冲突:采用左侧(我的)", () => Take(false)));
-        toolbar.Children.Add(Button("⇒", "当前冲突:采用右侧(对方的)", () => Take(true)));
+        toolbar.Children.Add(Button("▶", Lang.Get("merge_run_tip"), async () => await MergeAsync()));
+        toolbar.Children.Add(Button("↑", Lang.Get("merge_prev"), () => Navigate(-1)));
+        toolbar.Children.Add(Button("↓", Lang.Get("merge_next"), () => Navigate(1)));
+        toolbar.Children.Add(Button("⇐", Lang.Get("merge_take_left_tip"), () => Take(false)));
+        toolbar.Children.Add(Button("⇒", Lang.Get("merge_take_right_tip"), () => Take(true)));
         var paths = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*") };
         paths.Children.Add(_base);
         var mid = _left; Grid.SetColumn(mid, 1); paths.Children.Add(mid);
@@ -80,8 +84,8 @@ public sealed class MergeWindow : Window
         try
         {
             if (!File.Exists(_base.Text) || !File.Exists(_left.Text) || !File.Exists(_right.Text))
-            { _status.Text = "三个路径都必须是存在的文件。"; return; }
-            _status.Text = "合并中…";
+            { _status.Text = Lang.Get("merge_need_three_files"); return; }
+            _status.Text = Lang.Get("merge_working");
             string baseText = await File.ReadAllTextAsync(_base.Text!), leftText = await File.ReadAllTextAsync(_left.Text!), rightText = await File.ReadAllTextAsync(_right.Text!);
             static string[] Split(string text) => text.Split(["\r\n", "\n", "\r"], StringSplitOptions.None);
             string algorithm = _plugins.GetAll<IDiffAlgorithm>().FirstOrDefault()?.Id ?? "myers";
@@ -92,7 +96,7 @@ public sealed class MergeWindow : Window
             Repaint();
             _everMerged = true;
         }
-        catch (Exception ex) { _status.Text = "合并失败：" + ex.Message; }
+        catch (Exception ex) { _status.Text = Lang.Get("merge_failed", Lang.Text(ex.Message)); }
     }
     /// <summary>重新解析冲突标记并刷新导航状态(结果可自由手编,决策始终作用于当前标记结构)。</summary>
     public void Repaint()
@@ -108,14 +112,14 @@ public sealed class MergeWindow : Window
             else if (text.StartsWith(">>>>>>>") && start >= 0 && middle >= 0) { _conflicts.Add((start, middle, i)); start = middle = -1; }
         }
         _currentConflict = _conflicts.Count > 0 ? 0 : -1;
-        _status.Text = _conflicts.Count == 0 ? "合并完成：无冲突，结果可直接保存。" : $"合并完成：{_conflicts.Count} 处冲突,↑↓ 导航,⇐ 采用我的 / ⇒ 采用对方的。";
+        _status.Text = _conflicts.Count == 0 ? Lang.Get("merge_clean_status") : Lang.Get("md_merge_conflicts_hint", _conflicts.Count);
     }
     private void Navigate(int direction)
     {
-        if (_conflicts.Count == 0) { _status.Text = "没有冲突。"; return; }
+        if (_conflicts.Count == 0) { _status.Text = Lang.Get("merge_no_conflicts"); return; }
         _currentConflict = Math.Clamp(_currentConflict + direction, 0, _conflicts.Count - 1);
         var (start, _, end) = _conflicts[_currentConflict];
-        _status.Text = $"冲突 {_currentConflict + 1}/{_conflicts.Count}(行 {start + 1}–{end + 1})";
+        _status.Text = Lang.Get("md_merge_conflict_at", _currentConflict + 1, _conflicts.Count, start + 1, end + 1);
         var lines = _result.Text!.Split('\n');
         if (start >= lines.Length) { Repaint(); return; }   // 防御:行号失效(理论上 TextChanged 已重析)
         _result.SelectionStart = lines[..start].Aggregate(0, (sum, line) => sum + line.Length + 1);
@@ -125,15 +129,15 @@ public sealed class MergeWindow : Window
     /// <summary>解决当前冲突:true=采用右侧,false=采用左侧;重写结果文本后重新解析。</summary>
     public void Take(bool useRight)
     {
-        if (_currentConflict < 0 || _currentConflict >= _conflicts.Count) { _status.Text = "请先用 ↑↓ 选中一处冲突。"; return; }
+        if (_currentConflict < 0 || _currentConflict >= _conflicts.Count) { _status.Text = Lang.Get("md_merge_pick_conflict"); return; }
         var (start, middle, end) = _conflicts[_currentConflict];
         var lines = (_result.Text ?? "").Split('\n').ToList();
-        if (start >= lines.Count || end >= lines.Count || middle >= lines.Count) { Repaint(); _status.Text = "冲突标记已变化，请重试。"; return; }
+        if (start >= lines.Count || end >= lines.Count || middle >= lines.Count) { Repaint(); _status.Text = Lang.Get("md_merge_markers_changed"); return; }
         var chosen = useRight ? lines.GetRange(middle + 1, end - middle - 1) : lines.GetRange(start + 1, middle - start - 1);
         lines.RemoveRange(start, end - start + 1);
         lines.InsertRange(start, chosen);
         _result.Text = string.Join("\n", lines);
         Repaint();
-        _status.Text = $"已采用{(useRight ? "右侧" : "左侧")}。剩余 {_conflicts.Count} 处冲突。";
+        _status.Text = Lang.Get("merge_took_side", Lang.Get(useRight ? "side_right" : "side_left"), _conflicts.Count);
     }
 }

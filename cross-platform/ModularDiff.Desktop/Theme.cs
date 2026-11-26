@@ -99,11 +99,11 @@ public static class Palette
         }
         catch (JsonException ex)
         {
-            _diagnostics.Add($"{Path.GetFileName(path)}: 第 {ex.LineNumber + 1} 行 — {ex.Message}");
+            _diagnostics.Add($"{Path.GetFileName(path)}: line {ex.LineNumber + 1} — {ex.Message}");
         }
         catch (KeyNotFoundException ex)
         {
-            _diagnostics.Add($"{Path.GetFileName(path)}: 缺少必需字段 — {ex.Message}");
+            _diagnostics.Add($"{Path.GetFileName(path)}: a required field is missing — {ex.Message}");
         }
         catch (Exception ex) when (ex is FormatException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
