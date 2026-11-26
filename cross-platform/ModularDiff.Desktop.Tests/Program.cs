@@ -599,6 +599,7 @@ Task.Run(async () =>
 FolderViewTests.Run(pluginsPath, plugins, Check);
 ReportExportTests.Run(pluginsPath, plugins, Check);
 LocalizationTests.Run(pluginsPath, plugins, Check);
+SyncPreviewTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

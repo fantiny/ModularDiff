@@ -1239,14 +1239,22 @@ public sealed partial class MainWindow : Window
         var targets = SyncTargetPaths();
         if (targets.Length == 0) { _status.Localized(() => Lang.Get("status_no_sync_files")); return; }
         var plan = await Plugin<ISyncPlanner>().PlanAsync(_directory.LeftPath, _directory.RightPath, targets, mode);
-        var preview = Plugin<ISyncPreview>().Describe(plan);
-        string runLabel = Lang.Get("md_folder_sync_run");
-        if (await Ask(Lang.Get("md_folder_sync_preview_title"), Lang.Get("md_folder_sync_intro") + "\n\n" + string.Join("\n", FormatSyncPlan(preview)), [runLabel, Lang.Get("dlg_cancel")]) != runLabel) return;
-        var result = await Plugin<ISyncExecutor>().ExecuteAsync(plan, preview.Select(p => new SyncDecision(p.RelativePath, p.SuggestedAction)).ToArray(), Safety());
-        _session.Clear(); RefreshEditors();
-        _status.Localized(() => Lang.Get("status_sync_done", result.Entries.Count(e => e.Outcome == SyncOutcome.Copied), result.Entries.Count(e => e.Outcome == SyncOutcome.Failed), result.Entries.Count(e => e.Outcome == SyncOutcome.Cancelled)) + " " + Lang.Get("md_folder_sync_refresh"));
+        // 预览里每个文件的复制方向都可以改;关掉预览(或按取消)时什么都不做。
+        string scope = Lang.Get(SelectedFolderFiles().Length > 0 ? "sync_scope_selected" : "sync_scope_batch");
+        var decisions = await new SyncPreviewWindow(plan, Plugin<ISyncPreview>().Describe(plan), scope).ShowDialog<IReadOnlyList<SyncDecision>?>(this);
+        if (decisions is null) return;
+        var result = await RunSyncAsync(plan, decisions);
         await Ask(Lang.Get("md_folder_sync_result_title"), string.Join("\n", DescribeSyncResult(result)), [Lang.Get("md_folder_close")]);
         await Compare();   // 列表已过时:重新比较目录以反映同步结果
+    }
+    /// <summary>按给定的决定执行同步(覆盖前备份并记录)并报告结果。决定来自预览窗口;测试直接给,
+    /// 用来核对执行的是决定而不是插件的建议。</summary>
+    public async Task<SyncResult> RunSyncAsync(SyncPlan plan, IReadOnlyList<SyncDecision> decisions)
+    {
+        var result = await Plugin<ISyncExecutor>().ExecuteAsync(plan, decisions, Safety());
+        _session.Clear(); RefreshEditors();
+        _status.Localized(() => Lang.Get("status_sync_done", result.Entries.Count(e => e.Outcome == SyncOutcome.Copied), result.Entries.Count(e => e.Outcome == SyncOutcome.Failed), result.Entries.Count(e => e.Outcome == SyncOutcome.Cancelled)) + " " + Lang.Get("md_folder_sync_refresh"));
+        return result;
     }
     private async Task History()
     {

@@ -428,8 +428,7 @@ public sealed partial class MainWindow
         {
             string? action = item.Choices.FirstOrDefault(c => c.Action == item.SuggestedAction)?.Label;
             var parts = new List<string> { action is null ? Lang.Get("sync_choice_skip") : Lang.PluginText(action), item.RelativePath, Lang.PluginText(item.State) };
-            string left = item.LeftInfo == "sync_stamp_missing" ? Lang.Get("sync_stamp_missing") : Lang.Text(item.LeftInfo);
-            string right = item.RightInfo == "sync_stamp_missing" ? Lang.Get("sync_stamp_missing") : Lang.Text(item.RightInfo);
+            string left = SyncPreviewWindow.InfoText(item.LeftInfo), right = SyncPreviewWindow.InfoText(item.RightInfo);
             parts.Add($"({Lang.Get("side_left")} {left} | {Lang.Get("side_right")} {right})");
             return string.Join("  ", parts);
         }).ToList();
