@@ -173,6 +173,7 @@
     "md_copy_all_failed": "ブロックの一括コピーに失敗しました：{0}",
     "md_discard": "破棄",
     "md_edit_status": "{0} · 差異ブロック {1} 件 · {2} ↔ {3}",
+    "md_edit_status_unaligned": "{0} · {1} · {2} ↔ {3}",
     "md_export_no_formatter": "レポート形式のプラグインがありません（Formatting または Format.Html が必要です）。",
     "md_export_no_path": "選択した場所はローカルのファイルパスではありません。",
     "md_export_nothing": "エクスポートできる比較がありません。先にファイルやフォルダーを比較してください。",

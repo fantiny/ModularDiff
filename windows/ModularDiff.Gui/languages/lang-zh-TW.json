@@ -173,6 +173,7 @@
     "md_copy_all_failed": "批量複製失敗：{0}",
     "md_discard": "放棄",
     "md_edit_status": "{0} · {1} 個差異塊 · {2} ↔ {3}",
+    "md_edit_status_unaligned": "{0} · {1} · {2} ↔ {3}",
     "md_export_no_formatter": "沒有可用的報告格式外掛（需要 Formatting 或 Format.Html）。",
     "md_export_no_path": "選定的位置不是本機檔案路徑。",
     "md_export_nothing": "還沒有可匯出的比較：先比較檔案或目錄。",

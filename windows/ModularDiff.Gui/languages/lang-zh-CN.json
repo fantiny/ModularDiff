@@ -173,6 +173,7 @@
     "md_copy_all_failed": "批量复制失败：{0}",
     "md_discard": "放弃",
     "md_edit_status": "{0} · {1} 个差异块 · {2} ↔ {3}",
+    "md_edit_status_unaligned": "{0} · {1} · {2} ↔ {3}",
     "md_export_no_formatter": "没有可用的报告格式插件（需要 Formatting 或 Format.Html）。",
     "md_export_no_path": "选定的位置不是本地文件路径。",
     "md_export_nothing": "还没有可导出的比较：先比较文件或目录。",

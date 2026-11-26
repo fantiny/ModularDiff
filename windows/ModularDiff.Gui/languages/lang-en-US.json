@@ -173,6 +173,7 @@
     "md_copy_all_failed": "Copying the blocks failed: {0}",
     "md_discard": "Discard",
     "md_edit_status": "{0} · {1} difference block(s) · {2} ↔ {3}",
+    "md_edit_status_unaligned": "{0} · {1} · {2} ↔ {3}",
     "md_export_no_formatter": "No report formatter plugin is available (Formatting or Format.Html is needed).",
     "md_export_no_path": "The chosen location is not a local file path.",
     "md_export_nothing": "Nothing to export yet: compare files or folders first.",

@@ -40,6 +40,8 @@ public sealed partial class MainWindow : Window
     private readonly Avalonia.Controls.Primitives.ToggleButton _findCase = new() { Content = "Aa", Padding = new Thickness(6, 2) };
     private readonly TextBox _cellEditor = new() { Name = "CellEditor", FontFamily = new FontFamily("Cascadia Code,Menlo,DejaVu Sans Mono,monospace"), FontSize = 13, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0), VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
     private AlignedRow? _editingRow; private bool _editingLeft, _editorLoading;
+    // 打开着的编辑框上一次写进缓冲区的文字(按它自己的写法):打开时是那一行,粘贴进来几行就是几行。
+    private string _cellCommitted = "";
     private bool _awaitingAlignTarget; private int _alignSourceLine = -1; private bool _alignSourceIsLeft;
     private readonly List<(Control Target, string Key)> _localized = [];
     // 提示文字会随界面语言变化,不能当控件的标识;自动化标识固定为语言键,测试据此查找控件。
@@ -452,6 +454,7 @@ public sealed partial class MainWindow : Window
         bool usesCrLf = (sourceLeft ? _session.Right : _session.Left).Text.Contains("\r\n");
         var target = new List<string>();
         int copied = 0;
+        var opens = new List<int>();   // 选中的行里对侧原本没有格子的:复制过去的文字就落在那一格(行跟着文字走时按这个落)
         for (int i = 0; i < _rows.RowCount; i++)
         {
             var current = _rows.Rows[i];
@@ -462,6 +465,7 @@ public sealed partial class MainWindow : Window
             {
                 target.Add(sourceCell.Text + (usesCrLf ? "\r" : ""));   // 复制行沿用目标侧整体行尾风格
                 copied++;
+                if (targetCell is null) opens.Add(i);
             }
             else if (targetCell is not null)
                 // 逐行保留原行尾(单元格 Ending:CRLF/CR→\r,LF/EOF→无),避免整侧重建丢掉 CRLF
@@ -472,7 +476,7 @@ public sealed partial class MainWindow : Window
         string joined = string.Join("\n", target);
         if (previous.EndsWith("\n") && !joined.EndsWith("\n"))
             joined += joined.EndsWith("\r") ? "\n" : previous.EndsWith("\r\n") ? "\r\n" : "\n";   // 保留末行换行,避免重复 \r
-        _session.Edit(!sourceLeft, joined);
+        EditSide(!sourceLeft, joined, opens);
         _debounce.Stop(); RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
         else _status.Text = Lang.Get("md_copied_rows_realign", copied, Lang.Get(sourceLeft ? "side_right" : "side_left"));
@@ -542,7 +546,7 @@ public sealed partial class MainWindow : Window
         if (buffer is null) return;
         string result = actions[index].Transform(new(buffer, 1, 1));
         if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = Lang.Get("md_no_change"); return; }
-        _session.Edit(left, result);
+        EditSide(left, result);
         _debounce.Stop(); RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
     }
@@ -577,7 +581,7 @@ public sealed partial class MainWindow : Window
                     {
                         string result = action(new(buffer, (left ? _rows.SelectedRows.FirstOrDefault()?.Left : _rows.SelectedRows.FirstOrDefault()?.Right)?.LineNumber ?? 1, 1));
                         if (string.IsNullOrEmpty(result) || result == buffer.Text) { _status.Text = Lang.Get("md_no_change"); return; }
-                        _session.Edit(left, result);
+                        EditSide(left, result);
                         _debounce.Stop(); RefreshDirty();
                         if ((bool)_autoRealign.IsChecked!) Realign();
                         else _status.Text = Lang.Get("md_tool_done_realign", Lang.Text(label));
@@ -675,7 +679,7 @@ public sealed partial class MainWindow : Window
         {
             var bare = buffer.Text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
             var formatted = formatter.Format(bare);
-            _session.Edit(left, LineText.Rebuild(formatted, buffer.Text));   // 行尾风格/结尾换行沿原文 —— 走 Core 助手,不再手写 join(LFCR 事故源;与上游 1caf78c 的内联修正语义一致)
+            EditSide(left, LineText.Rebuild(formatted, buffer.Text));   // 行尾风格/结尾换行沿原文 —— 走 Core 助手,不再手写 join(LFCR 事故源;与上游 1caf78c 的内联修正语义一致)
             _debounce.Stop();
             RefreshDirty();
             if ((bool)_autoRealign.IsChecked!) Realign();
@@ -715,7 +719,7 @@ public sealed partial class MainWindow : Window
             applied++;
         }
         if (applied == 0) return;
-        _session.Edit(left, string.Join("\n", lines));
+        EditSide(left, string.Join("\n", lines));
         _debounce.Stop();
         RefreshDirty();
         if ((bool)_autoRealign.IsChecked!) Realign();
@@ -735,7 +739,7 @@ public sealed partial class MainWindow : Window
             var parts = splitter.Split(raw.TrimEnd('\r'));
             if (parts.Count < 2) return;
             lines[index] = LineText.ReplaceRawLine(raw, parts);   // 行尾风格(CRLF)沿用原行 —— Core 助手(上游同修)
-            _session.Edit(left, string.Join("\n", lines));
+            EditSide(left, string.Join("\n", lines));
             _debounce.Stop();   // 手动模式:点 ⟳ 重对齐;⚡ 开启时立即重算
             RefreshDirty();
             if ((bool)_autoRealign.IsChecked!) Realign();
@@ -753,12 +757,32 @@ public sealed partial class MainWindow : Window
         if (_editingRow is not null) EndCellEdit();   // 换单元格前提交上一个
         _editingRow = row; _editingLeft = left; _lastFocusLeft = left;
         _editorLoading = true; _cellEditor.Text = cell.Text; _editorLoading = false;
+        _cellCommitted = cell.Text;
         var rect = _rows.CellRect(index, left);
         _cellEditor.Width = rect.Width; _cellEditor.Height = AlignedRowsView.RowHeight;
         Canvas.SetLeft(_cellEditor, rect.X); Canvas.SetTop(_cellEditor, rect.Y);
         _cellEditor.IsVisible = true;
         _cellEditor.Focus(); _cellEditor.CaretIndex = _cellEditor.Text.Length;
         _rows.SelectRows([row]);
+    }
+    /// <summary>差异页上对缓冲区的每一次修改都从这里进:会话把它记成一次编辑,屏幕上的行跟着文字走(RowFollow)。
+    /// 左右的对齐不在这里重算 —— 那是 ⟳ 或 ⚡ 的事。此前各处直接调会话,编辑之后屏幕上的行就留在了旧文字上。</summary>
+    private void EditSide(bool left, string text, IReadOnlyList<int>? fillRows = null)
+    {
+        var buffer = left ? _session.Left : _session.Right;
+        if (buffer is null || buffer.Text == text) return;
+        string before = buffer.Text;
+        var shown = _rows.Rows;
+        int editing = _editingRow is { } open ? _rows.IndexOfRow(open) : -1;
+        _session.Edit(left, text);
+        if (HexMode || shown.Count == 0) return;   // 十六进制行不是文字的行;行是空的也没有什么可跟(编辑页打字时如此)
+        var followed = RowFollow.Follow(shown, left, before, buffer.Text, fillRows);
+        if (followed is null) { Realign(); return; }   // 行集合和这份文字对不上:重新比较,不猜
+        _rows.FollowRows(followed);
+        UpdateFindCount();   // 匹配是按屏幕上的行文字算的:行变了,计数跟着变
+        _rowsAligned = false;
+        _editingRow = editing >= 0 && followed.OldToNew[editing] >= 0 ? _rows.Rows[followed.OldToNew[editing]] : null;
+        if (_editingRow is null) _cellEditor.IsVisible = false;
     }
     private void EndCellEdit()
     {
@@ -779,15 +803,29 @@ public sealed partial class MainWindow : Window
             string[] lines = (left ? _session.Left : _session.Right).Text.Split('\n');
             int index = cell.LineNumber - 1;
             if (index < 0 || index >= lines.Length) return;
-            string suffix = lines[index].EndsWith('\r') ? "\r" : "";   // 保留该行原有行尾风格(CRLF)
-            if (editor.Text + suffix == lines[index]) return;
-            lines[index] = editor.Text + suffix;
-            _session.Edit(left, string.Join("\n", lines));
+            string ending = lines[index].EndsWith('\r') ? "\r" : "";   // 沿用这一格原有的行尾风格(CRLF)
+            string[] written = CellLines(_cellCommitted), typed = CellLines(editor.Text ?? "");
+            if (index + written.Length > lines.Length) return;
+            // 编辑框的文字换掉的是它上一次写进去的那几行 —— 粘贴进来的可以有好几行,而同一次改动会报到两次。
+            // 那几行应当还在原处;不在(别处改过)就只认这一行。
+            bool mine = true;
+            for (int k = 0; k < written.Length && mine; k++) mine = lines[index + k] == written[k] + ending;
+            if (!mine) written = [lines[index].EndsWith('\r') ? lines[index][..^1] : lines[index]];
+            if (typed.Length == written.Length && typed.SequenceEqual(written)) return;
+            var updated = new string[lines.Length - written.Length + typed.Length];
+            Array.Copy(lines, updated, index);
+            for (int k = 0; k < typed.Length; k++) updated[index + k] = typed[k] + ending;   // 段里每一行都用这一格的行尾
+            Array.Copy(lines, index + written.Length, updated, index + typed.Length, lines.Length - index - written.Length);
+            _cellCommitted = editor.Text ?? "";
+            EditSide(left, string.Join("\n", updated));
             _debounce.Stop();   // 手动重对齐:编辑时不自动重排,点 ▶ 按当前算法重新对齐
             RefreshDirty();
         }
         catch (Exception ex) { _status.Text = ex.Message; }
     }
+    /// <summary>编辑框里的文字按行拆开,行尾统一成 \n(文本框会把粘贴进来的行尾留成原样)。</summary>
+    private static string[] CellLines(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+
     private static Grid Columns(Control left, Control right, bool resize = true)
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,6,*") }; grid.Children.Add(left); Grid.SetColumn(right, 2); grid.Children.Add(right);
@@ -1220,6 +1258,7 @@ public sealed partial class MainWindow : Window
         if (_editingRow is not null && (_session.Presentation?.Rows ?? []).All(r => !ReferenceEquals(r, _editingRow)))
             EndCellEdit();   // 行集合已换:覆盖层指向的行不存在了,收起
         _rows.Rows = _session.Presentation?.Rows ?? [];
+        _rowsAligned = true;
         RefreshDirty();
     }
     private void BuildFindBar()
@@ -1319,14 +1358,16 @@ public sealed partial class MainWindow : Window
     // Between an edit and its realignment there is no presentation (in manual mode for the 250 ms of the debounce):
     // the count shown is the last one there was. Zero would be false, and the realign brings the true number.
     private int _knownHunks;
+    // 屏幕上的行还是不是一次比较的结果。打字、复制行之后行跟着文字走(RowFollow),对齐没重算:块标记是旧的,状态栏照 WPF 的说法提示"未对齐"。
+    private bool _rowsAligned = true;
     private void RefreshDirty()
     {
         SyncEditors();
         if (_session.Left is null) { _status.Text = Lang.Get("md_pick_path_hint"); return; }
         if (_session.Presentation is { } presentation) _knownHunks = presentation.Hunks.Count;
         // From a recipe: the status line says the same thing in whatever language is chosen later.
-        _status.Localized(() => Lang.Get("md_edit_status", Lang.Get(_session.Dirty ? "edit_status_dirty" : "edit_status_saved"),
-            _knownHunks, _session.Left.Path, _session.Right?.Path ?? ""));
+        _status.Localized(() => Lang.Get(_rowsAligned ? "md_edit_status" : "md_edit_status_unaligned", Lang.Get(_session.Dirty ? "edit_status_dirty" : "edit_status_saved"),
+            _rowsAligned ? _knownHunks : Lang.Get("hunks_unaligned"), _session.Left.Path, _session.Right?.Path ?? ""));
     }
     private async Task CopyAllBlocks(bool toRight)
     {
@@ -1342,7 +1383,21 @@ public sealed partial class MainWindow : Window
     private void Merge(MergeDirection direction)
     {
         if (_rows.SelectedRows.FirstOrDefault(r => r.HunkId >= 0) is not { } row) { _status.Text = Lang.Get("status_not_in_hunk"); return; }
-        try { _debounce.Stop(); _session.Merge(row.HunkId, direction); RefreshEditors(); } catch (Exception ex) { _status.Text = ex.Message; }
+        try
+        {
+            _debounce.Stop();
+            // 屏幕上的行可能来自上一次编辑之前(打字、复制行之后对齐没重算):块序号说的是那时的排法。复制本身会重新对齐,
+            // 所以先对齐,再按选中那一行的行号把它所在的块找回来。
+            int hunk = row.HunkId;
+            if (!_rowsAligned)
+            {
+                _session.Recompare(); RefreshRows();
+                hunk = _rows.Rows.FirstOrDefault(r => r.HunkId >= 0 && ((row.Left is { } l && r.Left?.LineNumber == l.LineNumber) || (row.Right is { } rr && r.Right?.LineNumber == rr.LineNumber)))?.HunkId ?? -1;
+                if (hunk < 0) { _status.Text = Lang.Get("status_not_in_hunk"); return; }
+            }
+            _session.Merge(hunk, direction); RefreshEditors();
+        }
+        catch (Exception ex) { _status.Text = ex.Message; }
     }
     private void Navigate(int direction)
     {

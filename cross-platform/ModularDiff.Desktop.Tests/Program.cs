@@ -85,14 +85,16 @@ Check(cssRows.Count == 2, "two css rows present for batch split");
 rowsView.SelectRows(cssRows);
 var splitItem = window.CreateSplitMenu(cssRows[0], false)!.Items.OfType<MenuItem>().First();
 Check(((string?)splitItem.Header)?.Contains("2 行") == true, "split menu reports batch row count");
+int beforeSplit = rowsView.RowCount;
 splitItem.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
 Dispatcher.UIThread.RunJobs();
-int before = rowsView.RowCount;
+// 行跟着文字走:拆出来的两行当场就在屏幕上(不必等 ⟳)—— 此前要等到 ⟳ 之后才出现。
+Check(rowsView.RowCount - beforeSplit == 2, $"batch split puts the two new lines on the screen at once (got {rowsView.RowCount - beforeSplit}); status: {window.StatusText}");
 var realignButton = ById<Button>(window, "md_tip_realign");
 realignButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
 var batchDone = DateTime.UtcNow.AddSeconds(5);
 while (DateTime.UtcNow < batchDone) { Dispatcher.UIThread.RunJobs(); window.UpdateLayout(); Thread.Sleep(10); }
-Check(rowsView.RowCount - before == 2, $"batch split realigns to {rowsView.RowCount - before} extra rows (expected 2); status: {window.StatusText}");
+Check(rowsView.RowCount - beforeSplit == 2, $"after ⟳ the batch split still shows two more rows (got {rowsView.RowCount - beforeSplit}); status: {window.StatusText}");
 // ⚡ 自动重对齐:开启后右键换行立即重算,无需点 ⟳。
 var autoToggle = ById<Avalonia.Controls.Primitives.ToggleButton>(window, "md_tip_auto");
 autoToggle.IsChecked = true;
@@ -602,6 +604,8 @@ LocalizationTests.Run(pluginsPath, plugins, Check);
 SyncPreviewTests.Run(pluginsPath, plugins, Check);
 FindTests.Run(pluginsPath, plugins, Check);
 ShortcutTests.Run(pluginsPath, plugins, Check);
+RowFollowProperties.Run(Check);
+RowFollowTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

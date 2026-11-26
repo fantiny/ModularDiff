@@ -65,6 +65,30 @@ public sealed class AlignedRowsView : Control
         return (row, point.X >= Math.Max(80, Bounds.Width / 2));
     }
     public IReadOnlyList<AlignedRow> Rows { get => _rows; set { _rows = value; _selected.Clear(); _primary = _anchor = -1; _textAnchor = _textHead = null; ResetPointerState(); SetFind(_findQuery, _findIgnoreCase); InvalidateMeasure(); InvalidateVisual(); } }
+    /// <summary>一侧的文字变了而对齐不动:换成跟随后的行(见 RowFollow)。选中的行、书签、跨行选区按"还是同一行"跟过去;
+    /// 与 Rows 的 set 不同 —— 那个是换了一份比较结果,选中自然作废。</summary>
+    internal void FollowRows(FollowedRows followed)
+    {
+        var rows = followed.Rows; var map = followed.OldToNew;
+        int? Move(int index) => index >= 0 && index < map.Count && map[index] >= 0 ? map[index] : null;
+        var selected = _selected.Select(Move).Where(index => index is not null).Select(index => index!.Value).ToArray();
+        _selected.Clear(); foreach (int index in selected) _selected.Add(index);
+        _primary = Move(_primary) ?? -1; _anchor = Move(_anchor) ?? -1;
+        if (_textAnchor is { } selectionStart && _textHead is { } selectionEnd)
+        {
+            // A selection across rows that lost one of its ends is no longer a selection.
+            if (Move(selectionStart.Row) is not { } startRow || Move(selectionEnd.Row) is not { } endRow) _textAnchor = _textHead = null;
+            else { _textAnchor = selectionStart with { Row = startRow }; _textHead = selectionEnd with { Row = endRow }; }
+        }
+        if (_bookmarks.Count > 0)
+        {
+            var marks = _bookmarks.ToArray(); _bookmarks.Clear();
+            foreach (var mark in marks) if (Move(mark.Key) is { } moved) _bookmarks[moved] = mark.Value;
+        }
+        _rows = rows;
+        SetFind(_findQuery, _findIgnoreCase);
+        InvalidateMeasure(); InvalidateVisual();
+    }
     public int RowCount => _rows.Count;
     public IReadOnlyList<AlignedRow> SelectedRows => _selected.OrderBy(i => i).Select(i => _rows[i]).ToList();
     public int PrimarySelected => _primary;

@@ -125,7 +125,9 @@ internal static class LocalizationTests
             check(cellEditor is not null, "inline cell editor realized");
             cellEditor!.Text += " edited";
             Dispatcher.UIThread.RunJobs(); Pump(pair);
-            check(pair.StatusText == Lang.Get("md_edit_status", Lang.Get("edit_status_dirty"), 1, pairLeft, pairRight), $"unsaved edits show in the status line, in the UI language (shows '{pair.StatusText}')");
+            // 编辑之后对齐没重算:状态栏照 WPF 的说法写"未对齐 · ⟳ 重算",这句话也来自语言包。
+            check(pair.StatusText == Lang.Get("md_edit_status_unaligned", Lang.Get("edit_status_dirty"), Lang.Get("hunks_unaligned"), pairLeft, pairRight),
+                $"unsaved edits and the unaligned hint show in the status line, in the UI language (shows '{pair.StatusText}')");
             string pairReport = Path.Combine(outDir, "pair.txt");
             OnUi(pair, pair.ExportReportAsync(pairReport, plugins.Get<IResultFormatter>("text")));
             check(pair.StatusText == Lang.Get("status_export_saved", Path.GetFullPath(pairReport)) + " · " + Lang.Get("md_export_unsaved"),
