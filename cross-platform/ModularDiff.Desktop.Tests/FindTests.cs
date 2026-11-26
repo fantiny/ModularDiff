@@ -103,7 +103,31 @@ internal static class FindTests
             check(pair.FindNext(backwards: true) && pair.FindMatch == expected[^2] && pair.FindCountText == $"{expected.Count - 1} / {expected.Count}", "and the one before that");
 
             // ───────── 改查询:当前匹配能留则留,否则取原行上最靠前的一处 ─────────
-            pair.FindText = "TWO";   // only the right side matches now (case-sensitive spelling is the same ignoring case: 'two' on the left too)
+            int secondInLine = Enumerable.Range(1, expected.Count - 1).First(i => expected[i].Row == expected[i - 1].Row);   // a line with two matches
+            for (int guard = 0; pair.FindMatch != expected[secondInLine] && guard <= expected.Count; guard++) pair.FindNext();
+            check(pair.FindState.Index == secondInLine && pair.FindMatch == expected[secondInLine], $"on the second match of a line (index {pair.FindState.Index})");
+            pair.FindText = "two";     // the same query again: nothing changed, so the current match stays where it was
+            check(pair.FindState.Index == secondInLine && pair.FindMatch == expected[secondInLine],
+                $"an unchanged query keeps the current match where it was, the second one in a line included (index {pair.FindState.Index} of {pair.FindState.Count})");
+            // 原处不再是匹配:落在原行的第一处;原行没有,落在其后的第一处;后面也没有了,回到第一处
+            void Go((int Row, bool Left, int Start, int Length) target)
+            {
+                pair.FindText = "two";
+                for (int guard = 0; pair.FindMatch != target && guard <= expected.Count; guard++) pair.FindNext();
+                check(pair.FindMatch == target, $"standing on {target} before the query changes (is {pair.FindMatch})");
+            }
+            var alone = expected.First(m => m.Left && expected.Count(x => x.Row == m.Row) == 1);   // a line of its own
+            var o = Expected(rows, "o", ignoreCase: true);
+            check(o.Count >= 6 && o[0] != (alone.Row, true, 2, 1) && o.Contains((alone.Row, true, 2, 1)), $"'o' is found before and on the line ({o.Count} matches)");
+            Go(alone); pair.FindText = "o";
+            check(pair.FindMatch == (alone.Row, true, 2, 1), $"when the place is no longer a match, the first match on the same line is taken (is {pair.FindMatch})");
+            Go(expected[0]); pair.FindText = "o";   // the right side's only "two", on a line of its own
+            check(pair.FindMatch == (expected[0].Row, false, 2, 1), $"... on the right side too (is {pair.FindMatch})");
+            var ee = Expected(rows, "ee", ignoreCase: true);
+            check(ee.Count == 2 && ee.All(m => m.Row < expected[^1].Row), "'ee' is found on one line only, before the last 'two'");
+            Go(expected[^1]); pair.FindText = "ee";
+            check(pair.FindMatch == ee[0] && pair.FindState.Index == 0, $"with nothing on or after the line, the search returns to the first match (is {pair.FindMatch}, index {pair.FindState.Index})");
+            pair.FindText = "TWO";   // ignoring case this finds the same matches as 'two', so the current one is kept
             var upper = Expected(rows, "TWO", ignoreCase: true);
             check(pair.FindState.Count == upper.Count && upper.Count == expected.Count, "ignoring case, 'TWO' finds the same matches as 'two'");
             pair.FindCaseSensitive = true;
@@ -140,10 +164,30 @@ internal static class FindTests
             bool warm = with.B < without.B - 30 && with.G - with.B > without.G - without.B + 20;
             check(warm, $"the paint is the find colour, a warm tint (with {with}, without {without})");
             check(controlWith == controlWithout, $"a row without a match is not painted at the same place (with {controlWith}, without {controlWithout})");
+            // ───────── 当前匹配描边:实心橙;其它匹配只有底色 ─────────
+            pair.FindText = "two"; Pump(pair, 200);
+            match = pair.FindMatch!.Value;
+            // 样例里右侧只有一处匹配(右侧的 TWO 单独占一行),所以统一在左侧量:左侧有三处,其中两处在同一行
+            if (!match.Left) { pair.FindNext(); Pump(pair, 120); match = pair.FindMatch!.Value; }
+            var others = expected.Where(m => m != match && m.Left == match.Left).ToArray();
+            check(match.Left && others.Length == 2, $"the current match is on the left, where the sample has two more ({match})");
+            // The outline is drawn on the match's rectangle, 1.5 wide from its left edge: the pixel just inside that edge is the solid orange, the pixel
+            // next to it half of it. Measured halfway up the edge, where it is straight (the corners are rounded) and clear of the text.
+            (byte R, byte G, byte B, byte A) Edge((int Row, bool Left, int Start, int Length) m) =>
+                Pixel(pair, view.TranslatePoint(new Point(46 + m.Start * view.CharacterWidth + 0.3, m.Row * AlignedRowsView.RowHeight + 12), pair)!.Value);
+            var currentEdge = Edge(match);
+            var otherEdge = Edge(others[0]);
+            check(currentEdge.B < 80 && currentEdge.G < 165, $"the left edge of the current match is the outline, a solid orange (edge {currentEdge})");
+            check(otherEdge.B > 90 && otherEdge.G > 165, $"another match has no outline, only the tint (edge {otherEdge})");
 
             // ───────── 按键:⌘F 打开并聚焦,F3 / ⇧F3 走,Enter 在查找框里是下一处,Esc 关闭 ─────────
             pair.CloseFind();
             check(!pair.FindBarVisible && pair.FindState.Count == 0 && pair.FindText == "", "Esc's command closes the bar and clears the search");
+            // 关闭之后没有可走的匹配:不是等下一拍才清,状态当场就是关掉的
+            check(!pair.FindNext() && !pair.FindNext(true) && pair.FindMatch is null && pair.FindCountText == "",
+                $"with the bar closed there is nothing to go to, and the counter is empty (state {pair.FindState}, '{pair.FindCountText}')");
+            HeadlessWindowExtensions.KeyPressQwerty(pair, PhysicalKey.F3, RawInputModifiers.None); Pump(pair, 60);
+            check(pair.FindMatch is null && !pair.FindBarVisible, "F3 with the bar closed does not bring the search back");
             HeadlessWindowExtensions.KeyPressQwerty(pair, PhysicalKey.F, RawInputModifiers.Control); Pump(pair, 100);
             check(pair.FindBarVisible && pair.FindBox.IsFocused && pair.GetVisualDescendants().OfType<TabControl>().Single().SelectedIndex == 0,
                 $"Cmd+F opens the find bar on the diff tab and puts the focus in its box (visible {pair.FindBarVisible}, focused {pair.FindBox.IsFocused})");

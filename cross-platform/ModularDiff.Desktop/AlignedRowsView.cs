@@ -138,7 +138,7 @@ public sealed class AlignedRowsView : Control
     public (int Row, bool Left, int Start, int Length)? FindMatch => _findCurrent >= 0 ? _findMatches[_findCurrent] : null;
 
     /// <summary>按 <paramref name="query"/> 重新找一遍,按行、左侧先于右侧、起点的顺序排列。
-    /// 当前匹配还是原来那一处(如果它仍是匹配);否则取原行上的第一处,再没有就取第一处。</summary>
+    /// 当前匹配还是原来那一处(如果它仍是匹配);否则取原行上的第一处,原行没有就取其后第一处,再没有就回到第一处 —— 眼睛不用跟着跳远。</summary>
     public void SetFind(string query, bool ignoreCase = true)
     {
         (int Row, bool Left, int Start, int Length)? was = FindMatch;

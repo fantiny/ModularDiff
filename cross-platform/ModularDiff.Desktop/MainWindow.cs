@@ -1272,7 +1272,10 @@ public sealed partial class MainWindow : Window
 
     public void CloseFind()
     {
-        _findBox.Text = "";   // clears the matches through ApplyFind
+        _findBox.Text = "";
+        // Right here, not through the box's change event: that one is deferred a pass for a programmatic assignment, and until then
+        // the view would still hold the matches (one more frame of highlights, and FindNext would still move).
+        ApplyFind();
         _findBar.IsVisible = false;
         _rows.Focus();
     }
