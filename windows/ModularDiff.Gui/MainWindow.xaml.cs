@@ -457,14 +457,24 @@ public partial class MainWindow : Window
 
     private void UpdateSummary()
     {
-        var result = TextView.Visibility == Visibility.Visible ? _fileResult : _folderResult;
-        if (result is null) return;
-        int files = result.Files.Count(f => !f.IsDirectory);
-        int pending = result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Pending);
-        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_summary", files,
-                result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Equal),
-                result.Files.Count(f => !f.IsDirectory && f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly),
-                result.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Error))
+        int files, equal, different, errors, pending;
+        if (TextView.Visibility == Visibility.Visible)
+        {
+            if (_fileResult is not { } fileResult) return;
+            files = fileResult.Files.Count(f => !f.IsDirectory);
+            equal = fileResult.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Equal);
+            different = fileResult.Files.Count(f => !f.IsDirectory && f.Status is FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly);
+            errors = fileResult.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Error);
+            pending = fileResult.Files.Count(f => !f.IsDirectory && f.Status == FileStatus.Pending);
+        }
+        else if (_tree is { } tree)
+        {
+            // The folder view is counted from the tree. While a scan runs the result the window was handed is
+            // the root wave alone: counted from it, the line sat at the root's numbers until the scan ended.
+            (files, equal, different, errors, pending) = tree.Summarize();
+        }
+        else return;
+        StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_summary", files, equal, different, errors)
             + (pending > 0 ? ModularDiff.Gui.Controls.Lang.Get("status_pending_suffix", pending) : "");
     }
     private void CancelClick(object sender, RoutedEventArgs e) { _syncCancellation?.Cancel(); _comparisonCancellation?.Cancel(); _detailCancellation?.Cancel(); }

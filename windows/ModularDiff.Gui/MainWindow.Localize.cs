@@ -21,6 +21,8 @@ public partial class MainWindow
             RefreshDynamicTexts();
         }
         UpdateEditState();
+        // The captions of the session and recent boxes come from the packs: rebuild the lists so they follow.
+        RefreshSessionLists();
         // Folder row tooltips read the language at binding time; re-point the rows so they follow a switch.
         LeftFolders.Refresh(); RightFolders.Refresh();
     }

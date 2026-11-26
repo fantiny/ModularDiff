@@ -10,6 +10,9 @@ namespace ModularDiff.Gui;
 public partial class MainWindow
 {
     private SessionStore.SessionFile _sessions = new([], []);
+    // Set while RefreshSessionLists puts a selection back: selecting a session loads and compares it, and
+    // a language switch must not do that.
+    private bool _restoringSessionBox;
 
     private void InitializeSessions()
     {
@@ -17,10 +20,26 @@ public partial class MainWindow
         RefreshSessionLists();
     }
 
+    /// <summary>Both lists, each behind its caption. With nothing to list the caption says so: an empty
+    /// ComboBox reads as broken. The selected session stays selected (the caption moved in front of it).</summary>
     private void RefreshSessionLists()
     {
-        SessionBox.ItemsSource = _sessions.Named.Select(s => s.Name).ToArray();
-        RecentBox.ItemsSource = _sessions.Recent.Select(s => Path.GetFileName(s.Left) + " ↔ " + Path.GetFileName(s.Right)).ToArray();
+        object? selected = SessionBox.SelectedIndex > 0 ? SessionBox.SelectedItem : null;
+        SessionBox.ItemsSource = WithCaption("sessions", "md_session_empty", _sessions.Named.Select(s => s.Name));
+        RecentBox.ItemsSource = WithCaption("recent", "md_recent_empty", _sessions.Recent.Select(s => Path.GetFileName(s.Left) + " ↔ " + Path.GetFileName(s.Right)));
+        _restoringSessionBox = true;
+        try
+        {
+            SessionBox.SelectedItem = selected ?? SessionBox.Items[0];
+            RecentBox.SelectedIndex = 0;
+        }
+        finally { _restoringSessionBox = false; }
+    }
+
+    private static string[] WithCaption(string captionKey, string emptyKey, IEnumerable<string> entries)
+    {
+        var list = entries.ToArray();
+        return [ModularDiff.Gui.Controls.Lang.Get(list.Length == 0 ? emptyKey : captionKey), .. list];
     }
 
     private void SaveSessionClick(object sender, RoutedEventArgs e)
@@ -43,7 +62,8 @@ public partial class MainWindow
 
     private void DeleteSessionClick(object sender, RoutedEventArgs e)
     {
-        if (SessionBox.SelectedItem is not string name) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_pick_delete"); return; }
+        // The first item is the caption, not a session.
+        if (SessionBox.SelectedIndex <= 0 || SessionBox.SelectedItem is not string name) { StatusLabel.Text = ModularDiff.Gui.Controls.Lang.Get("status_session_pick_delete"); return; }
         _sessions = _sessions.RemoveNamed(name);
         SessionStore.Save(_sessions);
         RefreshSessionLists();
@@ -52,7 +72,7 @@ public partial class MainWindow
 
     private async void SessionSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (!_ready || SessionBox.SelectedItem is not string name) return;
+        if (!_ready || _restoringSessionBox || SessionBox.SelectedIndex <= 0 || SessionBox.SelectedItem is not string name) return;
         var session = _sessions.Named.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         if (session is null) return;
         ApplySession(session);
@@ -61,7 +81,7 @@ public partial class MainWindow
 
     private async void RecentSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (!_ready || RecentBox.SelectedItem is not string label) return;
+        if (!_ready || RecentBox.SelectedIndex <= 0 || RecentBox.SelectedItem is not string label) return;
         int index = Array.IndexOf([.. _sessions.Recent.Select(s => Path.GetFileName(s.Left) + " ↔ " + Path.GetFileName(s.Right))], label);
         if (index < 0 || index >= _sessions.Recent.Count) return;
         ApplySession(_sessions.Recent[index]);

@@ -105,6 +105,28 @@ internal static class WpfLogicTests
             return Task.CompletedTask;
         });
 
+        await test("WPF FolderTree: the status line's numbers come from the tree, and for a finished comparison they are the result's", () =>
+        {
+            // While a scan runs the result the window was handed is the root wave alone: counted from it, the status line
+            // stayed at the root's numbers until the scan ended. The tree is what the user sees, so it is what is counted.
+            FileComparison[] entries =
+            [
+                Folder("broken", Error), Entry("broken/locked.txt", Error, "left: The process cannot access the file."),   // a folder with an error inside: its entry is a folder's
+                Entry("secret", Error, "left: Access to the path is denied."), Entry("secret/keep.txt", RightOnly),   // an unreadable folder, known by its error entry
+                Folder("gone", LeftOnly), Entry("gone/old.txt", LeftOnly), Entry("top.txt", RightOnly), Entry("clean.txt", Equal), Entry("diff.txt", Modified), Entry("wait.txt", Pending),
+            ];
+            Tree tree = Tree.Build(Result(left, right, entries));
+
+            // 7 files and the unreadable folder's error; the one-side folder is a finding of its own and is not a file,
+            // and 'broken' is not one more: it is the folder the locked file lies in.
+            Check(tree.Summarize() == (8, 1, 4, 2, 1), $"8 files (the unreadable folder's error included): 1 same, 4 different, 2 errors, 1 pending (got {tree.Summarize()})");
+            // Which is exactly what the window counted from the result before: a finished comparison reads the same either way.
+            var files = entries.Where(f => !f.IsDirectory).ToArray();
+            var fromResult = (files.Length, files.Count(f => f.Status == Equal), files.Count(f => f.Status is Modified or LeftOnly or RightOnly), files.Count(f => f.Status == Error), files.Count(f => f.Status == Pending));
+            Check(tree.Summarize() == fromResult, $"for a finished comparison the tree and the result must count alike (tree {tree.Summarize()}, result {fromResult})");
+            return Task.CompletedTask;
+        });
+
         await test("WPF FolderNode: a node announces what a row shows, so a row that keeps its node is redrawn when the node changes under it", () =>
         {
             Tree tree = Tree.Build(Result(left, right,
@@ -190,13 +212,18 @@ internal static class WpfLogicTests
 
             // As MainWindow does: the root wave builds the tree, every later report is applied to it in arrival order.
             Tree replayed = null!;
+            (int Files, int Equal, int Different, int Errors, int Pending) rootSummary = default;
             foreach (var report in recorder.Reports)
             {
-                if (report.PartialResult is { } partial) replayed = Tree.Build(partial);
+                if (report.PartialResult is { } partial) { replayed = Tree.Build(partial); rootSummary = replayed.Summarize(); }
                 if (report.Added is { } added) replayed.MergeAdded(added, l, r);
                 if (report.FileUpdate is { } update) replayed.ApplyFileUpdate(update, l, r);
             }
             Tree built = Tree.Build(final);
+            // The status line has to grow while the scan runs: at the root wave it holds the root's files, at the end everything.
+            int rootFiles = recorder.RootWave!.Files.Count(f => !f.IsDirectory);
+            Check(rootSummary.Files == rootFiles && built.Summarize().Files > rootSummary.Files && rootSummary.Pending > 0 && built.Summarize().Pending == 0,
+                $"the root wave's tree counts its {rootFiles} files ({rootSummary}); the finished tree counts {built.Summarize().Files}, none pending");
             string[] paths = [.. replayed.All.Select(node => node.RelativePath).Union(built.All.Select(node => node.RelativePath)).Order(StringComparer.Ordinal)];
             string[] missing = paths.Where(path => replayed.Find(path) is null || built.Find(path) is null).ToArray();
             Check(missing.Length == 0, $"the replayed tree lists {replayed.All.Count} nodes, the final one {built.All.Count}; only on one side: {string.Join(", ", missing.Take(8))}");
@@ -205,6 +232,7 @@ internal static class WpfLogicTests
             string[] differences = paths.Where(path => !Same(replayed[path], built[path]))
                 .Select(path => $"{path}: {Show(replayed[path])} during the scan, {Show(built[path])} at the end").ToArray();
             Check(differences.Length == 0, "the tree shown while the scan ran must be the tree of the final result:\n  " + string.Join("\n  ", differences.Take(10)));
+            Check(replayed.Summarize() == built.Summarize(), $"a tree fed every report counts what the final tree counts (replayed {replayed.Summarize()}, final {built.Summarize()})");
             static void SetMode(string directory, UnixFileMode mode)
             {
                 if (OperatingSystem.IsWindows() || !Directory.Exists(directory)) return;   // Windows guards a folder with ACLs, not modes
@@ -349,6 +377,11 @@ internal static class WpfLogicTests
         public bool ApplyFileUpdate(FileComparison file, string leftRoot, string rightRoot) =>
             (bool)_type.GetMethod("ApplyFileUpdate")!.Invoke(Target, [file, leftRoot, rightRoot])!;
         public object VisibleList(int filter, FolderNameFilter nameFilter) => _type.GetMethod("Visible")!.Invoke(Target, [filter, nameFilter])!;
+        /// <summary>The status line's numbers, as the window shows them for the folder view.</summary>
+        public (int Files, int Equal, int Different, int Errors, int Pending) Summarize() =>
+            _type.GetMethod("Summarize", Type.EmptyTypes)?.Invoke(Target, null) is { } summary
+                ? (ValueTuple<int, int, int, int, int>)summary
+                : throw new Exception("FolderTree has no Summarize(): the status line cannot be counted from the tree.");
         public IReadOnlyList<Node> Visible(int filter, FolderNameFilter nameFilter) =>
             ((IEnumerable)VisibleList(filter, nameFilter)!).Cast<object>().Select(node => new Node(node)).ToArray();
     }

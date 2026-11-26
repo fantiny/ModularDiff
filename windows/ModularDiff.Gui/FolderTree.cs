@@ -292,6 +292,27 @@ public sealed class FolderTree
         foreach (var root in Roots) Visit(root);
         return _rows;
     }
+
+    /// <summary>The folder view's status line, counted from what the tree holds. While a scan runs the result
+    /// the window was handed is the root wave alone; the tree is what the user sees. It counts what the result
+    /// counts — every entry that is not a folder. An unreadable folder is such an entry: what the scan lists
+    /// for it is its error. A folder with an error inside is not: its entry is a folder's, whatever its status.</summary>
+    public (int Files, int Equal, int Different, int Errors, int Pending) Summarize()
+    {
+        int equal = 0, different = 0, errors = 0, pending = 0;
+        foreach (var node in All)
+        {
+            if (node.File?.IsDirectory != false) continue;
+            switch (node.Status)
+            {
+                case FileStatus.Equal: equal++; break;
+                case FileStatus.Modified or FileStatus.LeftOnly or FileStatus.RightOnly: different++; break;
+                case FileStatus.Error: errors++; break;
+                default: pending++; break;
+            }
+        }
+        return (equal + different + errors + pending, equal, different, errors, pending);
+    }
     private static (string Size, string Modified) Metadata(string path)
     {
         try
