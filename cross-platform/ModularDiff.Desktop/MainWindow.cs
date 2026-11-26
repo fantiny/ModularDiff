@@ -34,7 +34,7 @@ public sealed partial class MainWindow : Window
     private readonly Canvas _editorHost = new();
     // ─── 查找:差异视图两侧的行文本。查找条在差异页上方,⌘F 打开;F3 / ⇧F3 下一处 / 上一处,Enter 在查找框里是下一处,Esc 关闭 ───
     private readonly Grid _diffHost = new();
-    private readonly Grid _findBar = new() { IsVisible = false, ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto,Auto"), Margin = new Thickness(6, 4, 6, 2) };
+    private readonly Grid _findBar = new() { IsVisible = false, ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto,Auto,Auto"), Margin = new Thickness(6, 4, 6, 2) };
     private readonly TextBox _findBox = new() { Watermark = Lang.Get("a11y_find"), Width = 380, MinWidth = 160, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly TextBlock _findCount = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0), MinWidth = 64 };
     private readonly Avalonia.Controls.Primitives.ToggleButton _findCase = new() { Content = "Aa", Padding = new Thickness(6, 2) };
@@ -69,6 +69,7 @@ public sealed partial class MainWindow : Window
         _leftPath.Watermark = Lang.Get("md_path_left_hint"); _rightPath.Watermark = Lang.Get("md_path_right_hint");
         _leftSideLabel.Text = Lang.Get("side_left"); _rightSideLabel.Text = Lang.Get("side_right");
         _findBox.Watermark = Lang.Get("a11y_find"); UpdateFindCount();
+        LocalizeReplace();   // 替换那一行的按钮、范围、水印
         LocalizeFolderView();   // 筛选下拉/计数/已显示的行跟着换语言
         // 页签标题变了长短,页签条要重新测量:否则切到更长的语言时标题被截成 "Aligned ["。
         int selected = Math.Max(0, _tabs.SelectedIndex);
@@ -324,7 +325,12 @@ public sealed partial class MainWindow : Window
             if (e.Key == Avalonia.Input.Key.G && (e.KeyModifiers & (Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control)) != 0)
             { e.Handled = true; Run(GoToLineAsync); }
             var command = Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Control;
-            if (e.Key == Avalonia.Input.Key.F && (e.KeyModifiers & command) != 0 && !HexMode)
+            // 替换:Mac 上是 ⌥⌘F(⌘H 在那里是隐藏应用),别处是 Ctrl+H —— 与 WPF 版同。
+            var alt = Avalonia.Input.KeyModifiers.Alt;
+            bool replaceKey = (e.Key == Avalonia.Input.Key.F && (e.KeyModifiers & command) != 0 && (e.KeyModifiers & alt) != 0)
+                || (e.Key == Avalonia.Input.Key.H && !OperatingSystem.IsMacOS() && e.KeyModifiers == Avalonia.Input.KeyModifiers.Control);
+            if (replaceKey && !HexMode) { e.Handled = true; ShowReplace(); }
+            else if (e.Key == Avalonia.Input.Key.F && (e.KeyModifiers & command) != 0 && !HexMode)
             { e.Handled = true; ShowFind(); }
             else if (e.Key == Avalonia.Input.Key.F3 && _findBar.IsVisible)
             { e.Handled = true; FindNext(e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift)); }
@@ -777,7 +783,7 @@ public sealed partial class MainWindow : Window
         _session.Edit(left, text);
         if (HexMode || shown.Count == 0) return;   // 十六进制行不是文字的行;行是空的也没有什么可跟(编辑页打字时如此)
         var followed = RowFollow.Follow(shown, left, before, buffer.Text, fillRows);
-        if (followed is null) { Realign(); return; }   // 行集合和这份文字对不上:重新比较,不猜
+        if (followed is null) { Realign(); UpdateFindCount(); return; }   // 行集合和这份文字对不上:重新比较,不猜;匹配可能因此变了
         _rows.FollowRows(followed);
         UpdateFindCount();   // 匹配是按屏幕上的行文字算的:行变了,计数跟着变
         _rowsAligned = false;
@@ -1282,6 +1288,8 @@ public sealed partial class MainWindow : Window
         Place(LButton("↑", "md_find_prev_tip", () => FindNext(true)), 4);
         Place(LButton("↓", "find_next_tip", () => FindNext(false)), 5);
         Place(LButton("✕", "md_find_close_tip", CloseFind), 6);
+        Place(LButton("⇄", "md_replace_tip", () => ReplaceMode = !ReplaceMode), 7);
+        BuildReplaceBar();
     }
 
     /// <summary>查找框里的文字。设置即打开查找条并重新找。</summary>

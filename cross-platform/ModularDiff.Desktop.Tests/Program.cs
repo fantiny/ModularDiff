@@ -606,6 +606,7 @@ FindTests.Run(pluginsPath, plugins, Check);
 ShortcutTests.Run(pluginsPath, plugins, Check);
 RowFollowProperties.Run(Check);
 RowFollowTests.Run(pluginsPath, plugins, Check);
+ReplaceTests.Run(pluginsPath, plugins, Check);
 SynchronizationContext.SetSynchronizationContext(null);
 string root = Path.Combine(Path.GetTempPath(), "ModularDiff-cross-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);

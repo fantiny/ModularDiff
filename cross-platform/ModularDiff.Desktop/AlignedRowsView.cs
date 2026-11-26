@@ -192,8 +192,18 @@ public sealed class AlignedRowsView : Control
     public bool FindNext(bool backwards = false)
     {
         if (_findMatches.Count == 0) return false;
-        _findCurrent = _findCurrent < 0 ? (backwards ? _findMatches.Count - 1 : 0)
-            : (_findCurrent + (backwards ? -1 : 1) + _findMatches.Count) % _findMatches.Count;
+        return ShowMatch(_findCurrent < 0 ? (backwards ? _findMatches.Count - 1 : 0)
+            : (_findCurrent + (backwards ? -1 : 1) + _findMatches.Count) % _findMatches.Count);
+    }
+
+    /// <summary>现在所有的匹配,排法同上。</summary>
+    public IReadOnlyList<(int Row, bool Left, int Start, int Length)> FindMatches => _findMatches;
+
+    /// <summary>把第 <paramref name="index"/> 处当作当前匹配:选中它所在的行,滚动到可见。越了界或没有匹配时返回 false,什么也不动。</summary>
+    public bool ShowMatch(int index)
+    {
+        if ((uint)index >= (uint)_findMatches.Count) return false;
+        _findCurrent = index;
         var match = _findMatches[_findCurrent];
         _selected.Clear(); _selected.Add(match.Row); _primary = _anchor = match.Row;
         EnsureVisible(match.Row);
